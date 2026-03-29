@@ -1,0 +1,6 @@
+{
+    "editor.indentSize": "tabSize",
+    "terminal.integrated.env.linux": {
+        "PYTHONPATH": "${workspaceFolder}"
+    }
+}
