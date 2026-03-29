@@ -1,10 +1,9 @@
+from agno.agent import Agent, RunOutput
+from agno.models.dashscope import DashScope
 from agno.agent import Agent
-from agno.models.siliconflow import Siliconflow
-from typing import Iterator
-from agno.agent import Agent, RunOutputEvent, RunEvent
-from typing import Iterator
 from dotenv import load_dotenv
 import os
+from agno.utils.pprint import pprint_run_response
 
 # 加载环境变量
 load_dotenv()
@@ -13,11 +12,12 @@ load_dotenv()
 # 模型配置（固定工具函数）
 # ======================
 def get_model():
-    """获取 Siliconflow 模型实例"""
-    return Siliconflow(
+    """获取 Dashscope 模型实例"""
+    return DashScope(
         id=os.getenv("LLM_MODEL_ID"),
         api_key=os.getenv("LLM_API_KEY"),
         base_url=os.getenv("LLM_BASE_URL"),
+        enable_thinking=True
     )
 
 # ======================
@@ -26,11 +26,12 @@ def get_model():
 class BaseAgent:
     """自定义智能体基类，可扩展工具、记忆、工作流"""
     
-    def __init__(self, name:str, description:str, instructions:str):
+    def __init__(self, name:str, description:str, instructions:str, tools:list=None):
         # 先设置属性
         self.name = name
         self.description = description
         self.instructions = instructions
+        self.tools = tools
         # 初始化模型
         self.model = get_model()
         # 初始化 agent 实例
@@ -43,21 +44,18 @@ class BaseAgent:
             name=self.name,
             description=self.description,
             instructions=self.instructions,
-            stream=True,
-            stream_events=True
+            markdown=True,
+            tools=self.tools
         )
 
     def chat(self, message: str):
-        """与智能体对话（核心方法）"""
-        stream: Iterator[RunOutputEvent] = self.agent.run(message, stream=True, stream_events=True)
-        for chunk in stream:
-            if chunk.event == RunEvent.run_content:
-                if chunk.content:
-                    print(chunk.content, end="", flush=True)
-            elif chunk.event == RunEvent.tool_call_started:
-                print(f"Tool call started: {chunk.tool.tool_name}")
-            elif chunk.event == RunEvent.reasoning_step:
-                print(f"Reasoning step: {chunk.reasoning_content}")
+
+        # Print the response in markdown format
+        self.agent.print_response(message, streaming=True)
+
+        # run_response: Iterator[RunOutputEvent] = self.agent.run(message, stream=True)
+        # for chunk in run_response:
+        #     print(chunk)
 
 # ======================
 # 实例化 & 使用示例
