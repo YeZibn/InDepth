@@ -4,6 +4,11 @@ from dotenv import load_dotenv
 import os
 from agno.utils.pprint import pprint_run_response
 from agno.skills import Skills
+from agno.db.sqlite import SqliteDb
+from agno.compression.manager import CompressionManager
+from agno.models.openai import OpenAIResponses
+
+
 
 # 加载环境变量
 load_dotenv()
@@ -43,6 +48,7 @@ class BaseAgent:
         self.description = description
         self.tools = tools
         self.skills = skills
+        self.db = SqliteDb(db_file="db/history.db")
 
         # 合并指令：InDepth.md + 用户提供的 instructions
         if load_memory_knowledge:
@@ -50,6 +56,17 @@ class BaseAgent:
             self.instructions = indepth_content + "\n\n" + instructions
         else:
             self.instructions = instructions
+
+        self.compression_manager = CompressionManager(
+            model=DashScope(
+                id="qwen3.5-flash",
+                api_key=os.getenv("LLM_API_KEY"),
+                base_url=os.getenv("LLM_BASE_URL"),
+                enable_thinking=True
+            ),  # Use a faster model for compression
+            compress_tool_results_limit=5,  # Compress after 2 tool calls (default: 3)
+            compress_tool_call_instructions="请精简工具调用结果，保留关键数据、结果和参数，删除冗余描述，保持逻辑完整，不丢失核心信息，用最简洁的语言概括。",
+        )
 
         # 初始化模型
         self.model = get_model()
@@ -66,7 +83,10 @@ class BaseAgent:
             markdown=True,
             tools=self.tools,
             skills=self.skills,
-            
+            db=self.db,
+            add_history_to_context=True,
+            compress_tool_results=True,
+            compression_manager=self.compression_manager
         )
 
     def chat(self, message: str):
