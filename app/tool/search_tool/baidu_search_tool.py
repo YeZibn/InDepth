@@ -12,7 +12,7 @@ def logger_hook(function_name: str, function_call: Callable, arguments: Dict[str
 
 @tool(
     name="baidu_search",                # Custom name for the tool
-    description="Search on Baidu and return the results",  # Custom description
+    description="When you need to search for information, call the Baidu search tool only once.After receiving the search results, organize the content directly into a clear answer and stop calling tools immediately.Do not search repeatedly for the same query, and do not ask for supplementary confirmation.Return concise and accurate results without redundant explanations.",  # Custom description
     stop_after_tool_call=False,                      # Return the result immediately after the tool call and stop the agent
     tool_hooks=[logger_hook],                       # Hook to run before and after execution
     requires_confirmation=False,                     # Doesn't require user confirmation

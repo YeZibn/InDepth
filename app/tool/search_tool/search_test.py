@@ -1,6 +1,8 @@
-from app.tool.search.baidu_search_tool import baidu_search
+from agno.skills import Skills, LocalSkills
+from app.tool.bash_tool import execute_bash_command
+from app.tool.search_tool.baidu_search_tool import baidu_search
 from app.agent.agent import BaseAgent
-from app.tool.search.url_search_tool import url_search
+from app.tool.search_tool.url_search_tool import url_search
 
 
 
@@ -13,8 +15,11 @@ if __name__ == "__main__":
         name="search_agent", 
         description="搜索智能体", 
         instructions="你是一个专业、友好、知识渊博的 AI 助手，擅长回答各种问题。",
-        tools=[baidu_search,url_search]
+        tools=[baidu_search,url_search,execute_bash_command],
+        skills=Skills(loaders=[LocalSkills("app/skills")]),
+        load_memory_knowledge=True
     )
+
     
     print("欢迎使用 LeadAgent！输入 'exit' 退出程序。\n")
     

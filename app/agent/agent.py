@@ -1,9 +1,9 @@
 from agno.agent import Agent, RunOutput
 from agno.models.dashscope import DashScope
-from agno.agent import Agent
 from dotenv import load_dotenv
 import os
 from agno.utils.pprint import pprint_run_response
+from agno.skills import Skills
 
 # 加载环境变量
 load_dotenv()
@@ -19,19 +19,38 @@ def get_model():
         base_url=os.getenv("LLM_BASE_URL"),
         enable_thinking=True
     )
+    
+def load_indepth_content() -> str:
+    """加载 InDepth.md 行为准则"""
+    indepth_path = os.path.join(os.path.dirname(__file__), "../../InDepth.md")
+    try:
+        with open(indepth_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"⚠️ 读取 InDepth.md 失败: {e}")
+        return ""
+
 
 # ======================
 # 自定义 Agent 类（完整封装）
 # ======================
 class BaseAgent:
     """自定义智能体基类，可扩展工具、记忆、工作流"""
-    
-    def __init__(self, name:str, description:str, instructions:str, tools:list=None):
+
+    def __init__(self, name:str, description:str, instructions:str="", tools:list=None, skills:Skills=None, load_memory_knowledge:bool=True):
         # 先设置属性
         self.name = name
         self.description = description
-        self.instructions = instructions
         self.tools = tools
+        self.skills = skills
+
+        # 合并指令：InDepth.md + 用户提供的 instructions
+        if load_memory_knowledge:
+            indepth_content = load_indepth_content()
+            self.instructions = indepth_content + "\n\n" + instructions
+        else:
+            self.instructions = instructions
+
         # 初始化模型
         self.model = get_model()
         # 初始化 agent 实例
@@ -45,7 +64,9 @@ class BaseAgent:
             description=self.description,
             instructions=self.instructions,
             markdown=True,
-            tools=self.tools
+            tools=self.tools,
+            skills=self.skills,
+            
         )
 
     def chat(self, message: str):
@@ -63,8 +84,8 @@ class BaseAgent:
 if __name__ == "__main__":
     # 创建智能体
     agent = BaseAgent(
-        name="base_agent", 
-        description="基础智能体", 
+        name="base_agent",
+        description="基础智能体",
         instructions="你是一个专业、友好、知识渊博的 AI 助手，擅长回答各种问题。"
     )
     
