@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os
 from agno.skills import LocalSkills
 from app.tool.bash_tool import execute_bash_command
+from agno.db.sqlite import SqliteDb
 
 
 
@@ -26,6 +27,7 @@ class CreateSkillAgent:
     """专门用于创建和打包 Skill 的 Agent"""
 
     def __init__(self):
+        self.db = SqliteDb(db_file="db/history.db")
         self.agent = Agent(
             name="skill_creator",
             description="Skill 创建专家，擅长设计、构建和打包 Agent Skills",
@@ -59,8 +61,10 @@ class CreateSkillAgent:
                 base_url=os.getenv("LLM_BASE_URL"),
                 enable_thinking=True
             ),
-            skills=Skills(loaders=[LocalSkills("app/skills")]),
+            skills=Skills(loaders=[LocalSkills("app/skills/skill-creator")]),
             tools=[execute_bash_command],
+            db=self.db,
+            add_history_to_context=True,
         )
 
     def chat(self, message: str):

@@ -14,7 +14,7 @@ def logger_hook(function_name: str, function_call: Callable, arguments: Dict[str
     description="Write content to a file",  # Custom description
     stop_after_tool_call=False,                      # Return the result immediately after the tool call and stop the agent
     tool_hooks=[logger_hook],                       # Hook to run before and after execution
-    requires_confirmation=True,                     # Requires user confirmation before execution
+    requires_confirmation=False,                     # Requires user confirmation before execution
     cache_results=False,                            # Disable caching of results
 )
 def write_file(file_path: str, content: str, overwrite: bool = False) -> str:

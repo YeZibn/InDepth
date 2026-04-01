@@ -12,7 +12,7 @@ def logger_hook(function_name: str, function_call: Callable, arguments: Dict[str
 @tool(
     name="get_current_time",                # Custom name for the tool
     description="Get the current date and time",  # Custom description
-    stop_after_tool_call=True,                      # Return the result immediately after the tool call and stop the agent
+    stop_after_tool_call=False,                      # Return the result immediately after the tool call and stop the agent
     tool_hooks=[logger_hook],                       # Hook to run before and after execution
     requires_confirmation=False,                     # Doesn't require user confirmation
     cache_results=False,                            # Disable caching of results

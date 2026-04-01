@@ -1,187 +1,115 @@
 ---
 name: todo-skill
-description: 任务跟踪与进度管理模块。当需要跟踪复杂任务的进度、分解多步骤工作时使用。触发场景：(1)用户要求实现复杂功能 (2)任务需要多个步骤 (3)需要跟踪进度。
-allowed-tools:
-  - "execute_bash_command"
-  - "read_file"
-  - "write_file"
-metadata:
-  version: "2.0.0"
-  author: "InDepth"
+description: "Task management with dependency tracking. Use when: (1) Breaking down complex multi-step tasks, (2) Tracking progress across steps, (3) Managing task dependencies and blocked states, (4) Creating structured workflow plans. Automatically manages todo/ directory with markdown files and INDEX.md for tracking."
 ---
 
-# Todo Skill
+# Todo Management Skill
 
-管理复杂任务的进度跟踪，支持依赖关系管理。
+Manage tasks with dependency tracking using markdown files in `todo/` directory.
 
-## 何时触发
+## When to Use
 
-| 场景 | 判断标准 |
-|------|---------|
-| 复杂任务 | 任务需要 3+ 个步骤完成 |
-| 多步骤工作 | 涉及多个阶段的开发工作 |
-| 进度跟踪 | 用户要求跟踪任务进度 |
+- Complex tasks requiring 3+ steps
+- Multi-stage development work
+- Tasks with dependencies between steps
+- Need to track progress and blocked states
 
-**简单任务不需要创建 Todo**（如"帮我打印 hello world"）。
-
-## 核心概念
-
-| 概念 | 说明 |
-|------|------|
-| Todo 文件 | 每个任务一个 .md 文件 |
-| 状态 | 待办(Todo) / 进行中(In Progress) / 已完成(Done) |
-| 依赖关系 | 步骤间的先后顺序 |
-| 阻塞任务 | 等待依赖完成的步骤 |
-
-## 文件结构
+## Directory Structure
 
 ```
-todo/                           # 存储目录
-├── INDEX.md                    # 所有 Todo 索引
-└── YYYY-MM-DD-HHMMSS-title.md  # 任务文件
+todo/
+├── INDEX.md           # Task index with status overview
+└── {task-id}.md       # Individual task files
 ```
 
-## 依赖关系设计
+## Task Workflow
 
-### 两种依赖类型
+### 1. Create Tasks
 
-| 类型 | 说明 | 示例 |
-|------|------|------|
-| `依赖` | 必须等待前置完成 | 步骤B 依赖 步骤A |
-| `阻塞` | 完成后才能启动下游 | 登录功能 阻塞 个人中心 |
+Use `scripts/create_todo.py` to create tasks:
 
-### 依赖链示例
-
-```
-用户登录功能
-├── 1. 数据库设计
-├── 2. 后端 API（依赖 数据库设计）
-└── 3. 前端页面（依赖 后端 API）
-    │
-    ↓
-4. 集成测试（依赖 前端页面）
+```bash
+python scripts/create_todo.py --title "Task title" --description "Details" --depends "dep-task-id"
 ```
 
-## Todo 文件格式
+Parameters:
+- `--title`: Task title (required)
+- `--description`: Task details (optional)
+- `--depends`: Comma-separated list of dependency task IDs (optional)
+- `--priority`: low/medium/high (default: medium)
 
-```markdown
-# 任务名称
+Creates:
+- `todo/{task-id}.md` with task details
+- Updates `todo/INDEX.md` with new task entry
 
-## 元信息
+### 2. Check Dependencies
 
-| 字段 | 值 |
-|------|-----|
-| 优先级 | 高/中/低 |
-| 创建时间 | YYYY-MM-DD HH:MM:SS |
-| 状态 | 进行中 / 已完成 |
-| 进度 | 40% |
+Use `scripts/get_next.py` to find executable tasks:
 
-## 依赖关系
-
-| 步骤 | 依赖 | 说明 |
-|------|------|------|
-| 步骤2 | 步骤1 | 步骤2 等待 步骤1 完成 |
-| 步骤4 | 步骤2, 步骤3 | 步骤4 等待 步骤2和3完成 |
-
-## 任务步骤
-
-### 待办 (Todo)
-- [ ] 步骤1
-
-### 进行中 (In Progress)
-- [ ] 步骤2（阻塞中：等待 步骤1）
-
-### 已完成 (Done)
-- [x] 步骤3
-
-## 备注
-额外说明或上下文
+```bash
+python scripts/get_next.py
 ```
 
-## 操作流程
+Returns tasks that:
+- Have no dependencies, OR
+- All dependencies are completed
 
-### 1. 创建 Todo
+### 3. Update Status
 
-当判断任务复杂时：
+Use `scripts/update_todo.py` to change task status:
 
-```
-1. 分析任务步骤和依赖关系
-
-2. 创建 todo 文件
-   scripts/todo_manager.py create "<任务名>" "<优先级>"
-
-3. 分解任务为步骤
-
-4. 标注步骤间的依赖关系
+```bash
+python scripts/update_todo.py {task-id} --status {status}
 ```
 
-### 2. 执行策略
+Status values:
+- `pending`: Not started, waiting
+- `in_progress`: Currently working
+- `completed`: Finished successfully
+- `blocked`: Dependencies not met (auto-set by system)
 
-```
-1. 找出无依赖的步骤（可立即执行）
+### 4. List All Tasks
 
-2. 按顺序执行步骤
+Use `scripts/list_todos.py` to view all tasks:
 
-3. 依赖完成后，解除阻塞，启动下一步
-
-4. 重复直到所有步骤完成
-```
-
-### 3. 更新进度
-
-完成某步骤后：
-
-```
-1. 标记步骤为已完成
-   - [ ] → - [x]
-
-2. 检查是否有步骤解除阻塞
-
-3. 重新计算进度百分比
-
-4. 更新 INDEX.md
+```bash
+python scripts/list_todos.py [--status {status}] [--all]
 ```
 
-## INDEX.md 格式
+## Task File Format
 
-```markdown
-# Todo 索引
+See `assets/template.md` for the standard format.
 
-## 进行中
+Each task file contains:
+- YAML frontmatter with metadata
+- Markdown body with description and notes
 
-| 文件 | 任务 | 优先级 | 进度 | 阻塞 |
-|------|------|--------|------|------|
-| [title.md](title.md) | 任务名 | 高 | 40% | - |
+## Dependency Rules
 
-## 阻塞中
+1. **Blocked tasks**: Tasks with incomplete dependencies are marked `blocked`
+2. **Auto-unblock**: When a dependency completes, blocked tasks become `pending`
+3. **Circular detection**: Cannot create circular dependencies
+4. **Cascade completion**: Completing a task may unblock multiple downstream tasks
 
-| 文件 | 任务 | 等待 |
-|------|------|------|
-| [title.md](title.md) | 任务名 | task-a.md |
+## Integration
 
-## 已完成
+All scripts return JSON output for easy integration with other systems:
 
-| 文件 | 任务 | 完成时间 |
-|------|------|----------|
-| [title.md](title.md) | 任务名 | YYYY-MM-DD |
+```json
+{
+  "success": true,
+  "task": {
+    "id": "task-001",
+    "title": "Example task",
+    "status": "pending",
+    "depends": ["task-000"]
+  }
+}
 ```
 
-## 工具脚本
+## Best Practices
 
-详见 `scripts/todo_manager.py`：
-
-- `create <name> <priority>` - 创建新 Todo
-- `add-step <filename> <step>` - 添加步骤
-- `update-step <filename> <step> <status>` - 更新步骤状态
-- `list` - 列出所有 Todo
-- `show <filename>` - 显示 Todo 内容
-- `done <filename>` - 标记完成
-- `delete <filename>` - 删除 Todo
-
-## 注意事项
-
-- **自动触发**：Agent 根据任务复杂度自动判断是否创建
-- **诚实报告**：进度百分比必须基于实际步骤计算
-- **及时更新**：完成步骤后立即更新状态
-- **依赖明确**：每个步骤必须标注依赖关系
-- **阻塞可视化**：在 INDEX.md 中清晰显示阻塞状态
+1. Create all tasks upfront for complex workflows
+2. Check dependencies before starting work
+3. Update status immediately when state changes
+4. Use descriptive task IDs (e.g., `fix-login-bug`, `add-user-api`)
