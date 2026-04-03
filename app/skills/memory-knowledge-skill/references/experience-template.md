@@ -1,52 +1,122 @@
-# 经验文档模板
+# Experience Template Guide
 
-> 文件命名：`YYYY-MM-DD-简短标题.md`
+## Purpose
 
-## 概述
+Experience entries capture lessons learned from actual practice. They document:
+- What happened
+- What was tried
+- What worked or didn't
+- What was learned
 
-经验文档用于记录**任何值得保存的重要事件、场景或洞见**。不局限于问题解决——任何具有潜在未来价值的内容都值得记录。
+## When to Create
 
-## 模板
+Create an experience when:
+- You spent significant time solving a problem
+- You discovered a non-obvious solution
+- You learned something surprising
+- You want to remember the approach
 
+## Structure
+
+### 1. Background
+
+Describe the situation:
+- What was the context?
+- What problem were you solving?
+- What constraints existed?
+
+**Example:**
 ```markdown
-# [简短标题]
-
-## 背景
-当时的场景是什么？想要达成什么目标？
-
-## 详情
-发生了什么？观察到了什么或学到了什么？
-
-- 关键点 1
-- 关键点 2
-- 重要发现或洞见
-
-## 结果 / 方案
-最终结果是什么？（如适用）
-
-- 什么有效
-- 什么无效
-- 最终结论或收获
-
-## 标签
-#tag1 #tag2 #组件名 #技术栈
+## Background
+The API was experiencing intermittent 500 errors under high load during 
+peak hours. Initial investigation showed no obvious patterns in the logs.
 ```
 
-## 何时创建经验文档
+### 2. Investigation
 
-| 场景 | 示例 |
-|------|------|
-| 解决了难题 | "修复数据库连接超时问题" |
-| 遇到意外行为 | "高负载下 API 返回 429" |
-| 做出重要决策 | "因 X 原因选择 PostgreSQL 而非 MySQL" |
-| 发现有用的东西 | "鲜为人知的参数让构建速度提升 50%" |
-| 遇到边界情况 | "异步初始化时的竞态条件" |
-| 从失败中学习 | "因缺少环境变量导致部署失败" |
-| 发现某种模式 | "大多数错误集中在认证模块" |
+Document your process:
+- What did you check first?
+- What hypotheses did you form?
+- How did you test them?
 
-## 写作建议
+**Example:**
+```markdown
+## Investigation
+1. Checked application logs - only generic error messages
+2. Reviewed database metrics - normal CPU and memory usage
+3. Analyzed request patterns - errors correlated with concurrent requests
+4. Discovered connection pool exhaustion in async handlers
+```
 
-1. **具体明确** — 包含具体细节，不要模糊描述
-2. **提供背景** — 是什么导致了这个情况？
-3. **记录"为什么"** — 为什么某个方案有效或无效？
-4. **添加标签** — 思考未来可能如何搜索到这条记录
+### 3. Solution
+
+Describe what was done:
+- What approach was taken?
+- What code changes were made?
+- What configuration was adjusted?
+
+**Example:**
+```markdown
+## Solution
+Implemented connection pooling with asyncpg:
+- Increased pool size from 10 to 50 connections
+- Added pool pre-warming on startup
+- Implemented connection health checks
+```
+
+### 4. Outcome
+
+Document the results:
+- What improved?
+- By how much?
+- Any side effects?
+
+**Example:**
+```markdown
+## Outcome
+- Error rate dropped from 15% to 0.1%
+- Average response time improved by 40%
+- No negative impact on database performance
+```
+
+### 5. Key Takeaway
+
+Summarize the lesson:
+- What's the core insight?
+- What would you do differently?
+- What should others know?
+
+**Example:**
+```markdown
+## Key Takeaway
+Default connection pool sizes are often insufficient for production load. 
+Always monitor pool utilization and size based on concurrent request 
+patterns, not just total throughput.
+```
+
+### 6. Related
+
+Link to relevant items:
+- Related tasks or issues
+- Code changes
+- Documentation
+
+**Example:**
+```markdown
+## Related
+- Task: 20240401_143000_scale_api
+- PR: #234
+- Code: src/db/connection_pool.py
+- Docs: docs/scaling.md
+```
+
+## Writing Tips
+
+1. **Be specific** - Include actual numbers and concrete details
+2. **Be honest** - Document failures as well as successes
+3. **Be concise** - Focus on the key insights
+4. **Be searchable** - Use clear terminology and tags
+
+## Example Entry
+
+See [SKILL.md](../SKILL.md) for a complete example.

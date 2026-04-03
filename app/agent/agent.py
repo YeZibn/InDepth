@@ -59,7 +59,7 @@ class BaseAgent:
 
         self.compression_manager = CompressionManager(
             model=DashScope(
-                id="qwen3.5-flash",
+                id=os.getenv("LLM_MODEL_MINI_ID"),
                 api_key=os.getenv("LLM_API_KEY"),
                 base_url=os.getenv("LLM_BASE_URL"),
                 enable_thinking=True
@@ -93,10 +93,6 @@ class BaseAgent:
 
         # Print the response in markdown format
         self.agent.print_response(message, streaming=True)
-
-        # run_response: Iterator[RunOutputEvent] = self.agent.run(message, stream=True)
-        # for chunk in run_response:
-        #     print(chunk)
 
 # ======================
 # 实例化 & 使用示例

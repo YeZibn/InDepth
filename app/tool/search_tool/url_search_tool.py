@@ -32,21 +32,48 @@ def url_search(url: str, max_length: int = 2000) -> str:
     try:
         # Headers to mimic a browser
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
         }
         
-        # Send request
-        with httpx.Client(timeout=10) as client:
+        # Send request with redirect following
+        with httpx.Client(
+            timeout=15,
+            follow_redirects=True,
+            max_redirects=5
+        ) as client:
             response = client.get(url, headers=headers)
-            response.raise_for_status()
             
-            # Get content
-            content = response.text
-            
-            # Truncate if too long
-            if len(content) > max_length:
-                content = content[:max_length] + "\n... (truncated)"
-            
-            return content
+            # Handle different status codes
+            if response.status_code == 200:
+                # Get content
+                content = response.text
+                
+                # Truncate if too long
+                if len(content) > max_length:
+                    content = content[:max_length] + "\n... (truncated)"
+                
+                return content
+            elif response.status_code in [301, 302, 303, 307, 308]:
+                # Redirect but httpx should have followed it
+                return f"Error: Redirect loop detected for URL: {url}"
+            elif response.status_code == 404:
+                return f"Error: Page not found (404) for URL: {url}"
+            elif response.status_code == 403:
+                return f"Error: Access forbidden (403) for URL: {url}. The site may block automated requests."
+            elif response.status_code >= 500:
+                return f"Error: Server error ({response.status_code}) for URL: {url}"
+            else:
+                return f"Error: HTTP {response.status_code} for URL: {url}"
+                
+    except httpx.TimeoutException:
+        return f"Error: Request timeout for URL: {url}"
+    except httpx.TooManyRedirects:
+        return f"Error: Too many redirects for URL: {url}"
+    except httpx.RequestError as e:
+        return f"Error: Request failed for URL {url}: {str(e)}"
     except Exception as e:
         return f"Error fetching URL: {str(e)}"
