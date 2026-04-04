@@ -2,13 +2,13 @@
 
 ## File Structure
 
-Each task is stored as a Markdown file in `/root/github/InDepth/todo/{task-id}.md`
+Each task is stored as a Markdown file in `{project-root}/todo/{task-id}.md`
 
 ## File Naming
 
 - **Pattern**: `{timestamp}_{task-name}.md`
 - **Example**: `20240402_103045_implement_auth.md`
-- **Location**: `/root/github/InDepth/todo/`
+- **Location**: `{project-root}/todo/`
 
 ## Markdown Format
 

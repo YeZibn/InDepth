@@ -10,32 +10,7 @@ import re
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utils import ensure_todo_dir, generate_task_id
-
-
-def parse_subtask_name(description):
-    """Extract a concise name from a description"""
-    words = description.split()
-    if len(words) <= 6:
-        return description
-    return ' '.join(words[:6]) + '...'
-
-
-def smart_split_description(text):
-    """
-    Intelligently split a comma-separated description into multiple subtasks.
-    Handles various formats:
-    - "Task1,Task2,Task3"
-    - "Task1, Task2, Task3"
-    - "Task1 description, Task2 description, Task3 description"
-    """
-    if ',' not in text:
-        return [text]
-    
-    items = [item.strip() for item in text.split(',')]
-    items = [item for item in items if item]
-    
-    return items
+from utils import ensure_todo_dir, generate_task_id, get_todo_dir
 
 
 def create_task(task_name: str, context: str, subtasks: list) -> str:
@@ -57,7 +32,7 @@ def create_task(task_name: str, context: str, subtasks: list) -> str:
     ensure_todo_dir()
     
     task_id = generate_task_id(task_name)
-    filepath = f"/root/github/InDepth/todo/{task_id}.md"
+    filepath = os.path.join(get_todo_dir(), f"{task_id}.md")
     
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -114,84 +89,67 @@ Task created automatically. Update as needed during execution.
 
 def parse_subtasks_arg(arg):
     """
-    Parse subtasks argument intelligently.
-    Supports:
-    1. JSON array: '[{"name":"...","description":"..."}]'
-    2. Comma-separated: 'Task1,Task2,Task3'
-    3. Multiple args: 'Task1' 'Task2' 'Task3'
+    Parse subtasks from JSON array format.
+
+    Args:
+        arg: JSON string representing a list of subtasks
+
+    Returns:
+        List of subtask dictionaries
+
+    Raises:
+        ValueError: If JSON format is invalid
     """
     arg = arg.strip()
-    
-    if arg.startswith('[') and arg.endswith(']'):
-        try:
-            subtasks = json.loads(arg)
-            if not isinstance(subtasks, list):
-                print("Error: JSON subtasks must be an array")
-                sys.exit(1)
-            
-            for i, subtask in enumerate(subtasks):
-                if not isinstance(subtask, dict):
-                    print(f"Error: Subtask {i+1} must be a dictionary")
-                    sys.exit(1)
-                if 'name' not in subtask or 'description' not in subtask:
-                    print(f"Error: Subtask {i+1} must have 'name' and 'description' fields")
-                    sys.exit(1)
-                subtask.setdefault('priority', 'medium')
-                subtask.setdefault('dependencies', [])
-            
-            return subtasks
-        except json.JSONDecodeError as e:
-            print(f"Error: Invalid JSON format: {e}")
-            sys.exit(1)
-    
-    items = smart_split_description(arg)
-    
-    subtasks = []
-    for i, item in enumerate(items, 1):
-        subtasks.append({
-            "name": parse_subtask_name(item),
-            "description": item,
-            "priority": "medium",
-            "dependencies": []
-        })
-    
-    if len(items) > 1:
-        print(f"ℹ️  Detected comma-separated format, created {len(items)} subtasks")
-    
+
+    if not (arg.startswith('[') and arg.endswith(']')):
+        raise ValueError("Subtasks must be a JSON array format: '[{...}, {...}]'")
+
+    try:
+        subtasks = json.loads(arg)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format: {e}")
+
+    if not isinstance(subtasks, list):
+        raise ValueError("JSON subtasks must be an array")
+
+    for i, subtask in enumerate(subtasks):
+        if not isinstance(subtask, dict):
+            raise ValueError(f"Subtask {i+1} must be a dictionary, got {type(subtask).__name__}")
+        if 'name' not in subtask or 'description' not in subtask:
+            raise ValueError(f"Subtask {i+1} must have 'name' and 'description' fields")
+        subtask.setdefault('priority', 'medium')
+        subtask.setdefault('dependencies', [])
+
     return subtasks
 
 
 def parse_args_from_list(args_list):
     """
-    Parse arguments from a list, handling both JSON strings and Python objects.
-    This function is designed to work with agent framework calls that may pass
-    args as JSON strings or Python lists.
-    
+    Parse arguments from a list for agent framework calls.
+
     Args:
-        args_list: Can be:
-            - A Python list of arguments
-            - A JSON string representing a list
-            - A single string (treated as one-element list)
-    
+        args_list: JSON string or Python list containing:
+            - args_list[0]: task_name
+            - args_list[1]: context
+            - args_list[2]: subtasks JSON array (optional)
+
     Returns:
-        Tuple of (task_name, context, subtasks)
+        Tuple of (task_name, context, subtask_args)
     """
     if isinstance(args_list, str):
-        try:
-            args_list = json.loads(args_list)
-        except json.JSONDecodeError:
-            args_list = [args_list]
-    
+        args_list = json.loads(args_list)
+
     if not isinstance(args_list, list):
         raise ValueError(f"args must be a list or JSON string, got {type(args_list)}")
-    
+
     if len(args_list) < 2:
         raise ValueError("At least task_name and context are required")
-    
+
     task_name = args_list[0]
     context = args_list[1]
     subtask_args = args_list[2:] if len(args_list) > 2 else []
-    
+
     return task_name, context, subtask_args
 
 
@@ -208,7 +166,7 @@ def main_from_args_list(args_list):
     """
     try:
         task_name, context, subtask_args = parse_args_from_list(args_list)
-        
+
         if not subtask_args:
             subtasks = [
                 {"name": "Initial Setup", "description": "Setup and preparation", "priority": "high", "dependencies": []},
@@ -216,20 +174,9 @@ def main_from_args_list(args_list):
                 {"name": "Testing", "description": "Test and validate", "priority": "medium", "dependencies": []},
                 {"name": "Documentation", "description": "Update documentation", "priority": "low", "dependencies": []}
             ]
-        elif len(subtask_args) == 1:
-            subtasks = parse_subtasks_arg(subtask_args[0])
         else:
-            subtasks = []
-            for i, arg in enumerate(subtask_args, 1):
-                items = smart_split_description(arg)
-                for item in items:
-                    subtasks.append({
-                        "name": parse_subtask_name(item),
-                        "description": item,
-                        "priority": "medium",
-                        "dependencies": []
-                    })
-        
+            subtasks = parse_subtasks_arg(subtask_args[0])
+
         filepath = create_task(task_name, context, subtasks)
         
         return {
@@ -247,22 +194,17 @@ def main_from_args_list(args_list):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: create_task.py <task_name> <context> [subtasks]")
-        print("\nSubtask formats:")
-        print("  1. JSON array (recommended):")
-        print('     \'[{"name":"Task1","description":"...","priority":"high","dependencies":[]}]\'')
-        print("\n  2. Comma-separated (auto-split):")
-        print('     "Design schema,Implement API,Write tests"')
-        print("\n  3. Multiple arguments:")
-        print('     "Design schema" "Implement API" "Write tests"')
-        print("\n  4. No subtasks (use defaults):")
-        print('     (omit the subtasks argument)')
+        print("Usage: create_task.py <task_name> <context> [subtasks_json]")
+        print("\nSubtask format (JSON array):")
+        print('  \'[{"name":"Task1","description":"...","priority":"high","dependencies":[]}]\'')
+        print("\nExample:")
+        print('  create_task.py "My Task" "Task context" \'[{"name":"Step 1","description":"Do something","priority":"high","dependencies":[]}]\'')
         sys.exit(1)
-    
+
     task_name = sys.argv[1]
     context = sys.argv[2]
     subtask_args = sys.argv[3:] if len(sys.argv) > 3 else []
-    
+
     if not subtask_args:
         subtasks = [
             {"name": "Initial Setup", "description": "Setup and preparation", "priority": "high", "dependencies": []},
@@ -270,20 +212,13 @@ if __name__ == "__main__":
             {"name": "Testing", "description": "Test and validate", "priority": "medium", "dependencies": []},
             {"name": "Documentation", "description": "Update documentation", "priority": "low", "dependencies": []}
         ]
-    elif len(subtask_args) == 1:
-        subtasks = parse_subtasks_arg(subtask_args[0])
     else:
-        subtasks = []
-        for i, arg in enumerate(subtask_args, 1):
-            items = smart_split_description(arg)
-            for item in items:
-                subtasks.append({
-                    "name": parse_subtask_name(item),
-                    "description": item,
-                    "priority": "medium",
-                    "dependencies": []
-                })
-    
+        try:
+            subtasks = parse_subtasks_arg(subtask_args[0])
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
     filepath = create_task(task_name, context, subtasks)
     print(f"✅ Task created: {filepath}")
     print(f"📋 Task ID: {os.path.basename(filepath).replace('.md', '')}")

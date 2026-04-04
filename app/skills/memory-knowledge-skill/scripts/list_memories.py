@@ -48,7 +48,9 @@ def main():
     elif args.sort == 'title':
         memories.sort(key=lambda x: x.get('title', '').lower())
     elif args.sort == 'category':
-        memories.sort(key=lambda x: (x.get('category', ''), x.get('date', '')))
+        # Keep category grouping, but show newest entries first within each category.
+        memories.sort(key=lambda x: x.get('date') or '', reverse=True)
+        memories.sort(key=lambda x: x.get('category', ''))
     
     if not memories:
         print("No memories found.")

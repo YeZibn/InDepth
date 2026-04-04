@@ -8,19 +8,19 @@ tags: [{tags}]
 # {title}
 
 ## Background
-{Describe the situation or problem encountered}
+{background}
 
 ## Investigation
-{Steps taken to understand the issue}
+{investigation}
 
 ## Solution
-{What was done to resolve it}
+{solution}
 
 ## Outcome
-{Results and impact}
+{outcome}
 
 ## Key Takeaway
-{The main lesson learned}
+{key_takeaway}
 
 ## Related
 - Task: {related_task}

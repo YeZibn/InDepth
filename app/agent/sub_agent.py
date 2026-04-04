@@ -10,7 +10,7 @@ from app.tool.bash_tool import execute_bash_command
 from app.tool.get_current_time_tool import get_current_time
 from app.tool.write_file_tool import write_file
 from app.tool.read_file_tool import read_file
-from app.tool.search_tool.baidu_search_tool import baidu_search
+from app.tool.search_tool.ddg_search_tool import ddg_search
 from app.tool.search_tool.url_search_tool import url_search
 
 
@@ -76,7 +76,7 @@ class SubAgent:
                                 {self.task}
                                 """,
             markdown=True,
-            tools= [execute_bash_command,get_current_time,read_file,write_file,baidu_search,url_search],
+            tools= [execute_bash_command,get_current_time,read_file,write_file,ddg_search,url_search],
             skills= Skills(loaders=[LocalSkills("app/skills/memory-knowledge-skill")]),
             db=self.db,
             add_history_to_context=True,

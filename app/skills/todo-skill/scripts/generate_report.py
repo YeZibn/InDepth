@@ -28,7 +28,6 @@ def generate_report(task_id: str) -> str:
 TASK PROGRESS REPORT
 ========================================
 Task ID: {metadata.get('ID', 'N/A')}
-Task Name: {task_id.replace('_', ' ').title()}
 Status: {metadata.get('Status', 'N/A')}
 Priority: {metadata.get('Priority', 'N/A')}
 Created: {metadata.get('Created', 'N/A')}

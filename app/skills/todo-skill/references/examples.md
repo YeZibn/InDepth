@@ -10,7 +10,7 @@
 2. Create task file:
 
 ```python
-from scripts.create_task import create_task
+from app.skills.todo_skill.scripts.tools import create_task
 
 subtasks = [
     {
@@ -45,8 +45,9 @@ subtasks = [
     }
 ]
 
-filepath = create_task("Create Blog API", "Implement REST API for blog post management", subtasks)
-print(f"Task created: {filepath}")
+result = create_task("Create Blog API", "Implement REST API for blog post management", subtasks)
+print(f"Task created: {result['filepath']}")
+task_id = result["task_id"]
 ```
 
 **Generated Task File** (`20240402_110000_create_blog_api.md`):
@@ -412,7 +413,7 @@ print(f"Active tasks: {len(in_progress)}")
 **Create task and immediately start working:**
 ```python
 import sys
-sys.path.insert(0, '/root/github/InDepth/app/skills/todo-skill/scripts')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app', 'skills', 'todo-skill', 'scripts'))
 
 from create_task import create_task
 from utils import get_task_by_id, get_next_task, update_task_status

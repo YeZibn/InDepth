@@ -3,6 +3,13 @@
 ## Directory Structure
 
 ```
+# Skill bundle (this directory)
+app/skills/memory-knowledge-skill/
+├── assets/templates/            # Source templates used by scripts
+│   ├── experience_template.md
+│   └── principle_template.md
+│
+# Runtime data (generated under project root)
 memory-knowledge/
 ├── experience/              # Experience records (lessons learned)
 │   ├── INDEX.md            # Auto-generated index
@@ -11,10 +18,6 @@ memory-knowledge/
 ├── principle/              # Principle records (rules to follow)
 │   ├── INDEX.md            # Auto-generated index
 │   └── category-title.md   # Individual principle files
-│
-└── templates/              # Templates for new entries
-    ├── experience_template.md
-    └── principle_template.md
 ```
 
 ## Experience Files
@@ -85,6 +88,10 @@ The INDEX.md files are auto-generated and should not be manually edited. They pr
 4. Links to individual files
 
 ## File Templates
+
+Source templates are maintained in:
+- `app/skills/memory-knowledge-skill/assets/templates/experience_template.md`
+- `app/skills/memory-knowledge-skill/assets/templates/principle_template.md`
 
 ### Experience Template
 

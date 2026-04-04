@@ -8,19 +8,19 @@ created: {date}
 # {title}
 
 ## Definition
-{Clear statement of the rule or guideline}
+{definition}
 
 ## Rationale
-{Why this principle is important}
+{rationale}
 
 ## Application
-{When and how to apply this principle}
+{application}
 
 ### Examples
-{Concrete examples of the principle in practice}
+{examples}
 
 ## Exceptions
-{Cases where this principle may not apply}
+{exceptions}
 
 ## References
-{Related documentation, links, or resources}
+{references}

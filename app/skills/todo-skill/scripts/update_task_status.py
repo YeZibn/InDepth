@@ -43,17 +43,11 @@ def main():
     
     if update_task_status(filepath, subtask_number, status):
         print(f"✓ Subtask {subtask_number} status updated to: {status}")
-        
-        # Show updated progress
-        from utils import calculate_progress
-        completed, total, percentage = calculate_progress(task_data['subtasks'])
-        
-        # Recalculate with new status for display
-        for subtask in task_data['subtasks']:
-            if subtask['number'] == subtask_number:
-                subtask['status'] = status
-        completed, total, percentage = calculate_progress(task_data['subtasks'])
-        
+
+        from utils import calculate_progress, parse_task_file
+        updated_task = parse_task_file(filepath)
+        completed, total, percentage = calculate_progress(updated_task['subtasks'])
+
         print(f"  Overall progress: {completed}/{total} ({percentage}%)")
     else:
         print(f"✗ Failed to update subtask {subtask_number}")

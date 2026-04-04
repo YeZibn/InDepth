@@ -1,9 +1,11 @@
 from agno.tools import tool
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import uuid
 import json
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.agent.sub_agent import SubAgent
 
@@ -30,6 +32,7 @@ class SubAgentManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._pool: Dict[str, AgentInstance] = {}
+            cls._instance._executor = ThreadPoolExecutor(max_workers=10)
         return cls._instance
     
     def create(self, name: str, description: str, task: str) -> str:
@@ -104,12 +107,9 @@ class SubAgentManager:
         start_time = datetime.now()
         
         try:
-            # 调用 SubAgent 的 chat 方法
             result = instance.agent.chat(message)
-            
             instance.status = "completed"
             
-            # 记录任务历史
             task_record = {
                 "task": message,
                 "result": result,
@@ -124,7 +124,6 @@ class SubAgentManager:
         except Exception as e:
             instance.status = "error"
             
-            # 记录失败任务
             task_record = {
                 "task": message,
                 "result": str(e),
@@ -136,8 +135,70 @@ class SubAgentManager:
             
             return f"Error executing task: {str(e)}"
 
+    async def run_task_async(self, agent_id: str, message: str) -> str:
+        """
+        异步运行任务
+        
+        Args:
+            agent_id: Agent ID
+            message: 任务消息
+            
+        Returns:
+            str: 执行结果
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.run_task, 
+            agent_id, 
+            message
+        )
+    
+    async def run_tasks_parallel(self, tasks: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
+        """
+        并行运行多个 SubAgent 任务
+        
+        Args:
+            tasks: List of (agent_id, message) tuples
+            
+        Returns:
+            List of results with task info
+        """
+        async def run_single(agent_id: str, message: str, index: int) -> Dict[str, Any]:
+            result = await self.run_task_async(agent_id, message)
+            return {
+                "index": index,
+                "agent_id": agent_id,
+                "message": message,
+                "result": result
+            }
+        
+        coroutines = [
+            run_single(agent_id, message, i) 
+            for i, (agent_id, message) in enumerate(tasks)
+        ]
+        
+        results = await asyncio.gather(*coroutines, return_exceptions=True)
+        
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                processed_results.append({
+                    "index": i,
+                    "agent_id": tasks[i][0],
+                    "message": tasks[i][1],
+                    "result": f"Error: {str(result)}",
+                    "status": "error"
+                })
+            else:
+                processed_results.append({
+                    **result,
+                    "status": "completed"
+                })
+        
+        return processed_results
 
-# 全局管理器实例
+
 _manager = SubAgentManager()
 
 
@@ -182,6 +243,46 @@ def run_sub_agent(agent_id: str, message: str) -> str:
         return "Error: Both agent_id and message are required"
     
     return _manager.run_task(agent_id, message)
+
+
+@tool(
+    name="run_sub_agents_parallel",
+    description="并行运行多个 SubAgent 任务。接收 JSON 格式的任务列表，每个任务包含 agent_id 和 message。适用于需要同时执行多个独立任务的场景，可大幅提升执行效率。",
+    stop_after_tool_call=False,
+)
+def run_sub_agents_parallel(tasks_json: str) -> str:
+    """
+    并行运行多个 SubAgent 任务
+    
+    Args:
+        tasks_json: JSON 格式的任务列表，格式为:
+            '[{"agent_id": "xxx", "message": "任务1"}, {"agent_id": "yyy", "message": "任务2"}]'
+    
+    Returns:
+        str: 所有任务的执行结果（JSON 格式）
+    """
+    try:
+        tasks = json.loads(tasks_json)
+        if not isinstance(tasks, list):
+            return "Error: tasks must be a JSON array"
+        
+        task_tuples = [(t["agent_id"], t["message"]) for t in tasks]
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        results = loop.run_until_complete(_manager.run_tasks_parallel(task_tuples))
+        loop.close()
+        
+        return json.dumps({
+            "success": True,
+            "total": len(results),
+            "results": results
+        }, ensure_ascii=False, indent=2)
+        
+    except json.JSONDecodeError as e:
+        return f"Error: Invalid JSON format - {e}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 @tool(
@@ -279,22 +380,13 @@ def get_sub_agent_tools() -> list:
     
     Returns:
         list: 包含所有 SubAgent 工具的列表
-        
-    Usage:
-        from app.tool.sub_agent_tool.sub_agent_tool import get_sub_agent_tools
-        
-        agent = Agent(
-            model=...,
-            tools=get_sub_agent_tools(),  # 一键导入所有工具
-            ...
-        )
     """
     return [
         create_sub_agent,
         run_sub_agent,
+        run_sub_agents_parallel,
         list_sub_agents,
         destroy_sub_agent,
         destroy_all_sub_agents,
         get_sub_agent_info,
     ]
-

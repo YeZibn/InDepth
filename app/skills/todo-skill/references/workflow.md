@@ -20,7 +20,7 @@ Is task complex? (≥3 steps, dependencies, cross-file)
   │          ↓
   │          Define dependencies
   │          ↓
-  │          Save to /root/github/InDepth/todo/{task-id}.md
+  │          Save to {project-root}/todo/{task-id}.md
   │          ↓
   │          Execute tasks sequentially
   │          ↓

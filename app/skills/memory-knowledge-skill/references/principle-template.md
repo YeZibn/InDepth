@@ -66,7 +66,7 @@ Describe how to apply:
 - What are concrete examples?
 
 **Example:**
-```markdown
+````markdown
 ## Application
 
 ### API Endpoints
@@ -90,7 +90,7 @@ class UserCreate(BaseModel):
 - Verify file size limits
 - Scan for malware if applicable
 - Validate file content structure
-```
+````
 
 ### 4. Exceptions
 

@@ -10,13 +10,17 @@ import subprocess
 import tempfile
 import shutil
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils import get_todo_dir
+
 def run_create_task(task_name, context, subtasks_arg=None):
     """Run create_task.py with given arguments"""
     cmd = ['python3', 'scripts/create_task.py', task_name, context]
     if subtasks_arg:
         cmd.append(subtasks_arg)
     
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd='/root/github/InDepth/app/skills/todo-skill')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=script_dir)
     return result.returncode, result.stdout, result.stderr
 
 def read_task_file(filepath):
@@ -28,7 +32,7 @@ def read_task_file(filepath):
 
 def cleanup_test_files():
     """Remove test task files"""
-    todo_dir = '/root/github/InDepth/todo'
+    todo_dir = get_todo_dir()
     if not os.path.exists(todo_dir):
         return
     for filename in os.listdir(todo_dir):
@@ -185,7 +189,8 @@ def test_multiple_args():
     cmd = ['python3', 'scripts/create_task.py', 'Test Task Multi', 'Test context', 
            'Step 1 description', 'Step 2 description', 'Step 3 description']
     
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd='/root/github/InDepth/app/skills/todo-skill')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=script_dir)
     
     print(f"Return code: {result.returncode}")
     print(f"Output: {result.stdout}")

@@ -18,51 +18,42 @@ The Todo Skill enables systematic task management for complex software engineeri
 
 ## Quick Start
 
-```python
-# Create a new task with subtasks
-from scripts.create_task import create_task
+### For Agent Framework (Recommended)
 
-subtasks = [
-    {
-        "name": "Design database schema",
-        "description": "Define tables and relationships",
-        "priority": "high",
-        "dependencies": []
-    },
-    {
-        "name": "Implement API endpoints",
-        "description": "Create REST endpoints",
-        "priority": "high",
-        "dependencies": ["1"]
-    }
-]
-
-filepath = create_task("Build User System", "Create user management system", subtasks)
-```
-
-### For Agent Framework Calls
-
-When calling from agent frameworks that pass arguments as JSON strings:
+Import and use the tools directly:
 
 ```python
-from scripts.create_task import main_from_args_list
+from app.skills.todo_skill.scripts.tools import (
+    create_task,
+    update_task_status,
+    list_tasks,
+    get_next_task_item,
+    get_task_progress,
+    generate_task_report
+)
 
-# Agent framework may pass args as JSON string
-args_json = '["Task Name", "Context", \'[{"name":"Step1","description":"...","priority":"high","dependencies":[]}]\']'
+# Create a task
+result = create_task(
+    task_name="Build User System",
+    context="Create user management system with authentication",
+    subtasks=[
+        {"name": "Design schema", "description": "Define user table", "priority": "high", "dependencies": []},
+        {"name": "Implement API", "description": "Create endpoints", "priority": "high", "dependencies": ["1"]},
+    ]
+)
 
-result = main_from_args_list(args_json)
-# Returns: {"success": True, "filepath": "...", "task_id": "...", "subtask_count": 1}
+# Update progress
+update_task_status(task_id=result["task_id"], subtask_number=1, status="completed")
 
-# Or as Python list
-args_list = ["Task Name", "Context", "Step1,Step2,Step3"]
-result = main_from_args_list(args_list)
+# List all tasks
+all_tasks = list_tasks()
+
+# Get next task
+next_task = get_next_task_item(task_id="20260403_xxx_xxx")
+
+# Generate report
+report = generate_task_report(task_id="20260403_xxx_xxx")
 ```
-
-**Supported formats:**
-1. JSON string (for agent framework compatibility)
-2. Python list
-3. Comma-separated subtasks (auto-split)
-4. JSON array of subtask objects
 
 ## Workflow Decision Tree
 
@@ -82,15 +73,68 @@ Is task complex? (≥3 steps, cross-file, >30 min)
   └─ No → Execute Directly
 ```
 
-## Core Capabilities
+## Available Tools
 
-### 1. Task Creation
+| Tool | Description |
+|------|-------------|
+| `create_task` | Create a new task with structured subtasks |
+| `update_task_status` | Update subtask status and progress |
+| `list_tasks` | List all tasks with status and progress |
+| `get_next_task_item` | Get next executable subtask based on dependencies |
+| `get_task_progress` | Get detailed progress including blocked/ready tasks |
+| `generate_task_report` | Generate formatted report with visual progress bar |
 
-Create structured task files with metadata, context, and subtasks.
+### Tool Details
 
-**Location:** `/root/github/InDepth/todo/{task-id}.md`
+#### create_task
+```
+Create a new task with subtasks.
+- task_name: Name of the task (short, descriptive)
+- context: Context and goal description
+- subtasks: List of {name, description, priority, dependencies}
+Returns: {success, filepath, task_id, subtask_count}
+```
 
-**File Format:**
+#### update_task_status
+```
+Update subtask status.
+- task_id: Task ID (e.g., "20240402_103045_implement_auth")
+- subtask_number: 1, 2, 3...
+- status: "pending" | "in-progress" | "completed"
+Returns: {success, message, progress}
+```
+
+#### list_tasks
+```
+List all tasks.
+Returns: {success, tasks: [{id, status, priority, progress, file}], count}
+```
+
+#### get_next_task_item
+```
+Get next executable subtask.
+- task_id: Task ID to check
+Returns: {success, status: "ready"|"all_completed"|"blocked", next_task}
+```
+
+#### get_task_progress
+```
+Get detailed task progress.
+- task_id: Task ID
+Returns: {success, progress, completed_tasks, ready_tasks, blocked_tasks}
+```
+
+#### generate_task_report
+```
+Generate formatted progress report.
+- task_id: Task ID
+Returns: {success, report: "formatted string with progress bar"}
+```
+
+## Task File Format
+
+Tasks are stored as Markdown files in `{project-root}/todo/{task-id}.md`
+
 ```markdown
 # Task: {Task Name}
 
@@ -122,83 +166,6 @@ Create structured task files with metadata, context, and subtasks.
 
 ## Notes
 {Additional information}
-```
-
-### 2. Task Listing
-
-List all tasks and their current status.
-
-```bash
-python scripts/list_tasks.py
-```
-
-**Output:**
-```
-Found 3 task(s):
-
-================================================================================
-
-Task: 20240402_103045_implement_auth
-  Status: in-progress
-  Priority: high
-  Progress: 2/5 (40%)
-  File: 20240402_103045_implement_auth.md
-```
-
-### 3. Status Updates
-
-Update subtask status and automatically recalculate progress.
-
-```bash
-python scripts/update_task_status.py <task_id> <subtask_number> <status>
-```
-
-**Example:**
-```bash
-python scripts/update_task_status.py 20240402_103045_implement_auth 1 completed
-```
-
-**Valid Status Values:**
-- `pending` - Task not started
-- `in-progress` - Task being worked on
-- `completed` - Task finished
-
-### 4. Get Next Task
-
-Identify which subtask should be executed next based on dependencies.
-
-```bash
-python scripts/get_next_task.py <task_id>
-```
-
-**Logic:**
-- Returns first pending task with all dependencies completed
-- Returns "All tasks completed!" if done
-- Returns "No tasks ready" if dependencies not met
-
-### 5. Progress Reports
-
-Generate formatted progress reports with visual progress bars.
-
-```bash
-python scripts/generate_report.py <task_id>
-```
-
-**Output:**
-```
-========================================
-TASK PROGRESS REPORT
-========================================
-Task ID: 20240402_103045_implement_auth
-Status: in-progress
-Progress: 2/5 (40%)
-████░░░░░░ 40%
-
-SUBTASKS:
-----------------------------------------
-Task 1: Design schema [✓] completed
-Task 2: Create models [→] in-progress
-Task 3: Build API [○] pending
 ```
 
 ## Best Practices
@@ -238,26 +205,6 @@ Update status immediately after:
 - Completing work (in-progress → completed)
 - Discovering blockers (in-progress → pending)
 
-## Resources
-
-### scripts/
-Executable Python scripts for task operations:
-- `create_task.py` - Create new task files
-- `list_tasks.py` - List all tasks
-- `update_task_status.py` - Update subtask status
-- `get_next_task.py` - Get next executable task
-- `generate_report.py` - Generate progress reports
-- `utils.py` - Shared utility functions
-
-### references/
-Documentation for detailed reference:
-- `task_format.md` - Complete file format specification
-- `workflow.md` - Detailed workflow guide
-- `examples.md` - Real-world usage examples
-
-### assets/templates/
-- `task_template.md` - Template for new task files
-
 ## Example Usage
 
 **Scenario:** User asks to "Implement a complete user authentication system"
@@ -272,24 +219,28 @@ Documentation for detailed reference:
 
 2. **Create Task**
    ```python
-   subtasks = [
-       {"name": "Design auth schema", "description": "...", "priority": "high", "dependencies": []},
-       {"name": "Create user model", "description": "...", "priority": "high", "dependencies": ["1"]},
-       {"name": "Implement login API", "description": "...", "priority": "high", "dependencies": ["2"]},
-       {"name": "Implement register API", "description": "...", "priority": "high", "dependencies": ["2"]},
-       {"name": "Add auth middleware", "description": "...", "priority": "medium", "dependencies": ["3"]},
-       {"name": "Write tests", "description": "...", "priority": "medium", "dependencies": ["3", "4"]}
-   ]
-   create_task("Implement Auth System", "Complete user authentication", subtasks)
+   result = create_task(
+       task_name="Implement Auth System",
+       context="Complete user authentication with login/register",
+       subtasks=[
+           {"name": "Design auth schema", "description": "Define user table and auth flows", "priority": "high", "dependencies": []},
+           {"name": "Create user model", "description": "Create User model with auth methods", "priority": "high", "dependencies": ["1"]},
+           {"name": "Implement login API", "description": "POST /auth/login endpoint", "priority": "high", "dependencies": ["2"]},
+           {"name": "Implement register API", "description": "POST /auth/register endpoint", "priority": "high", "dependencies": ["2"]},
+           {"name": "Add auth middleware", "description": "JWT verification middleware", "priority": "medium", "dependencies": ["3"]},
+           {"name": "Write tests", "description": "Unit tests for auth", "priority": "medium", "dependencies": ["3", "4"]}
+       ]
+   )
+   task_id = result["task_id"]
    ```
 
 3. **Execute Tasks**
-   - Run `get_next_task.py` to identify next task
+   - Call `get_next_task_item(task_id)` to identify next task
    - Execute subtask
-   - Update status with `update_task_status.py`
+   - Call `update_task_status(task_id, subtask_number, "completed")`
    - Repeat until complete
 
 4. **Monitor Progress**
-   - Run `generate_report.py` periodically
-   - Check for blocked tasks
+   - Call `generate_task_report(task_id)` periodically
+   - Check for blocked tasks via `get_task_progress(task_id)`
    - Adjust priorities as needed

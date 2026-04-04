@@ -1,0 +1,9 @@
+agno
+openai
+requests
+httpx
+beautifulsoup4
+lxml
+pyyaml
+python-dotenv
+ddgs

@@ -9,10 +9,11 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from create_task import main_from_args_list
+from utils import get_todo_dir
 
 def cleanup_test_files():
     """Remove test task files"""
-    todo_dir = '/root/github/InDepth/todo'
+    todo_dir = get_todo_dir()
     if not os.path.exists(todo_dir):
         return
     for filename in os.listdir(todo_dir):
