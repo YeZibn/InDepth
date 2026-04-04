@@ -5,6 +5,7 @@ from datetime import datetime
 import uuid
 import json
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from app.agent.sub_agent import SubAgent
@@ -33,6 +34,7 @@ class SubAgentManager:
             cls._instance = super().__new__(cls)
             cls._instance._pool: Dict[str, AgentInstance] = {}
             cls._instance._executor = ThreadPoolExecutor(max_workers=10)
+            cls._instance._lock = threading.RLock()
         return cls._instance
     
     def create(self, name: str, description: str, task: str) -> str:
@@ -50,43 +52,48 @@ class SubAgentManager:
         agent_id = str(uuid.uuid4())[:8]
         agent = SubAgent(name, description, task)
         
-        self._pool[agent_id] = AgentInstance(
-            id=agent_id,
-            name=name,
-            agent=agent,
-            status="idle"
-        )
+        with self._lock:
+            self._pool[agent_id] = AgentInstance(
+                id=agent_id,
+                name=name,
+                agent=agent,
+                status="idle"
+            )
         return agent_id
     
     def get(self, agent_id: str) -> Optional[AgentInstance]:
         """获取指定 Agent 实例"""
-        return self._pool.get(agent_id)
+        with self._lock:
+            return self._pool.get(agent_id)
     
     def list_all(self) -> List[Dict[str, Any]]:
         """列出所有 Agent"""
-        return [
-            {
-                "id": a.id,
-                "name": a.name,
-                "status": a.status,
-                "created_at": a.created_at.isoformat(),
-                "task_count": len(a.task_history)
-            }
-            for a in self._pool.values()
-        ]
+        with self._lock:
+            return [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "status": a.status,
+                    "created_at": a.created_at.isoformat(),
+                    "task_count": len(a.task_history)
+                }
+                for a in self._pool.values()
+            ]
     
     def destroy(self, agent_id: str) -> bool:
         """销毁 Agent"""
-        if agent_id in self._pool:
-            del self._pool[agent_id]
-            return True
-        return False
+        with self._lock:
+            if agent_id in self._pool:
+                del self._pool[agent_id]
+                return True
+            return False
     
     def destroy_all(self) -> int:
         """销毁所有 Agent，返回销毁数量"""
-        count = len(self._pool)
-        self._pool.clear()
-        return count
+        with self._lock:
+            count = len(self._pool)
+            self._pool.clear()
+            return count
     
     def run_task(self, agent_id: str, message: str) -> str:
         """
@@ -99,39 +106,39 @@ class SubAgentManager:
         Returns:
             str: 执行结果
         """
-        instance = self._pool.get(agent_id)
-        if not instance:
-            return f"Error: Agent '{agent_id}' not found"
-        
-        instance.status = "running"
+        with self._lock:
+            instance = self._pool.get(agent_id)
+            if not instance:
+                return f"Error: Agent '{agent_id}' not found"
+            instance.status = "running"
         start_time = datetime.now()
         
         try:
             result = instance.agent.chat(message)
-            instance.status = "completed"
-            
-            task_record = {
-                "task": message,
-                "result": result,
-                "status": "completed",
-                "start_time": start_time.isoformat(),
-                "end_time": datetime.now().isoformat()
-            }
-            instance.task_history.append(task_record)
+            with self._lock:
+                instance.status = "completed"
+                task_record = {
+                    "task": message,
+                    "result": result,
+                    "status": "completed",
+                    "start_time": start_time.isoformat(),
+                    "end_time": datetime.now().isoformat()
+                }
+                instance.task_history.append(task_record)
             
             return result
             
         except Exception as e:
-            instance.status = "error"
-            
-            task_record = {
-                "task": message,
-                "result": str(e),
-                "status": "error",
-                "start_time": start_time.isoformat(),
-                "end_time": datetime.now().isoformat()
-            }
-            instance.task_history.append(task_record)
+            with self._lock:
+                instance.status = "error"
+                task_record = {
+                    "task": message,
+                    "result": str(e),
+                    "status": "error",
+                    "start_time": start_time.isoformat(),
+                    "end_time": datetime.now().isoformat()
+                }
+                instance.task_history.append(task_record)
             
             return f"Error executing task: {str(e)}"
 
@@ -146,7 +153,7 @@ class SubAgentManager:
         Returns:
             str: 执行结果
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor, 
             self.run_task, 
@@ -268,10 +275,22 @@ def run_sub_agents_parallel(tasks_json: str) -> str:
         
         task_tuples = [(t["agent_id"], t["message"]) for t in tasks]
         
+        previous_loop = None
+        try:
+            previous_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            previous_loop = None
+
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        results = loop.run_until_complete(_manager.run_tasks_parallel(task_tuples))
-        loop.close()
+        try:
+            asyncio.set_event_loop(loop)
+            results = loop.run_until_complete(_manager.run_tasks_parallel(task_tuples))
+        finally:
+            loop.close()
+            if previous_loop is not None:
+                asyncio.set_event_loop(previous_loop)
+            else:
+                asyncio.set_event_loop(None)
         
         return json.dumps({
             "success": True,

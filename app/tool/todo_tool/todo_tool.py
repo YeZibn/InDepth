@@ -1,45 +1,528 @@
-import sys
+import glob
 import os
-from importlib import util
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+from agno.tools import tool
+
+
+def _find_project_root() -> str:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    while current_dir != os.path.dirname(current_dir):
+        if os.path.isdir(os.path.join(current_dir, ".git")):
+            return current_dir
+        if os.path.isdir(os.path.join(current_dir, "app", "skills")):
+            return current_dir
+        current_dir = os.path.dirname(current_dir)
+    return os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+
+
+def _get_todo_dir() -> str:
+    return os.path.join(_find_project_root(), "todo")
+
+
+def _ensure_todo_dir() -> None:
+    os.makedirs(_get_todo_dir(), exist_ok=True)
+
+
+def _generate_task_id(task_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sanitized_name = re.sub(r"[^\w\s-]", "", task_name.lower())
+    sanitized_name = re.sub(r"[\s]+", "_", sanitized_name).strip("_")
+    return f"{timestamp}_{sanitized_name}"
+
+
+def _parse_task_file(filepath: str) -> Dict[str, Any]:
+    if not os.path.exists(filepath):
+        return {}
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    metadata: Dict[str, str] = {}
+    metadata_pattern = r"## Metadata\s*\n(.*?)(?=\n## |\Z)"
+    metadata_match = re.search(metadata_pattern, content, re.DOTALL)
+    if metadata_match:
+        for line in metadata_match.group(1).strip().split("\n"):
+            line = line.strip()
+            if line.startswith("- ") and ":" in line:
+                line = line[2:]
+                key, value = line.split(":", 1)
+                metadata[key.strip().replace("**", "").strip()] = value.strip()
+
+    subtasks: List[Dict[str, Any]] = []
+    subtask_pattern = r"### Task (\d+): (.*?)\n(.*?)(?=\n### Task|\n## |\Z)"
+    for match in re.finditer(subtask_pattern, content, re.DOTALL):
+        task_num = match.group(1)
+        task_name = match.group(2).strip()
+        task_content = match.group(3).strip()
+
+        status_match = re.search(r"\*\*Status\*\*:\s*(\w+(?:-\w+)*)", task_content)
+        priority_match = re.search(r"\*\*Priority\*\*:\s*(\w+)", task_content)
+        deps_match = re.search(r"\*\*Dependencies\*\*:\s*(.*?)\n", task_content)
+
+        status = status_match.group(1) if status_match else "pending"
+        priority = priority_match.group(1) if priority_match else "medium"
+        dependencies: List[str] = []
+        if deps_match:
+            deps_str = deps_match.group(1)
+            if deps_str.strip() and deps_str.strip().lower() != "none":
+                dependencies = re.findall(r"Task\s*(\d+)", deps_str)
+
+        checklist_items = re.findall(r"- \*\[(.)\]\* (.*)", task_content)
+        description = checklist_items[0][1] if checklist_items else ""
+
+        subtasks.append(
+            {
+                "number": task_num,
+                "name": task_name,
+                "status": status,
+                "priority": priority,
+                "dependencies": dependencies,
+                "description": description,
+                "checklist": checklist_items,
+            }
+        )
+
+    return {
+        "metadata": metadata,
+        "subtasks": subtasks,
+        "filename": os.path.basename(filepath),
+        "filepath": filepath,
+    }
+
+
+def _calculate_progress(subtasks: List[Dict[str, Any]]) -> Tuple[int, int, int]:
+    total = len(subtasks)
+    completed = sum(1 for t in subtasks if t.get("status") == "completed")
+    percentage = int((completed / total) * 100) if total > 0 else 0
+    return completed, total, percentage
+
+
+def _list_all_tasks() -> List[Dict[str, Any]]:
+    todo_dir = _get_todo_dir()
+    if not os.path.exists(todo_dir):
+        return []
+
+    tasks: List[Dict[str, Any]] = []
+    for filepath in glob.glob(os.path.join(todo_dir, "*.md")):
+        parsed = _parse_task_file(filepath)
+        if parsed:
+            tasks.append(parsed)
+    tasks.sort(key=lambda x: x["metadata"].get("Created", ""), reverse=True)
+    return tasks
+
+
+def _get_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
+    filepath = os.path.join(_get_todo_dir(), f"{task_id}.md")
+    if os.path.exists(filepath):
+        return _parse_task_file(filepath)
+
+    for task in _list_all_tasks():
+        if task_id in task.get("metadata", {}).get("ID", ""):
+            return task
+    return None
+
+
+def _get_next_task(subtasks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    completed_tasks = {t["number"] for t in subtasks if t.get("status") == "completed"}
+    for task in subtasks:
+        if task.get("status") == "pending":
+            if all(dep in completed_tasks for dep in task.get("dependencies", [])):
+                return task
+    return None
+
+
+def _calculate_blocked_status(subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    completed_tasks = {t["number"] for t in subtasks if t.get("status") == "completed"}
+    blocked = []
+    ready = []
+    blocking = []
+
+    for task in subtasks:
+        num = task["number"]
+        name = task["name"]
+        deps = task.get("dependencies", [])
+        status = task.get("status")
+
+        if status == "pending":
+            unmet = [d for d in deps if d not in completed_tasks]
+            if unmet:
+                blocked.append((num, name, unmet))
+            else:
+                ready.append((num, name))
+
+        if status != "completed":
+            blocks = [other["number"] for other in subtasks if num in other.get("dependencies", [])]
+            if blocks:
+                blocking.append((num, name, blocks))
+
+    return {"blocked": blocked, "ready": ready, "blocking": blocking}
+
+
+def _generate_dependencies_section(subtasks: List[Dict[str, Any]]) -> str:
+    status = _calculate_blocked_status(subtasks)
+    lines = ["## Dependencies"]
+
+    if status["blocked"]:
+        lines.append("- **Blocked subtasks**:")
+        for num, name, deps in status["blocked"]:
+            wait_for = ", ".join([f"Task {d}" for d in deps])
+            lines.append(f"  - Task {num} ({name}) - waiting for {wait_for}")
+    else:
+        lines.append("- **Blocked subtasks**: None")
+
+    if status["ready"]:
+        lines.append("- **Ready subtasks**:")
+        for num, name in status["ready"]:
+            lines.append(f"  - Task {num} ({name})")
+    else:
+        lines.append("- **Ready subtasks**: None")
+
+    if status["blocking"]:
+        lines.append("- **Blocking subtasks**:")
+        for num, name, blocks in status["blocking"]:
+            blocks_str = ", ".join([f"Task {b}" for b in blocks])
+            lines.append(f"  - Task {num} ({name}) - blocks {blocks_str}")
+    else:
+        lines.append("- **Blocking subtasks**: None")
+
+    return "\n".join(lines)
+
+
+def _has_unmet_dependencies(subtasks: List[Dict[str, Any]], task_number: str) -> List[str]:
+    target = next((t for t in subtasks if t["number"] == task_number), None)
+    if not target:
+        return []
+    completed = {t["number"] for t in subtasks if t.get("status") == "completed"}
+    return [dep for dep in target.get("dependencies", []) if dep not in completed]
+
+
+def _update_task_status(filepath: str, task_number: str, new_status: str) -> Tuple[bool, Optional[str]]:
+    if not os.path.exists(filepath):
+        return False, "Task file not found"
+
+    parsed = _parse_task_file(filepath)
+    subtasks = parsed.get("subtasks", [])
+
+    target = next((t for t in subtasks if t["number"] == task_number), None)
+    if not target:
+        return False, f"Subtask {task_number} not found"
+
+    if new_status in ("in-progress", "completed"):
+        unmet = _has_unmet_dependencies(subtasks, task_number)
+        if unmet:
+            deps = ", ".join([f"Task {d}" for d in unmet])
+            return False, f"Subtask {task_number} is blocked by {deps}"
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    subtask_pattern = rf"(### Task {task_number}:.*?\*\*Status\*\*:\s*)(\w+(?:-\w+)*)(.*?)(?=\n### Task|\n## |\Z)"
+    new_content = re.sub(
+        subtask_pattern,
+        lambda m: f"{m.group(1)}{new_status}{m.group(3)}",
+        content,
+        flags=re.DOTALL,
+    )
+    if new_content == content:
+        return False, f"Failed to locate status block for subtask {task_number}"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_content = re.sub(
+        r"(\*\*Updated\*\*:\s*)\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+        rf"\g<1>{now}",
+        new_content,
+    )
+
+    parsed_after = _parse_task_file(filepath)
+    for st in parsed_after.get("subtasks", []):
+        if st["number"] == task_number:
+            st["status"] = new_status
+
+    completed, total, percentage = _calculate_progress(parsed_after.get("subtasks", []))
+    overall_status = "completed" if percentage == 100 else ("in-progress" if percentage > 0 else "pending")
+
+    new_content = re.sub(
+        r"(\*\*Progress\*\*:\s*)\d+/\d+\s*\(\d+%\)",
+        rf"\g<1>{completed}/{total} ({percentage}%)",
+        new_content,
+    )
+    new_content = re.sub(
+        r"(\*\*Status\*\*:\s*)(\w+(?:-\w+)*)",
+        rf"\g<1>{overall_status}",
+        new_content,
+        count=1,
+    )
+
+    deps_section = _generate_dependencies_section(parsed_after.get("subtasks", []))
+    new_content = re.sub(
+        r"## Dependencies\n.*?(?=\n## |\Z)",
+        deps_section + "\n",
+        new_content,
+        flags=re.DOTALL,
+    )
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return True, None
+
+
+@tool(
+    name="create_task",
+    description="Create a new task with structured subtasks and dependency metadata.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+)
+def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        _ensure_todo_dir()
+        task_id = _generate_task_id(task_name)
+        filepath = os.path.join(_get_todo_dir(), f"{task_id}.md")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        metadata = f"""# Task: {task_name}
+
+## Metadata
+- **ID**: {task_id}
+- **Status**: pending
+- **Priority**: high
+- **Created**: {now}
+- **Updated**: {now}
+- **Progress**: 0/{len(subtasks)} (0%)
+"""
+        context_section = f"""
+## Context
+**Goal**: {context}
+
+**Acceptance Criteria**:
+- Task completion criteria will be defined during execution
+"""
+        subtasks_section = "\n## Subtasks\n"
+        for i, subtask in enumerate(subtasks, 1):
+            deps = subtask.get("dependencies", [])
+            deps_str = ", ".join([f"Task {d}" for d in deps])
+            deps_line = f"- **Dependencies**: {deps_str}" if deps_str else "- **Dependencies**: None"
+            subtasks_section += f"""
+### Task {i}: {subtask['name']}
+- **Status**: pending
+- **Priority**: {subtask.get('priority', 'medium')}
+{deps_line}
+- **[ ]** {subtask['description']}
+"""
+        dependencies_section = """
+## Dependencies
+- **Blocked subtasks**: None
+- **Ready subtasks**: None
+- **Blocking subtasks**: None
+"""
+        notes_section = """
+## Notes
+Task created automatically. Update as needed during execution.
+"""
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(metadata + context_section + subtasks_section + dependencies_section + notes_section)
+
+        created = _parse_task_file(filepath)
+        refreshed_deps = _generate_dependencies_section(created.get("subtasks", []))
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+        content = re.sub(r"## Dependencies\n.*?(?=\n## |\Z)", refreshed_deps + "\n", content, flags=re.DOTALL)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        return {"success": True, "filepath": filepath, "task_id": task_id, "subtask_count": len(subtasks)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool(
+    name="update_task_status",
+    description="Update a subtask status. Enforces dependency constraints before state transitions.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+)
+def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[str, Any]:
+    valid_statuses = ["pending", "in-progress", "completed"]
+    if status not in valid_statuses:
+        return {"success": False, "error": f"Invalid status '{status}'. Valid: {', '.join(valid_statuses)}"}
+
+    task_data = _get_task_by_id(task_id)
+    if not task_data:
+        return {"success": False, "error": f"Task not found: {task_id}"}
+
+    ok, error = _update_task_status(task_data["filepath"], str(subtask_number), status)
+    if not ok:
+        return {"success": False, "error": error or f"Failed to update subtask {subtask_number}"}
+
+    updated_task = _parse_task_file(task_data["filepath"])
+    completed, total, percentage = _calculate_progress(updated_task.get("subtasks", []))
+    return {
+        "success": True,
+        "message": f"Subtask {subtask_number} updated to: {status}",
+        "progress": f"{completed}/{total} ({percentage}%)",
+    }
+
+
+@tool(
+    name="list_tasks",
+    description="List all task summaries in the todo directory.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+)
+def list_tasks() -> Dict[str, Any]:
+    try:
+        tasks = _list_all_tasks()
+        summaries = []
+        for task in tasks:
+            meta = task.get("metadata", {})
+            summaries.append(
+                {
+                    "id": meta.get("ID", "N/A"),
+                    "status": meta.get("Status", "N/A"),
+                    "priority": meta.get("Priority", "N/A"),
+                    "progress": meta.get("Progress", "N/A"),
+                    "file": task.get("filename", "N/A"),
+                }
+            )
+        return {"success": True, "tasks": summaries, "count": len(summaries)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool(
+    name="get_next_task",
+    description="Return the next executable subtask based on dependency constraints.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+)
+def get_next_task_item(task_id: str) -> Dict[str, Any]:
+    task_data = _get_task_by_id(task_id)
+    if not task_data:
+        return {"success": False, "status": "not_found", "error": f"Task not found: {task_id}"}
+
+    next_task = _get_next_task(task_data.get("subtasks", []))
+    if next_task:
+        return {
+            "success": True,
+            "status": "ready",
+            "next_task": {
+                "number": next_task["number"],
+                "name": next_task["name"],
+                "description": next_task.get("description", ""),
+                "priority": next_task.get("priority", "medium"),
+                "dependencies": next_task.get("dependencies", []),
+            },
+        }
+
+    all_done = all(t.get("status") == "completed" for t in task_data.get("subtasks", []))
+    if all_done:
+        return {"success": True, "status": "all_completed", "message": "All tasks completed!"}
+    return {"success": True, "status": "blocked", "message": "No tasks ready (dependencies not met)"}
+
+
+@tool(
+    name="get_task_progress",
+    description="Get progress with completed, ready, and blocked subtask breakdown.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+)
+def get_task_progress(task_id: str) -> Dict[str, Any]:
+    task_data = _get_task_by_id(task_id)
+    if not task_data:
+        return {"success": False, "error": f"Task not found: {task_id}"}
+
+    completed, total, percentage = _calculate_progress(task_data.get("subtasks", []))
+    blocked_status = _calculate_blocked_status(task_data.get("subtasks", []))
+    return {
+        "success": True,
+        "task_id": task_id,
+        "progress": f"{completed}/{total} ({percentage}%)",
+        "completed_tasks": [{"number": t["number"], "name": t["name"]} for t in task_data["subtasks"] if t["status"] == "completed"],
+        "ready_tasks": [{"number": n, "name": nm} for n, nm in blocked_status["ready"]],
+        "blocked_tasks": [{"number": n, "name": nm, "waiting_for": d} for n, nm, d in blocked_status["blocked"]],
+    }
+
+
+@tool(
+    name="generate_task_report",
+    description="Generate a formatted task report with progress bar and blocked summary.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+)
+def generate_task_report(task_id: str) -> Dict[str, Any]:
+    task_data = _get_task_by_id(task_id)
+    if not task_data:
+        return {"success": False, "error": f"Task not found: {task_id}"}
+
+    metadata = task_data.get("metadata", {})
+    subtasks = task_data.get("subtasks", [])
+    completed, total, percentage = _calculate_progress(subtasks)
+
+    status_icons = {"completed": "✓", "in-progress": "→", "pending": "○"}
+    lines = [
+        "=" * 44,
+        "TASK PROGRESS REPORT",
+        "=" * 44,
+        f"Task ID: {metadata.get('ID', 'N/A')}",
+        f"Status: {metadata.get('Status', 'N/A')}",
+        f"Priority: {metadata.get('Priority', 'N/A')}",
+        f"Created: {metadata.get('Created', 'N/A')}",
+        f"Updated: {metadata.get('Updated', 'N/A')}",
+        "",
+        f"PROGRESS: {completed}/{total} ({percentage}%)",
+        f"{'█' * (percentage // 10)}{'░' * (10 - percentage // 10)} {percentage}%",
+        "",
+        "-" * 44,
+        "SUBTASKS:",
+        "-" * 44,
+    ]
+    for st in subtasks:
+        icon = status_icons.get(st.get("status"), "?")
+        deps = ", ".join(st.get("dependencies", [])) if st.get("dependencies") else "None"
+        lines.append(f"Task {st['number']}: {st['name']} [{icon}] {st['status']}")
+        lines.append(f"  Priority: {st.get('priority', 'N/A')}, Deps: {deps}")
+
+    blocked = _calculate_blocked_status(subtasks)["blocked"]
+    if blocked:
+        lines.extend(["", "-" * 44, f"BLOCKED: {', '.join([b[0] for b in blocked])}", "These tasks are waiting on dependencies."])
+    lines.append("=" * 44)
+    return {"success": True, "report": "\n".join(lines)}
+
+
+class TodoTools:
+    @staticmethod
+    def get_tools():
+        return [
+            create_task,
+            update_task_status,
+            list_tasks,
+            get_next_task_item,
+            get_task_progress,
+            generate_task_report,
+        ]
+
+    @staticmethod
+    def get_tool_names():
+        return [
+            "create_task",
+            "update_task_status",
+            "list_tasks",
+            "get_next_task",
+            "get_task_progress",
+            "generate_task_report",
+        ]
+
 
 def load_todo_tools():
-    """Dynamically load TodoTools from todo-skill directory"""
-    current_file = os.path.abspath(__file__)
-
-    search_tool_dir = os.path.dirname(current_file)
-    tool_dir = os.path.dirname(search_tool_dir)
-    app_dir = os.path.dirname(tool_dir)
-    skills_dir = os.path.join(app_dir, 'skills')
-    todo_skill_path = os.path.join(skills_dir, 'todo-skill', 'scripts')
-
-    print(f"✓ Paths resolved correctly:")
-    print(f"  - todo_skill_path: {todo_skill_path}")
-    print(f"  - exists: {os.path.exists(todo_skill_path)}")
-
-    utils_path = os.path.join(todo_skill_path, "utils.py")
-    tools_path = os.path.join(todo_skill_path, "tools.py")
-    print(f"  - utils.py exists: {os.path.exists(utils_path)}")
-    print(f"  - tools.py exists: {os.path.exists(tools_path)}")
-
-    if not os.path.exists(tools_path):
-        return None
-
-    utils_spec = util.spec_from_file_location("todo_utils", utils_path)
-    utils_module = util.module_from_spec(utils_spec)
-    sys.modules["utils"] = utils_module
-    utils_spec.loader.exec_module(utils_module)
-
-    tools_spec = util.spec_from_file_location("todo_tools", tools_path)
-    tools_module = util.module_from_spec(tools_spec)
-    sys.modules["scripts.tools"] = tools_module
-
-    try:
-        tools_spec.loader.exec_module(tools_module)
-    except ModuleNotFoundError as e:
-        print(f"✗ Import error (expected in dev environment): {e}")
-        print("  This will work in Agent environment with agno installed.")
-        return None
-
-    return tools_module.TodoTools
-
-
+    """Compatibility shim for existing callers."""
+    return TodoTools
