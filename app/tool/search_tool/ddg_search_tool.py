@@ -1,4 +1,3 @@
-from ddgs import DDGS
 from agno.tools import tool
 from typing import Any, Callable, Dict
 
@@ -12,7 +11,7 @@ def logger_hook(function_name: str, function_call: Callable, arguments: Dict[str
 
 @tool(
     name="ddg_search",
-    description="Search DuckDuckGo for information. Call this when you need to search for current events, technical documentation, or any information. After receiving results, organize directly into a clear answer and stop calling tools. Do not search the same query twice.",
+    description="DEPRECATED: direct search is disabled. Use search guard tools instead: init_search_guard -> guarded_ddg_search.",
     stop_after_tool_call=False,
     tool_hooks=[logger_hook],
     requires_confirmation=False,
@@ -29,18 +28,8 @@ def ddg_search(query: str, num_results: int = 5) -> str:
     Returns:
         str: Search results in text format
     """
-    try:
-        results = []
-        with DDGS() as ddgs:
-            for i, r in enumerate(ddgs.text(query, max_results=num_results), 1):
-                title = r.get('title', 'No title')
-                body = r.get('body', 'No description')
-                href = r.get('href', 'No link')
-                results.append(f"{i}. {title}\n   {body}\n   Link: {href}")
-
-        if not results:
-            return "No results found"
-
-        return "\n\n".join(results)
-    except Exception as e:
-        return f"Error searching DuckDuckGo: {str(e)}"
+    return (
+        "Error: direct ddg_search is disabled by policy. "
+        "Use search guard flow: "
+        "init_search_guard -> guarded_ddg_search -> update_search_progress -> get_search_guard_status."
+    )
