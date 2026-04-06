@@ -95,7 +95,7 @@ class SubAgentManager:
             self._pool.clear()
             return count
     
-    def run_task(self, agent_id: str, message: str) -> str:
+    def run_task(self, agent_id: str, message: str) -> Dict[str, Any]:
         """
         运行任务（同步）
         
@@ -104,31 +104,58 @@ class SubAgentManager:
             message: 任务消息
             
         Returns:
-            str: 执行结果
+            Dict[str, Any]: 结构化执行结果
         """
         with self._lock:
             instance = self._pool.get(agent_id)
             if not instance:
-                return f"Error: Agent '{agent_id}' not found"
+                return {
+                    "success": False,
+                    "error": f"Agent '{agent_id}' not found",
+                    "agent_id": agent_id,
+                    "message": message,
+                }
             instance.status = "running"
         start_time = datetime.now()
         
         try:
             result = instance.agent.chat(message)
+            result_text = "" if result is None else str(result)
+            success = bool(result_text.strip())
+            end_time = datetime.now()
             with self._lock:
-                instance.status = "completed"
+                instance.status = "completed" if success else "error"
                 task_record = {
                     "task": message,
-                    "result": result,
-                    "status": "completed",
+                    "result": result_text,
+                    "status": "completed" if success else "error",
                     "start_time": start_time.isoformat(),
-                    "end_time": datetime.now().isoformat()
+                    "end_time": end_time.isoformat(),
                 }
                 instance.task_history.append(task_record)
-            
-            return result
+
+            if not success:
+                return {
+                    "success": False,
+                    "error": "SubAgent returned empty result",
+                    "agent_id": agent_id,
+                    "message": message,
+                    "start_time": start_time.isoformat(),
+                    "end_time": end_time.isoformat(),
+                    "result": result_text,
+                }
+
+            return {
+                "success": True,
+                "agent_id": agent_id,
+                "message": message,
+                "result": result_text,
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+            }
             
         except Exception as e:
+            end_time = datetime.now()
             with self._lock:
                 instance.status = "error"
                 task_record = {
@@ -136,13 +163,20 @@ class SubAgentManager:
                     "result": str(e),
                     "status": "error",
                     "start_time": start_time.isoformat(),
-                    "end_time": datetime.now().isoformat()
+                    "end_time": end_time.isoformat(),
                 }
                 instance.task_history.append(task_record)
-            
-            return f"Error executing task: {str(e)}"
 
-    async def run_task_async(self, agent_id: str, message: str) -> str:
+            return {
+                "success": False,
+                "error": f"Error executing task: {str(e)}",
+                "agent_id": agent_id,
+                "message": message,
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+            }
+
+    async def run_task_async(self, agent_id: str, message: str) -> Dict[str, Any]:
         """
         异步运行任务
         
@@ -151,7 +185,7 @@ class SubAgentManager:
             message: 任务消息
             
         Returns:
-            str: 执行结果
+            Dict[str, Any]: 结构化执行结果
         """
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -175,9 +209,7 @@ class SubAgentManager:
             result = await self.run_task_async(agent_id, message)
             return {
                 "index": index,
-                "agent_id": agent_id,
-                "message": message,
-                "result": result
+                **result,
             }
         
         coroutines = [
@@ -192,15 +224,16 @@ class SubAgentManager:
             if isinstance(result, Exception):
                 processed_results.append({
                     "index": i,
+                    "success": False,
                     "agent_id": tasks[i][0],
                     "message": tasks[i][1],
-                    "result": f"Error: {str(result)}",
+                    "error": f"Error: {str(result)}",
                     "status": "error"
                 })
             else:
                 processed_results.append({
                     **result,
-                    "status": "completed"
+                    "status": "completed" if result.get("success") else "error",
                 })
         
         return processed_results
@@ -227,7 +260,17 @@ def create_sub_agent(name: str, description: str, task: str) -> str:
         str: agent_id，用于后续操作（如运行任务、销毁等）
     """
     agent_id = _manager.create(name, description, task)
-    return f"SubAgent created successfully.\nName: {name}\nID: {agent_id}\nDescription: {description}"
+    return json.dumps(
+        {
+            "success": True,
+            "agent_id": agent_id,
+            "name": name,
+            "description": description,
+            "task": task,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @tool(
@@ -247,9 +290,13 @@ def run_sub_agent(agent_id: str, message: str) -> str:
         str: 执行结果
     """
     if not agent_id or not message:
-        return "Error: Both agent_id and message are required"
+        return json.dumps(
+            {"success": False, "error": "Both agent_id and message are required"},
+            ensure_ascii=False,
+            indent=2,
+        )
     
-    return _manager.run_task(agent_id, message)
+    return json.dumps(_manager.run_task(agent_id, message), ensure_ascii=False, indent=2)
 
 
 @tool(
@@ -271,7 +318,11 @@ def run_sub_agents_parallel(tasks_json: str) -> str:
     try:
         tasks = json.loads(tasks_json)
         if not isinstance(tasks, list):
-            return "Error: tasks must be a JSON array"
+            return json.dumps(
+                {"success": False, "error": "tasks must be a JSON array"},
+                ensure_ascii=False,
+                indent=2,
+            )
         
         task_tuples = [(t["agent_id"], t["message"]) for t in tasks]
         
@@ -292,16 +343,31 @@ def run_sub_agents_parallel(tasks_json: str) -> str:
             else:
                 asyncio.set_event_loop(None)
         
-        return json.dumps({
-            "success": True,
-            "total": len(results),
-            "results": results
-        }, ensure_ascii=False, indent=2)
+        success_count = sum(1 for r in results if r.get("success"))
+        return json.dumps(
+            {
+                "success": True,
+                "total": len(results),
+                "success_count": success_count,
+                "failure_count": len(results) - success_count,
+                "results": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
         
     except json.JSONDecodeError as e:
-        return f"Error: Invalid JSON format - {e}"
+        return json.dumps(
+            {"success": False, "error": f"Invalid JSON format - {e}"},
+            ensure_ascii=False,
+            indent=2,
+        )
     except Exception as e:
-        return f"Error: {str(e)}"
+        return json.dumps(
+            {"success": False, "error": str(e)},
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 @tool(
@@ -317,10 +383,11 @@ def list_sub_agents() -> str:
         str: Agent 列表（JSON 格式）
     """
     agents = _manager.list_all()
-    if not agents:
-        return "No active SubAgents."
-    
-    return json.dumps(agents, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {"success": True, "count": len(agents), "agents": agents},
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @tool(
@@ -339,12 +406,24 @@ def destroy_sub_agent(agent_id: str) -> str:
         str: 操作结果
     """
     if not agent_id:
-        return "Error: agent_id is required"
+        return json.dumps(
+            {"success": False, "error": "agent_id is required"},
+            ensure_ascii=False,
+            indent=2,
+        )
     
     success = _manager.destroy(agent_id)
     if success:
-        return f"Agent '{agent_id}' destroyed successfully"
-    return f"Agent '{agent_id}' not found"
+        return json.dumps(
+            {"success": True, "agent_id": agent_id, "message": "destroyed"},
+            ensure_ascii=False,
+            indent=2,
+        )
+    return json.dumps(
+        {"success": False, "agent_id": agent_id, "error": "not found"},
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @tool(
@@ -360,7 +439,11 @@ def destroy_all_sub_agents() -> str:
         str: 操作结果
     """
     count = _manager.destroy_all()
-    return f"All SubAgents destroyed. Total: {count}"
+    return json.dumps(
+        {"success": True, "destroyed_count": count},
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @tool(
@@ -380,9 +463,14 @@ def get_sub_agent_info(agent_id: str) -> str:
     """
     instance = _manager.get(agent_id)
     if not instance:
-        return f"Agent '{agent_id}' not found"
+        return json.dumps(
+            {"success": False, "agent_id": agent_id, "error": "not found"},
+            ensure_ascii=False,
+            indent=2,
+        )
     
     info = {
+        "success": True,
         "id": instance.id,
         "name": instance.name,
         "status": instance.status,

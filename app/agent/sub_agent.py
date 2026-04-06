@@ -10,8 +10,7 @@ from app.tool.bash_tool import execute_bash_command
 from app.tool.get_current_time_tool import get_current_time
 from app.tool.write_file_tool import write_file
 from app.tool.read_file_tool import read_file
-from app.tool.search_tool.ddg_search_tool import ddg_search
-from app.tool.search_tool.url_search_tool import url_search
+from app.tool.search_tool.search_guard import get_guarded_search_tools
 
 
 
@@ -71,12 +70,13 @@ class SubAgent:
                                 1. 只专注处理指定任务，不扩展无关内容。
                                 2. 输出简洁、结构化，避免多余解释。
                                 3. 如无法完成，明确说明原因，不编造信息。
+                                4. 检索任务必须先初始化 search guard，再使用 guarded 搜索工具，不得绕过预算与门禁。
 
                                 你的专属任务：
                                 {self.task}
                                 """,
             markdown=True,
-            tools= [execute_bash_command,get_current_time,read_file,write_file,ddg_search,url_search],
+            tools=[execute_bash_command, get_current_time, read_file, write_file] + get_guarded_search_tools(),
             skills= Skills(loaders=[LocalSkills("app/skills/memory-knowledge-skill")]),
             db=self.db,
             add_history_to_context=True,
@@ -84,10 +84,15 @@ class SubAgent:
             compression_manager=self.compression_manager
         )
 
-    def chat(self, message: str):
-
-        self.agent.print_response(message, streaming=True)
+    def chat(self, message: str) -> str:
+        """执行子任务并返回文本结果，供主 Agent 汇总。"""
+        run_output = self.agent.run(message, stream=False)
+        try:
+            return run_output.get_content_as_string()
+        except Exception:
+            content = getattr(run_output, "content", None)
+            return "" if content is None else str(content)
 
 if __name__ == "__main__":
     agent = SubAgent(name="sub_agent", description="子智能体", task="助手")
-    agent.chat("你好啊，你是谁")
+    print(agent.chat("你好啊，你是谁"))
