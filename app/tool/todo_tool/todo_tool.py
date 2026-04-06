@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from agno.tools import tool
+from app.observability.events import emit_event
 
 
 def _find_project_root() -> str:
@@ -16,6 +17,22 @@ def _find_project_root() -> str:
             return current_dir
         current_dir = os.path.dirname(current_dir)
     return os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+
+
+def _emit_obs(task_id: str, event_type: str, status: str = "ok", payload: Optional[Dict[str, Any]] = None) -> None:
+    """Best-effort observability hook. Never break business flow."""
+    try:
+        emit_event(
+            task_id=task_id,
+            run_id=task_id,
+            actor="main",
+            role="general",
+            event_type=event_type,
+            status=status,
+            payload=payload or {},
+        )
+    except Exception:
+        pass
 
 
 def _get_todo_dir() -> str:
@@ -272,12 +289,24 @@ def _update_task_status(filepath: str, task_number: str, new_status: str) -> Tup
 
 @tool(
     name="create_task",
-    description="Create a new task with structured subtasks and dependency metadata.",
+    description="Create a new task with structured subtasks and dependency metadata, subtasks is must be provided.",
     stop_after_tool_call=False,
     requires_confirmation=False,
     cache_results=False,
 )
 def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Create a markdown task file with structured subtasks and dependency metadata.
+
+    Args:
+        task_name: Human-readable task title.
+        context: Goal and constraints for this task.
+        subtasks: Ordered subtask list. Each item should include name/description,
+            and may include priority/dependencies.
+
+    Returns:
+        Dict with success flag, filepath, task_id, and subtask_count.
+    """
     try:
         _ensure_todo_dir()
         task_id = _generate_task_id(task_name)
@@ -335,8 +364,24 @@ Task created automatically. Update as needed during execution.
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
 
+        _emit_obs(
+            task_id=task_id,
+            event_type="task_started",
+            payload={
+                "tool": "create_task",
+                "task_name": task_name,
+                "subtask_count": len(subtasks),
+                "filepath": filepath,
+            },
+        )
         return {"success": True, "filepath": filepath, "task_id": task_id, "subtask_count": len(subtasks)}
     except Exception as e:
+        _emit_obs(
+            task_id="unknown",
+            event_type="tool_failed",
+            status="error",
+            payload={"tool": "create_task", "task_name": task_name, "error": str(e)},
+        )
         return {"success": False, "error": str(e)}
 
 
@@ -348,6 +393,17 @@ Task created automatically. Update as needed during execution.
     cache_results=False,
 )
 def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[str, Any]:
+    """
+    Update a subtask status while enforcing dependency constraints.
+
+    Args:
+        task_id: Task identifier or unique prefix.
+        subtask_number: 1-based subtask number in the task file.
+        status: Target status, one of pending/in-progress/completed.
+
+    Returns:
+        Dict with success flag and updated progress, or error details.
+    """
     valid_statuses = ["pending", "in-progress", "completed"]
     if status not in valid_statuses:
         return {"success": False, "error": f"Invalid status '{status}'. Valid: {', '.join(valid_statuses)}"}
@@ -362,6 +418,22 @@ def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[s
 
     updated_task = _parse_task_file(task_data["filepath"])
     completed, total, percentage = _calculate_progress(updated_task.get("subtasks", []))
+    _emit_obs(
+        task_id=task_id,
+        event_type="status_updated",
+        payload={
+            "tool": "update_task_status",
+            "subtask_number": subtask_number,
+            "status": status,
+            "progress": f"{completed}/{total} ({percentage}%)",
+        },
+    )
+    if total > 0 and completed == total:
+        _emit_obs(
+            task_id=task_id,
+            event_type="task_finished",
+            payload={"tool": "update_task_status", "progress": f"{completed}/{total} ({percentage}%)"},
+        )
     return {
         "success": True,
         "message": f"Subtask {subtask_number} updated to: {status}",
@@ -377,6 +449,12 @@ def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[s
     cache_results=False,
 )
 def list_tasks() -> Dict[str, Any]:
+    """
+    List task summaries in the todo directory.
+
+    Returns:
+        Dict with success flag, task count, and summary list.
+    """
     try:
         tasks = _list_all_tasks()
         summaries = []
@@ -404,6 +482,15 @@ def list_tasks() -> Dict[str, Any]:
     cache_results=False,
 )
 def get_next_task_item(task_id: str) -> Dict[str, Any]:
+    """
+    Get the next executable pending subtask based on dependency satisfaction.
+
+    Args:
+        task_id: Task identifier or unique prefix.
+
+    Returns:
+        Dict with status=ready/all_completed/blocked and related payload.
+    """
     task_data = _get_task_by_id(task_id)
     if not task_data:
         return {"success": False, "status": "not_found", "error": f"Task not found: {task_id}"}
@@ -436,6 +523,15 @@ def get_next_task_item(task_id: str) -> Dict[str, Any]:
     cache_results=False,
 )
 def get_task_progress(task_id: str) -> Dict[str, Any]:
+    """
+    Get progress summary including completed, ready, and blocked subtasks.
+
+    Args:
+        task_id: Task identifier or unique prefix.
+
+    Returns:
+        Dict with progress string and task breakdown lists.
+    """
     task_data = _get_task_by_id(task_id)
     if not task_data:
         return {"success": False, "error": f"Task not found: {task_id}"}
@@ -460,6 +556,15 @@ def get_task_progress(task_id: str) -> Dict[str, Any]:
     cache_results=False,
 )
 def generate_task_report(task_id: str) -> Dict[str, Any]:
+    """
+    Generate a formatted plain-text progress report for a task.
+
+    Args:
+        task_id: Task identifier or unique prefix.
+
+    Returns:
+        Dict with success flag and rendered report content.
+    """
     task_data = _get_task_by_id(task_id)
     if not task_data:
         return {"success": False, "error": f"Task not found: {task_id}"}

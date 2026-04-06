@@ -6,9 +6,51 @@ import uuid
 import json
 import asyncio
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.agent.sub_agent import SubAgent
+from app.observability.events import emit_event
+
+
+ROLE_GENERAL = "general"
+ROLE_RESEARCHER = "researcher"
+ROLE_BUILDER = "builder"
+ROLE_REVIEWER = "reviewer"
+ROLE_VERIFIER = "verifier"
+
+
+def normalize_role(role: str) -> str:
+    allowed = {ROLE_GENERAL, ROLE_RESEARCHER, ROLE_BUILDER, ROLE_REVIEWER, ROLE_VERIFIER}
+    role_norm = (role or "").strip().lower()
+    if role_norm not in allowed:
+        allowed_str = ", ".join(sorted(allowed))
+        raise ValueError(f"Invalid role '{role}'. Allowed roles: {allowed_str}")
+    return role_norm
+
+
+def _emit_obs(
+    task_id: str,
+    role: str,
+    event_type: str,
+    status: str = "ok",
+    duration_ms: Optional[int] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Best-effort observability hook. Never break business flow."""
+    try:
+        emit_event(
+            task_id=task_id,
+            run_id=task_id,
+            actor="subagent",
+            role=role,
+            event_type=event_type,
+            status=status,
+            duration_ms=duration_ms,
+            payload=payload or {},
+        )
+    except Exception:
+        pass
 
 
 @dataclass
@@ -17,6 +59,8 @@ class AgentInstance:
     id: str
     name: str
     agent: SubAgent
+    role: str = ROLE_GENERAL
+    task_id: str = ""
     status: str = "idle"  # "idle", "running", "completed", "error"
     created_at: datetime = field(default_factory=datetime.now)
     task_history: List[Dict[str, Any]] = field(default_factory=list)
@@ -37,7 +81,15 @@ class SubAgentManager:
             cls._instance._lock = threading.RLock()
         return cls._instance
     
-    def create(self, name: str, description: str, task: str) -> str:
+    def create(
+        self,
+        name: str,
+        description: str,
+        task: str,
+        role: str,
+        instructions: str = "",
+        task_id: str = "",
+    ) -> Tuple[str, str]:
         """
         创建 SubAgent
         
@@ -47,19 +99,35 @@ class SubAgentManager:
             task: Agent 的专属任务说明
             
         Returns:
-            str: agent_id
+            Tuple[str, str]: (agent_id, resolved_role)
         """
         agent_id = str(uuid.uuid4())[:8]
-        agent = SubAgent(name, description, task)
+        resolved_role = normalize_role(role)
+        agent = SubAgent(
+            name,
+            description,
+            task,
+            role=resolved_role,
+            generated_instructions=instructions,
+        )
         
         with self._lock:
             self._pool[agent_id] = AgentInstance(
                 id=agent_id,
                 name=name,
                 agent=agent,
+                role=resolved_role,
+                task_id=task_id.strip(),
                 status="idle"
             )
-        return agent_id
+        obs_task_id = task_id.strip() or f"subagent:{agent_id}"
+        _emit_obs(
+            task_id=obs_task_id,
+            role=resolved_role,
+            event_type="subagent_created",
+            payload={"agent_id": agent_id, "name": name, "task": task},
+        )
+        return agent_id, resolved_role
     
     def get(self, agent_id: str) -> Optional[AgentInstance]:
         """获取指定 Agent 实例"""
@@ -73,6 +141,7 @@ class SubAgentManager:
                 {
                     "id": a.id,
                     "name": a.name,
+                    "role": a.role,
                     "status": a.status,
                     "created_at": a.created_at.isoformat(),
                     "task_count": len(a.task_history)
@@ -117,12 +186,21 @@ class SubAgentManager:
                 }
             instance.status = "running"
         start_time = datetime.now()
+        start_perf = time.time()
+        obs_task_id = instance.task_id or f"subagent:{agent_id}"
+        _emit_obs(
+            task_id=obs_task_id,
+            role=instance.role,
+            event_type="subagent_started",
+            payload={"agent_id": agent_id, "message": message},
+        )
         
         try:
             result = instance.agent.chat(message)
             result_text = "" if result is None else str(result)
             success = bool(result_text.strip())
             end_time = datetime.now()
+            duration_ms = int((time.time() - start_perf) * 1000)
             with self._lock:
                 instance.status = "completed" if success else "error"
                 task_record = {
@@ -135,6 +213,14 @@ class SubAgentManager:
                 instance.task_history.append(task_record)
 
             if not success:
+                _emit_obs(
+                    task_id=obs_task_id,
+                    role=instance.role,
+                    event_type="subagent_failed",
+                    status="error",
+                    duration_ms=duration_ms,
+                    payload={"agent_id": agent_id, "error": "SubAgent returned empty result"},
+                )
                 return {
                     "success": False,
                     "error": "SubAgent returned empty result",
@@ -145,6 +231,13 @@ class SubAgentManager:
                     "result": result_text,
                 }
 
+            _emit_obs(
+                task_id=obs_task_id,
+                role=instance.role,
+                event_type="subagent_finished",
+                duration_ms=duration_ms,
+                payload={"agent_id": agent_id},
+            )
             return {
                 "success": True,
                 "agent_id": agent_id,
@@ -156,6 +249,7 @@ class SubAgentManager:
             
         except Exception as e:
             end_time = datetime.now()
+            duration_ms = int((time.time() - start_perf) * 1000)
             with self._lock:
                 instance.status = "error"
                 task_record = {
@@ -166,6 +260,14 @@ class SubAgentManager:
                     "end_time": end_time.isoformat(),
                 }
                 instance.task_history.append(task_record)
+            _emit_obs(
+                task_id=obs_task_id,
+                role=instance.role,
+                event_type="subagent_failed",
+                status="error",
+                duration_ms=duration_ms,
+                payload={"agent_id": agent_id, "error": str(e)},
+            )
 
             return {
                 "success": False,
@@ -247,7 +349,14 @@ _manager = SubAgentManager()
     description="创建一个 SubAgent 来执行特定任务，返回 agent_id。当遇到需要专门处理的复杂任务时使用此工具。",
     stop_after_tool_call=False,
 )
-def create_sub_agent(name: str, description: str, task: str) -> str:
+def create_sub_agent(
+    name: str,
+    description: str,
+    task: str,
+    role: str,
+    instructions: str = "",
+    task_id: str = "",
+) -> str:
     """
     创建 SubAgent
     
@@ -255,11 +364,28 @@ def create_sub_agent(name: str, description: str, task: str) -> str:
         name: Agent 名称，用于标识
         description: Agent 描述，说明其职责
         task: Agent 的专属任务说明，告诉 Agent 应该专注什么
+        role: 角色，必填：researcher/builder/reviewer/verifier/general
+        instructions: 主Agent生成的附加指令，会与角色预设指令拼接
+        task_id: 可选的任务ID，用于观测与复盘归档
     
     Returns:
         str: agent_id，用于后续操作（如运行任务、销毁等）
     """
-    agent_id = _manager.create(name, description, task)
+    try:
+        agent_id, resolved_role = _manager.create(
+            name,
+            description,
+            task,
+            role=role,
+            instructions=instructions,
+            task_id=task_id,
+        )
+    except ValueError as e:
+        return json.dumps(
+            {"success": False, "error": str(e)},
+            ensure_ascii=False,
+            indent=2,
+        )
     return json.dumps(
         {
             "success": True,
@@ -267,6 +393,7 @@ def create_sub_agent(name: str, description: str, task: str) -> str:
             "name": name,
             "description": description,
             "task": task,
+            "role": resolved_role,
         },
         ensure_ascii=False,
         indent=2,
@@ -473,6 +600,7 @@ def get_sub_agent_info(agent_id: str) -> str:
         "success": True,
         "id": instance.id,
         "name": instance.name,
+        "role": instance.role,
         "status": instance.status,
         "created_at": instance.created_at.isoformat(),
         "task_history": instance.task_history

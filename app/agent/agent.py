@@ -19,9 +19,9 @@ load_dotenv()
 def get_model():
     """获取 Dashscope 模型实例"""
     return DashScope(
-        id=os.getenv("LLM_MODEL_ID"),
-        api_key=os.getenv("LLM_API_KEY"),
-        base_url=os.getenv("LLM_BASE_URL"),
+        id=os.getenv("CODEX_MODEL_ID"),
+        api_key=os.getenv("CODEX_API_KEY"),
+        base_url=os.getenv("CODEX_BASE_URL"),
         enable_thinking=True
     )
     
@@ -59,9 +59,9 @@ class BaseAgent:
 
         self.compression_manager = CompressionManager(
             model=DashScope(
-                id=os.getenv("LLM_MODEL_MINI_ID"),
-                api_key=os.getenv("LLM_API_KEY"),
-                base_url=os.getenv("LLM_BASE_URL"),
+                id=os.getenv("CODEX_MODEL_MINI_ID"),
+                api_key=os.getenv("CODEX_API_KEY"),
+                base_url=os.getenv("CODEX_BASE_URL"),
                 enable_thinking=True
             ),  # Use a faster model for compression
             compress_tool_results_limit=5,  # Compress after 2 tool calls (default: 3)

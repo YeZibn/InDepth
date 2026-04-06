@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from ddgs import DDGS
 from agno.tools import tool
+from app.observability.events import emit_event
 
 
 @dataclass
@@ -191,6 +192,29 @@ class SearchGuardManager:
 _guard = SearchGuardManager()
 
 
+def _emit_obs(
+    task_id: str,
+    event_type: str,
+    status: str = "ok",
+    duration_ms: Optional[int] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Best-effort observability hook. Never break business flow."""
+    try:
+        emit_event(
+            task_id=task_id,
+            run_id=task_id,
+            actor="subagent",
+            role="researcher",
+            event_type=event_type,
+            status=status,
+            duration_ms=duration_ms,
+            payload=payload or {},
+        )
+    except Exception:
+        pass
+
+
 def _format_guard_header(session: SearchSession) -> str:
     return (
         f"[search-guard] task_id={session.task_id} "
@@ -215,6 +239,20 @@ def init_search_guard(
     max_rounds: int = 3,
     max_seconds: int = 900,
 ) -> str:
+    """
+    Initialize a guarded search session with time basis, questions, and budgets.
+
+    Args:
+        task_id: Session identifier, usually the parent task id.
+        time_basis: Explicit time baseline (timezone + cutoff).
+        questions_json: JSON array of focused search questions.
+        stop_threshold: Human-readable stop criteria.
+        max_rounds: Max search rounds allowed for this session.
+        max_seconds: Max elapsed seconds allowed for this session.
+
+    Returns:
+        JSON string with initialized session metadata or error message.
+    """
     if not task_id.strip():
         return "Error: task_id is required."
     if not time_basis.strip():
@@ -243,6 +281,16 @@ def init_search_guard(
         max_seconds=max_seconds,
         stop_threshold=stop_threshold.strip(),
     )
+    _emit_obs(
+        task_id=session.task_id,
+        event_type="search_guard_initialized",
+        payload={
+            "max_rounds": session.max_rounds,
+            "max_seconds": session.max_seconds,
+            "question_count": len(session.questions),
+            "time_basis": session.time_basis,
+        },
+    )
     return json.dumps(
         {
             "success": True,
@@ -267,8 +315,25 @@ def init_search_guard(
     cache_results=False,
 )
 def guarded_ddg_search(task_id: str, query: str, num_results: int = 5) -> str:
+    """
+    Run DDG search under guard budget and session gate checks.
+
+    Args:
+        task_id: Existing guarded search session id.
+        query: Search query text.
+        num_results: Number of results to return (1-10).
+
+    Returns:
+        Guard header plus formatted search results, or error message.
+    """
     gate_error = _guard.check_gate(task_id)
     if gate_error:
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_stopped",
+            status="error",
+            payload={"reason": gate_error},
+        )
         return f"Error: {gate_error}"
     session = _guard.get_session(task_id)
     if not session:
@@ -279,6 +344,12 @@ def guarded_ddg_search(task_id: str, query: str, num_results: int = 5) -> str:
         return "Error: num_results must be between 1 and 10."
 
     try:
+        start_perf = time.time()
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_round_started",
+            payload={"engine": "ddg", "query": query, "num_results": num_results},
+        )
         results = []
         with DDGS() as ddgs:
             for i, r in enumerate(ddgs.text(query, max_results=num_results), 1):
@@ -300,11 +371,24 @@ def guarded_ddg_search(task_id: str, query: str, num_results: int = 5) -> str:
                 "returned_results": len(results),
             },
         )
+        duration_ms = int((time.time() - start_perf) * 1000)
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_round_finished",
+            duration_ms=duration_ms,
+            payload={"engine": "ddg", "query": query, "returned_results": len(results)},
+        )
         return _format_guard_header(session) + "\n\n" + body_text
     except Exception as e:
         _guard.add_log(
             task_id,
             {"type": "ddg_search_error", "timestamp": int(time.time()), "query": query, "error": str(e)},
+        )
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_round_finished",
+            status="error",
+            payload={"engine": "ddg", "query": query, "error": str(e)},
         )
         return f"Error searching DuckDuckGo: {str(e)}"
 
@@ -317,8 +401,25 @@ def guarded_ddg_search(task_id: str, query: str, num_results: int = 5) -> str:
     cache_results=False,
 )
 def guarded_url_search(task_id: str, url: str, max_length: int = 2000) -> str:
+    """
+    Fetch URL content under guard budget and session gate checks.
+
+    Args:
+        task_id: Existing guarded search session id.
+        url: Target URL to fetch.
+        max_length: Maximum response content length to keep.
+
+    Returns:
+        Guard header plus fetched content (possibly truncated), or error.
+    """
     gate_error = _guard.check_gate(task_id)
     if gate_error:
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_stopped",
+            status="error",
+            payload={"reason": gate_error},
+        )
         return f"Error: {gate_error}"
     session = _guard.get_session(task_id)
     if not session:
@@ -336,6 +437,12 @@ def guarded_url_search(task_id: str, url: str, max_length: int = 2000) -> str:
         )
     }
     try:
+        start_perf = time.time()
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_round_started",
+            payload={"engine": "url_fetch", "url": url, "max_length": max_length},
+        )
         with httpx.Client(timeout=15, follow_redirects=True, max_redirects=5) as client:
             response = client.get(url, headers=headers)
             if response.status_code != 200:
@@ -349,11 +456,24 @@ def guarded_url_search(task_id: str, url: str, max_length: int = 2000) -> str:
             task_id,
             {"type": "url_search", "timestamp": int(time.time()), "url": url, "status_code": response.status_code},
         )
+        duration_ms = int((time.time() - start_perf) * 1000)
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_round_finished",
+            duration_ms=duration_ms,
+            payload={"engine": "url_fetch", "url": url, "status_code": response.status_code},
+        )
         return _format_guard_header(session) + "\n\n" + text
     except Exception as e:
         _guard.add_log(
             task_id,
             {"type": "url_search_error", "timestamp": int(time.time()), "url": url, "error": str(e)},
+        )
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_round_finished",
+            status="error",
+            payload={"engine": "url_fetch", "url": url, "error": str(e)},
         )
         return f"Error fetching URL: {str(e)}"
 
@@ -373,6 +493,20 @@ def update_search_progress(
     dedup_count: int,
     note: str = "",
 ) -> str:
+    """
+    Update guarded search progress and optionally trigger threshold-based stop.
+
+    Args:
+        task_id: Existing guarded search session id.
+        answered_question_ids_json: JSON array of answered question indices.
+        stable_conclusion: Whether conclusion is considered stable.
+        new_evidence_count: Number of new evidence items found in this round.
+        dedup_count: Number of duplicated items removed.
+        note: Optional progress note.
+
+    Returns:
+        JSON string with updated progress and stop status.
+    """
     try:
         answered_question_ids = json.loads(answered_question_ids_json)
     except json.JSONDecodeError as e:
@@ -393,6 +527,12 @@ def update_search_progress(
         dedup_count=max(dedup_count, 0),
         note=note,
     )
+    if result.get("stopped"):
+        _emit_obs(
+            task_id=task_id,
+            event_type="search_stopped",
+            payload={"reason": result.get("stop_reason", ""), "answered": result.get("answered", "")},
+        )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -404,6 +544,15 @@ def update_search_progress(
     cache_results=False,
 )
 def get_search_guard_status(task_id: str) -> str:
+    """
+    Get current guarded search session status.
+
+    Args:
+        task_id: Existing guarded search session id.
+
+    Returns:
+        JSON string with budgets, elapsed usage, and stop metadata.
+    """
     return json.dumps(_guard.status(task_id), ensure_ascii=False, indent=2)
 
 
@@ -421,6 +570,19 @@ def request_search_budget_override(
     reason: str,
     expected_gain: str,
 ) -> str:
+    """
+    Extend guarded search budget with explicit reason and expected gain.
+
+    Args:
+        task_id: Existing guarded search session id.
+        extra_rounds: Additional allowed rounds.
+        extra_seconds: Additional allowed seconds.
+        reason: Why the current budget is insufficient.
+        expected_gain: What additional value the extra budget will bring.
+
+    Returns:
+        JSON string with updated budget or error details.
+    """
     if not reason.strip():
         return "Error: reason is required."
     if not expected_gain.strip():
@@ -446,6 +608,16 @@ def request_search_budget_override(
     cache_results=False,
 )
 def build_search_conclusion(task_id: str, claims_json: str) -> str:
+    """
+    Build structured final search conclusion with evidence-count validation.
+
+    Args:
+        task_id: Existing guarded search session id.
+        claims_json: JSON array of claim objects containing conclusion/evidence.
+
+    Returns:
+        Formatted markdown-style conclusion text or validation error message.
+    """
     session = _guard.get_session(task_id)
     if not session:
         return "Error: Search session not found."
@@ -498,6 +670,11 @@ def build_search_conclusion(task_id: str, claims_json: str) -> str:
     session.stopped = True
     if not session.stop_reason:
         session.stop_reason = "conclusion built"
+    _emit_obs(
+        task_id=task_id,
+        event_type="search_stopped",
+        payload={"reason": session.stop_reason, "claim_count": len(claims)},
+    )
     return "\n".join(lines)
 
 
