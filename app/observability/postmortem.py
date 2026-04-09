@@ -14,11 +14,21 @@ def _default_postmortem_dir() -> str:
     return path
 
 
+def _to_local_display(ts: Any) -> str:
+    if not isinstance(ts, str) or not ts.strip():
+        return "invalid-timestamp"
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.astimezone().isoformat()
+    except Exception:
+        return ts
+
+
 def _format_trace(trace_rows: List[Dict[str, Any]], max_rows: int = 40) -> str:
     lines = []
     for row in trace_rows[:max_rows]:
         lines.append(
-            f"{row['step']}. [{row['timestamp']}] {row['event_type']} "
+            f"{row['step']}. [{_to_local_display(row.get('timestamp'))}] {row['event_type']} "
             f"(actor={row['actor']}, role={row['role']}, status={row['status']})"
         )
     if len(trace_rows) > max_rows:
@@ -84,7 +94,7 @@ def generate_postmortem(
         ]
     )
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     out_dir = output_dir or _default_postmortem_dir()
     out_path = os.path.join(out_dir, f"postmortem_{task_id}_{ts}.md")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -96,4 +106,3 @@ def generate_postmortem(
         "output_path": out_path,
         "metrics": metrics,
     }
-

@@ -1,4 +1,3 @@
-from agno.skills import Skills, LocalSkills
 from app.tool.bash_tool import execute_bash_command
 from app.tool.search_tool.search_guard import get_guarded_search_tools
 from app.agent.agent import BaseAgent
@@ -23,7 +22,7 @@ if __name__ == "__main__":
         description="搜索智能体", 
         instructions="你是一个专业、友好、知识渊博的 AI 助手，擅长回答各种问题。",
         tools=[execute_bash_command, get_current_time, read_file, write_file] + get_guarded_search_tools() + get_sub_agent_tools() + TodoTools.get_tools(),
-        skills=Skills(loaders=[LocalSkills("app/skills")]),
+        skills=None,
         load_memory_knowledge=True
     )
 

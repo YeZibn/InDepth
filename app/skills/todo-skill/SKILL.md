@@ -77,3 +77,17 @@ See references for details:
 - [workflow.md](references/workflow.md)
 - [task_format.md](references/task_format.md)
 - [examples.md](references/examples.md)
+- [task_template.md](references/task_template.md)
+
+## Resources
+
+`todo-skill` follows the current unified skill layout:
+
+1. `SKILL.md` - Skill definition and usage guidance
+2. `references/` - Workflow docs, examples, and reusable templates
+
+Current reference files:
+- `workflow.md` - Execution loop and status transition rules
+- `task_format.md` - Canonical todo markdown file structure
+- `examples.md` - End-to-end usage examples
+- `task_template.md` - Reusable markdown task skeleton

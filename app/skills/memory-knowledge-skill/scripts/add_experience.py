@@ -19,11 +19,10 @@ from utils import (
 
 
 def load_template() -> str:
-    """Load experience template from bundled assets."""
+    """Load experience template from references."""
     template_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        'assets',
-        'templates',
+        'references',
         'experience_template.md'
     )
     with open(template_path, 'r', encoding='utf-8') as f:

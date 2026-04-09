@@ -1,38 +1,27 @@
-from agno.agent import Agent
-from agno.models.dashscope import DashScope
-from dotenv import load_dotenv
 import os
-from typing import Dict, List
-from agno.skills import Skills,LocalSkills
-from agno.db.sqlite import SqliteDb
-from agno.compression.manager import CompressionManager
+import uuid
+from typing import Any, Dict, List
 
+from dotenv import load_dotenv
+
+from app.core.memory import SQLiteMemoryStore
+from app.core.model import GenerationConfig
+from app.core.model.http_chat_provider import HttpChatModelProvider
+from app.core.runtime.agent_runtime import AgentRuntime
+from app.core.skills import LocalSkills, SkillLoader, Skills
+from app.core.tools.adapters import register_tool_functions
+from app.core.tools.registry import ToolRegistry
 from app.tool.bash_tool import execute_bash_command
 from app.tool.get_current_time_tool import get_current_time
-from app.tool.write_file_tool import write_file
 from app.tool.read_file_tool import read_file
 from app.tool.search_tool.search_guard import get_guarded_search_tools
+from app.tool.write_file_tool import write_file
 
 
-
-# 加载环境变量
 load_dotenv()
-
-# ======================
-# 模型配置（固定工具函数）
-# ======================
-def get_model():
-    """获取 Dashscope 模型实例"""
-    return DashScope(
-        id=os.getenv("CODEX_MODEL_ID"),
-        api_key=os.getenv("CODEX_API_KEY"),
-        base_url=os.getenv("CODEX_BASE_URL"),
-        enable_thinking=True
-    )
 
 
 def load_sub_agent_role_prompt_template(role: str) -> str:
-    """按角色加载 SubAgent 系统提示词模板"""
     prompt_path = os.path.join(
         os.path.dirname(__file__),
         "prompts",
@@ -43,7 +32,6 @@ def load_sub_agent_role_prompt_template(role: str) -> str:
         with open(prompt_path, "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
-        # 兜底，避免模板文件缺失导致系统不可用
         return (
             "你是一个子智能体（subagent）。\n"
             "你的角色是：{role}\n"
@@ -51,12 +39,8 @@ def load_sub_agent_role_prompt_template(role: str) -> str:
             "{extra_instructions}"
         )
 
-# ======================
-# 自定义 Agent 类（完整封装）
-# ======================
-class SubAgent:
-    """自定义智能体基类，可扩展工具、记忆、工作流"""
 
+class SubAgent:
     ROLE_GENERAL = "general"
     ROLE_RESEARCHER = "researcher"
     ROLE_BUILDER = "builder"
@@ -70,57 +54,60 @@ class SubAgent:
         task: str,
         role: str = ROLE_GENERAL,
         generated_instructions: str = "",
+        temperature: float | None = 0.2,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        stop: list[str] | str | None = None,
+        seed: int | None = None,
+        n: int | None = None,
+        max_tokens: int | None = None,
+        enable_thinking: bool | None = None,
+        model_options: dict | None = None,
     ):
-        # 先设置属性
         self.name = name
         self.description = description
         self.role = self._normalize_role(role)
-        self.db = SqliteDb(db_file=self._get_db_file_by_role())
         self.task = task
         self.generated_instructions = (generated_instructions or "").strip()
 
-        self.compression_manager = CompressionManager(
-            model=DashScope(
-                id=os.getenv("CODEX_MODEL_MINI_ID"),
-                api_key=os.getenv("CODEX_API_KEY"),
-                base_url=os.getenv("CODEX_BASE_URL"),
-                enable_thinking=True
-            ),  # Use a faster model for compression
-            compress_tool_results_limit=5,  # Compress after 2 tool calls (default: 3)
-            compress_tool_call_instructions="请精简工具调用结果，保留关键数据、结果和参数，删除冗余描述，保持逻辑完整，不丢失核心信息，用最简洁的语言概括。",
-        )
-
-        # 初始化模型
-        self.model = get_model()
-        # 初始化 agent 实例
-        self.agent = self._create_agent()
-
-
-    def _create_agent(self):
-        """创建并配置 Agno Agent"""
-        extra_instructions = (
+        system_prompt_template = load_sub_agent_role_prompt_template(self.role)
+        extra = (
             f"\n\n主Agent额外指令（必须遵守）：\n{self.generated_instructions}"
             if self.generated_instructions
             else ""
         )
-        system_prompt_template = load_sub_agent_role_prompt_template(self.role)
-        final_instructions = system_prompt_template.format(
+        final_prompt = system_prompt_template.format(
             role=self.role,
             task=self.task,
-            extra_instructions=extra_instructions,
+            extra_instructions=extra,
         )
-        return Agent(
-            model=self.model,
-            name=self.name,
-            description=self.description,
-            instructions=final_instructions,
-            markdown=True,
-            tools=self._build_tools(),
-            skills= Skills(loaders=[LocalSkills("app/skills/memory-knowledge-skill")]),
-            db=self.db,
-            add_history_to_context=True,
-            compress_tool_results=True,
-            compression_manager=self.compression_manager
+        self.skills_manager = Skills(loaders=[LocalSkills("app/skills/memory-knowledge-skill", validate=False)])
+        skill_prompt = self.skills_manager.get_system_prompt_snippet() or SkillLoader().build_skill_prompt(
+            ["app/skills/memory-knowledge-skill"]
+        )
+        memory_file = f"db/runtime_memory_subagent_{self.role}_{self.name}.db"
+        generation_config = GenerationConfig(
+            temperature=temperature,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            stop=stop,
+            seed=seed,
+            n=n,
+            max_tokens=max_tokens,
+            enable_thinking=enable_thinking,
+            provider_options=model_options or {},
+        )
+
+        self.runtime = AgentRuntime(
+            model_provider=HttpChatModelProvider(default_config=generation_config),
+            tool_registry=self._build_registry(),
+            system_prompt=final_prompt,
+            max_steps=8,
+            memory_store=SQLiteMemoryStore(db_file=memory_file),
+            skill_prompt=skill_prompt,
+            generation_config=generation_config,
         )
 
     def _normalize_role(self, role: str) -> str:
@@ -134,18 +121,8 @@ class SubAgent:
         }
         return role_norm if role_norm in allowed else self.ROLE_GENERAL
 
-    def _get_db_file_by_role(self) -> str:
-        role_to_db = {
-            self.ROLE_GENERAL: "db/history_subagent_general.db",
-            self.ROLE_RESEARCHER: "db/history_subagent_researcher.db",
-            self.ROLE_BUILDER: "db/history_subagent_builder.db",
-            self.ROLE_REVIEWER: "db/history_subagent_reviewer.db",
-            self.ROLE_VERIFIER: "db/history_subagent_verifier.db",
-        }
-        return role_to_db[self.role]
-
-    def _build_tools(self) -> List:
-        role_tools: Dict[str, List] = {
+    def _build_tools(self) -> List[Any]:
+        role_tools: Dict[str, List[Any]] = {
             self.ROLE_GENERAL: [execute_bash_command, get_current_time, read_file, write_file] + get_guarded_search_tools(),
             self.ROLE_RESEARCHER: [get_current_time, read_file] + get_guarded_search_tools(),
             self.ROLE_BUILDER: [execute_bash_command, get_current_time, read_file, write_file],
@@ -154,14 +131,17 @@ class SubAgent:
         }
         return role_tools.get(self.role, role_tools[self.ROLE_GENERAL])
 
+    def _build_registry(self) -> ToolRegistry:
+        registry = ToolRegistry()
+        all_tools = self._build_tools() + self.skills_manager.get_tools()
+        register_tool_functions(registry, all_tools)
+        return registry
+
     def chat(self, message: str) -> str:
-        """执行子任务并返回文本结果，供主 Agent 汇总。"""
-        run_output = self.agent.run(message, stream=False)
-        try:
-            return run_output.get_content_as_string()
-        except Exception:
-            content = getattr(run_output, "content", None)
-            return "" if content is None else str(content)
+        run_id = f"{self.name}_{uuid.uuid4().hex[:8]}"
+        task_id = f"subagent_{self.role}_{self.name}"
+        return self.runtime.run(user_input=message, task_id=task_id, run_id=run_id)
+
 
 if __name__ == "__main__":
     agent = SubAgent(name="sub_agent", description="子智能体", task="助手")

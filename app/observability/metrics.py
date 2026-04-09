@@ -1,10 +1,18 @@
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 
-def _parse_ts(ts: str) -> datetime:
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+def _parse_ts(ts: Any) -> datetime:
+    if not isinstance(ts, str) or not ts.strip():
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
 def aggregate_task_metrics(events: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -22,7 +30,7 @@ def aggregate_task_metrics(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "role_breakdown": {},
         }
 
-    ordered = sorted(events, key=lambda x: x.get("timestamp", ""))
+    ordered = sorted(events, key=lambda x: _parse_ts(x.get("timestamp")))
     start_dt = _parse_ts(ordered[0]["timestamp"])
     end_dt = _parse_ts(ordered[-1]["timestamp"])
     duration_seconds = int((end_dt - start_dt).total_seconds())
@@ -70,4 +78,3 @@ def aggregate_task_metrics(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "event_type_breakdown": dict(event_type_breakdown),
         "role_breakdown": dict(role_breakdown),
     }
-

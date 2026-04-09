@@ -1,0 +1,309 @@
+import json
+from typing import Any, Callable, Dict, List, Optional
+
+from app.core.model.base import GenerationConfig, ModelProvider
+from app.core.memory.base import MemoryStore
+from app.core.tools.registry import ToolRegistry
+from app.observability.events import emit_event
+
+
+RUNTIME_SYSTEM_PROMPT = """你是 InDepth 自研运行时中的助手。
+你可以回答问题，或调用工具。
+
+优先使用模型原生 tool-calling 能力来调用工具。
+当无需调用工具时，直接输出最终回答文本。
+"""
+
+
+class AgentRuntime:
+    def __init__(
+        self,
+        model_provider: ModelProvider,
+        tool_registry: ToolRegistry,
+        system_prompt: str = "",
+        max_steps: int = 8,
+        memory_store: Optional[MemoryStore] = None,
+        skill_prompt: str = "",
+        trace_steps: bool = True,
+        trace_printer: Optional[Callable[[str], None]] = None,
+        generation_config: Optional[GenerationConfig] = None,
+    ):
+        self.model_provider = model_provider
+        self.tool_registry = tool_registry
+        self.system_prompt = (system_prompt or "").strip()
+        self.max_steps = max_steps
+        self.memory_store = memory_store
+        self.skill_prompt = (skill_prompt or "").strip()
+        self.trace_steps = trace_steps
+        self.trace_printer = trace_printer or print
+        self.generation_config = generation_config
+
+    def run(self, user_input: str, task_id: str = "runtime_task", run_id: str = "runtime_run") -> str:
+        history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
+            {"role": "user", "content": user_input}
+        ]
+        tools = self.tool_registry.list_tool_schemas()
+        emit_event(task_id=task_id, run_id=run_id, actor="main", role="general", event_type="task_started")
+        self._trace(f"[runtime] task_started task_id={task_id} run_id={run_id}")
+        if self.memory_store:
+            self.memory_store.append_message(task_id, "user", user_input)
+
+        final_answer: Optional[str] = None
+        last_tool_failures: List[Dict[str, str]] = []
+        task_status = "ok"
+        stop_reason = "completed"
+        for step in range(1, self.max_steps + 1):
+            self._trace(f"[step {step}] model_request")
+            try:
+                model_output = self.model_provider.generate(
+                    messages=messages,
+                    tools=tools,
+                    config=self.generation_config,
+                )
+            except Exception as e:
+                final_answer = f"模型调用失败：{str(e)}"
+                task_status = "error"
+                stop_reason = "model_failed"
+                self._trace(f"[step {step}] model_failed error={str(e)}")
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="model_failed",
+                    status="error",
+                    payload={"error": str(e)},
+                )
+                break
+            content = model_output.content.strip()
+            finish_reason, raw_message = self._extract_finish_reason_and_message(model_output.raw)
+            tool_calls = raw_message.get("tool_calls", []) if isinstance(raw_message, dict) else []
+            reasoning_content = raw_message.get("reasoning_content", "") if isinstance(raw_message, dict) else ""
+            self._trace(
+                f"[step {step}] model_response finish_reason={finish_reason or 'none'} "
+                f"content={self._preview(content)} tool_calls={len(tool_calls)}"
+            )
+
+            if reasoning_content:
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="model_reasoning",
+                    payload={"chars": len(reasoning_content)},
+                )
+
+            if finish_reason == "tool_calls":
+                self._trace(f"[step {step}] execute_tool_calls count={len(tool_calls)}")
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": raw_message.get("content", "") or "",
+                        "tool_calls": tool_calls,
+                    }
+                )
+                if self.memory_store:
+                    self.memory_store.append_message(
+                        task_id,
+                        "assistant",
+                        json.dumps({"tool_calls": tool_calls}, ensure_ascii=False),
+                    )
+                last_tool_failures = self._handle_native_tool_calls(tool_calls, messages, task_id, run_id)
+                continue
+
+            if finish_reason == "stop":
+                messages.append({"role": "assistant", "content": content})
+                if self.memory_store:
+                    self.memory_store.append_message(task_id, "assistant", content)
+                if content:
+                    final_answer = content
+                    stop_reason = "stop"
+                elif last_tool_failures:
+                    details = "; ".join(
+                        [
+                            f"{item.get('tool', 'unknown')}: {item.get('error', '')}"
+                            for item in last_tool_failures[:3]
+                        ]
+                    )
+                    final_answer = f"任务未完成：工具调用失败（{details}）。"
+                    task_status = "error"
+                    stop_reason = "tool_failed_before_stop"
+                else:
+                    final_answer = "模型未返回有效内容，任务可能未完成。"
+                    task_status = "error"
+                    stop_reason = "empty_stop_content"
+                self._trace(f"[step {step}] completed finish_reason=stop final={self._preview(final_answer)}")
+                break
+
+            if finish_reason == "length":
+                final_answer = content or "模型达到输出长度上限，已停止。"
+                task_status = "error"
+                stop_reason = "length"
+                self._trace(f"[step {step}] stopped finish_reason=length")
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="model_stopped_length",
+                    status="error",
+                )
+                break
+
+            if finish_reason == "content_filter":
+                final_answer = "输出被内容策略拦截，已停止。"
+                task_status = "error"
+                stop_reason = "content_filter"
+                self._trace(f"[step {step}] stopped finish_reason=content_filter")
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="model_stopped_content_filter",
+                    status="error",
+                )
+                break
+
+            messages.append({"role": "assistant", "content": content})
+            if self.memory_store:
+                self.memory_store.append_message(task_id, "assistant", content)
+
+            if content:
+                final_answer = content
+                stop_reason = "fallback_content"
+                self._trace(f"[step {step}] completed finish_reason=fallback final={self._preview(final_answer)}")
+                break
+
+        if final_answer is None:
+            final_answer = "未在预算步数内收敛，建议缩小问题范围后重试。"
+            task_status = "error"
+            stop_reason = "max_steps_reached"
+            self._trace("[runtime] max_steps_reached")
+
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="task_finished",
+            status=task_status,
+            payload={
+                "stop_reason": stop_reason,
+                "has_tool_failures": bool(last_tool_failures),
+                "tool_failure_count": len(last_tool_failures),
+            },
+        )
+        self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
+        if self.memory_store:
+            self.memory_store.append_message(task_id, "assistant", final_answer)
+            self.memory_store.compact(task_id)
+        return final_answer
+
+    def _extract_finish_reason_and_message(self, raw: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+        if not isinstance(raw, dict):
+            return "", {}
+        choices = raw.get("choices", [])
+        if not isinstance(choices, list) or not choices:
+            return "", {}
+        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+        finish_reason = str(choice0.get("finish_reason", "") or "").strip()
+        message = choice0.get("message", {})
+        if not isinstance(message, dict):
+            message = {}
+        return finish_reason, message
+
+    def _build_system_prompt(self) -> str:
+        extra = f"\n\n{self.system_prompt}" if self.system_prompt else ""
+        skill_extra = f"\n\n{self.skill_prompt}" if self.skill_prompt else ""
+        return (
+            RUNTIME_SYSTEM_PROMPT
+            + extra
+            + skill_extra
+        )
+
+    def _handle_native_tool_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        task_id: str,
+        run_id: str,
+    ) -> List[Dict[str, str]]:
+        failures: List[Dict[str, str]] = []
+        for call in tool_calls:
+            call_id = str(call.get("id", ""))
+            fn = call.get("function", {}) if isinstance(call, dict) else {}
+            tool_name = str(fn.get("name", "")).strip()
+            raw_args = fn.get("arguments", "{}")
+            try:
+                tool_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                if not isinstance(tool_args, dict):
+                    tool_args = {}
+            except Exception:
+                tool_args = {}
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="tool_called",
+                payload={"tool": tool_name, "args": tool_args},
+            )
+            result = self.tool_registry.invoke(tool_name, tool_args)
+            self._trace(
+                f"[tool] name={tool_name} args={self._preview_json(tool_args)} "
+                f"success={result.get('success')} result={self._preview_json(result)}"
+            )
+            event_type = "tool_succeeded" if result.get("success") else "tool_failed"
+            if not result.get("success"):
+                failures.append(
+                    {
+                        "tool": tool_name,
+                        "error": str(result.get("error", "")).strip(),
+                    }
+                )
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type=event_type,
+                status="ok" if result.get("success") else "error",
+                payload={"tool": tool_name},
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(result, ensure_ascii=False),
+                }
+            )
+            if self.memory_store:
+                self.memory_store.append_message(
+                    task_id,
+                    "assistant",
+                    json.dumps({"tool": tool_name, "result": result}, ensure_ascii=False),
+                )
+        return failures
+
+    def _trace(self, msg: str) -> None:
+        if self.trace_steps:
+            try:
+                self.trace_printer(msg)
+            except Exception:
+                pass
+
+    def _preview(self, text: str, max_len: int = 120) -> str:
+        value = (text or "").replace("\n", " ").strip()
+        if len(value) <= max_len:
+            return value
+        return value[:max_len] + "..."
+
+    def _preview_json(self, obj: Any, max_len: int = 200) -> str:
+        try:
+            text = json.dumps(obj, ensure_ascii=False)
+        except Exception:
+            text = str(obj)
+        return self._preview(text, max_len=max_len)

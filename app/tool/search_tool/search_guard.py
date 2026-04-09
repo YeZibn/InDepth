@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from ddgs import DDGS
-from agno.tools import tool
+from app.core.tools import tool
 from app.observability.events import emit_event
 
 
@@ -13,6 +13,7 @@ from app.observability.events import emit_event
 class SearchSession:
     task_id: str
     time_basis: str
+    question_ids: List[str]
     questions: List[str]
     stop_threshold: str
     max_rounds: int
@@ -21,7 +22,7 @@ class SearchSession:
     rounds_used: int = 0
     stopped: bool = False
     stop_reason: str = ""
-    answered_question_ids: List[int] = field(default_factory=list)
+    answered_question_ids: List[str] = field(default_factory=list)
     stable_conclusion: bool = False
     logs: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -46,6 +47,7 @@ class SearchGuardManager:
         self,
         task_id: str,
         time_basis: str,
+        question_ids: List[str],
         questions: List[str],
         max_rounds: int,
         max_seconds: int,
@@ -54,6 +56,7 @@ class SearchGuardManager:
         session = SearchSession(
             task_id=task_id,
             time_basis=time_basis,
+            question_ids=question_ids,
             questions=questions,
             stop_threshold=stop_threshold,
             max_rounds=max_rounds,
@@ -97,7 +100,7 @@ class SearchGuardManager:
     def update_progress(
         self,
         task_id: str,
-        answered_question_ids: List[int],
+        answered_question_ids: List[str],
         stable_conclusion: bool,
         new_evidence_count: int,
         dedup_count: int,
@@ -107,7 +110,8 @@ class SearchGuardManager:
         if not session:
             return {"success": False, "error": "Session not found"}
 
-        valid_ids = [qid for qid in answered_question_ids if 1 <= qid <= len(session.questions)]
+        known_ids = set(session.question_ids)
+        valid_ids = [qid for qid in answered_question_ids if qid in known_ids]
         session.answered_question_ids = sorted(set(valid_ids))
         session.stable_conclusion = stable_conclusion
         session.logs.append(
@@ -174,6 +178,7 @@ class SearchGuardManager:
             "success": True,
             "task_id": session.task_id,
             "time_basis": session.time_basis,
+            "question_ids": session.question_ids,
             "questions": session.questions,
             "stop_threshold": session.stop_threshold,
             "rounds_used": session.rounds_used,
@@ -265,8 +270,24 @@ def init_search_guard(
         return "Error: questions_json must be a non-empty JSON array."
     if len(questions) > 8:
         return "Error: question list too long. Keep at most 8 focused questions."
-    normalized = [str(q).strip() for q in questions if str(q).strip()]
-    if len(normalized) < 1:
+    normalized_ids: List[str] = []
+    normalized_questions: List[str] = []
+    for idx, q in enumerate(questions, 1):
+        if isinstance(q, dict):
+            qid = str(q.get("id") or idx).strip()
+            qtext = str(q.get("question") or q.get("text") or "").strip()
+            if not qid or not qtext:
+                continue
+            normalized_ids.append(qid)
+            normalized_questions.append(qtext)
+            continue
+        qtext = str(q).strip()
+        if not qtext:
+            continue
+        normalized_ids.append(str(idx))
+        normalized_questions.append(qtext)
+
+    if len(normalized_questions) < 1:
         return "Error: at least one valid question is required."
     if max_rounds < 1 or max_rounds > 8:
         return "Error: max_rounds must be between 1 and 8."
@@ -276,7 +297,8 @@ def init_search_guard(
     session = _guard.init_session(
         task_id=task_id.strip(),
         time_basis=time_basis.strip(),
-        questions=normalized,
+        question_ids=normalized_ids,
+        questions=normalized_questions,
         max_rounds=max_rounds,
         max_seconds=max_seconds,
         stop_threshold=stop_threshold.strip(),
@@ -296,6 +318,7 @@ def init_search_guard(
             "success": True,
             "task_id": session.task_id,
             "time_basis": session.time_basis,
+            "question_ids": session.question_ids,
             "questions": session.questions,
             "max_rounds": session.max_rounds,
             "max_seconds": session.max_seconds,
@@ -513,12 +536,11 @@ def update_search_progress(
         return f"Error: answered_question_ids_json must be JSON array. {e}"
     if not isinstance(answered_question_ids, list):
         return "Error: answered_question_ids_json must be JSON array."
-    normalized_ids = []
+    normalized_ids: List[str] = []
     for x in answered_question_ids:
-        try:
-            normalized_ids.append(int(x))
-        except Exception:
-            continue
+        xid = str(x).strip()
+        if xid:
+            normalized_ids.append(xid)
     result = _guard.update_progress(
         task_id=task_id,
         answered_question_ids=normalized_ids,

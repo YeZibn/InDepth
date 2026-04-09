@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from agno.tools import tool
+from app.core.tools import tool
 from app.observability.events import emit_event
 
 
@@ -287,12 +287,89 @@ def _update_task_status(filepath: str, task_number: str, new_status: str) -> Tup
     return True, None
 
 
+def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
+    if not isinstance(subtasks, list) or not subtasks:
+        raise ValueError("subtasks must be a non-empty array")
+
+    normalized: List[Dict[str, Any]] = []
+    for idx, item in enumerate(subtasks, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"subtasks[{idx}] must be an object")
+
+        name = item.get("name") or item.get("title")
+        description = item.get("description") or item.get("desc")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"subtasks[{idx}] is missing required field: name/title")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError(f"subtasks[{idx}] is missing required field: description")
+
+        priority = item.get("priority", "medium")
+        if not isinstance(priority, str) or not priority.strip():
+            priority = "medium"
+
+        dependencies = item.get("dependencies", [])
+        if isinstance(dependencies, str):
+            if not dependencies.strip() or dependencies.strip().lower() == "none":
+                dependencies = []
+            else:
+                raise ValueError(f"subtasks[{idx}].dependencies must be an array")
+        if not isinstance(dependencies, list):
+            raise ValueError(f"subtasks[{idx}].dependencies must be an array")
+
+        normalized_deps: List[int] = []
+        for dep in dependencies:
+            dep_str = str(dep).strip()
+            if not dep_str.isdigit():
+                raise ValueError(f"subtasks[{idx}].dependencies contains invalid value: {dep}")
+            normalized_deps.append(int(dep_str))
+
+        normalized.append(
+            {
+                "name": name.strip(),
+                "description": description.strip(),
+                "priority": priority.strip().lower(),
+                "dependencies": normalized_deps,
+            }
+        )
+
+    return normalized
+
+
 @tool(
     name="create_task",
     description="Create a new task with structured subtasks and dependency metadata, subtasks is must be provided.",
     stop_after_tool_call=False,
     requires_confirmation=False,
     cache_results=False,
+    parameters={
+        "type": "object",
+        "properties": {
+            "task_name": {"type": "string"},
+            "context": {"type": "string"},
+            "subtasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "priority": {"type": "string"},
+                        "dependencies": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                        },
+                    },
+                    "required": ["description"],
+                    "anyOf": [
+                        {"required": ["name"]},
+                        {"required": ["title"]},
+                    ],
+                },
+            },
+        },
+        "required": ["task_name", "context", "subtasks"],
+    },
 )
 def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -308,6 +385,7 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
         Dict with success flag, filepath, task_id, and subtask_count.
     """
     try:
+        normalized_subtasks = _normalize_subtasks(subtasks)
         _ensure_todo_dir()
         task_id = _generate_task_id(task_name)
         filepath = os.path.join(_get_todo_dir(), f"{task_id}.md")
@@ -321,7 +399,7 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
 - **Priority**: high
 - **Created**: {now}
 - **Updated**: {now}
-- **Progress**: 0/{len(subtasks)} (0%)
+- **Progress**: 0/{len(normalized_subtasks)} (0%)
 """
         context_section = f"""
 ## Context
@@ -331,7 +409,7 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
 - Task completion criteria will be defined during execution
 """
         subtasks_section = "\n## Subtasks\n"
-        for i, subtask in enumerate(subtasks, 1):
+        for i, subtask in enumerate(normalized_subtasks, 1):
             deps = subtask.get("dependencies", [])
             deps_str = ", ".join([f"Task {d}" for d in deps])
             deps_line = f"- **Dependencies**: {deps_str}" if deps_str else "- **Dependencies**: None"
@@ -370,11 +448,16 @@ Task created automatically. Update as needed during execution.
             payload={
                 "tool": "create_task",
                 "task_name": task_name,
-                "subtask_count": len(subtasks),
+                "subtask_count": len(normalized_subtasks),
                 "filepath": filepath,
             },
         )
-        return {"success": True, "filepath": filepath, "task_id": task_id, "subtask_count": len(subtasks)}
+        return {
+            "success": True,
+            "filepath": filepath,
+            "task_id": task_id,
+            "subtask_count": len(normalized_subtasks),
+        }
     except Exception as e:
         _emit_obs(
             task_id="unknown",

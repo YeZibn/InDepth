@@ -5,9 +5,11 @@
 ```
 # Skill bundle (this directory)
 app/skills/memory-knowledge-skill/
-├── assets/templates/            # Source templates used by scripts
-│   ├── experience_template.md
-│   └── principle_template.md
+├── references/                 # Guides + source templates used by scripts
+│   ├── experience-guide.md     # Writing guide
+│   ├── principle-guide.md      # Writing guide
+│   ├── experience_template.md  # Source template (consumed by script)
+│   └── principle_template.md   # Source template (consumed by script)
 │
 # Runtime data (generated under project root)
 memory-knowledge/
@@ -90,8 +92,8 @@ The INDEX.md files are auto-generated and should not be manually edited. They pr
 ## File Templates
 
 Source templates are maintained in:
-- `app/skills/memory-knowledge-skill/assets/templates/experience_template.md`
-- `app/skills/memory-knowledge-skill/assets/templates/principle_template.md`
+- `app/skills/memory-knowledge-skill/references/experience_template.md`
+- `app/skills/memory-knowledge-skill/references/principle_template.md`
 
 ### Experience Template
 

@@ -1,11 +1,11 @@
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 import uuid
 
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def local_now_iso() -> str:
+    return datetime.now().astimezone().isoformat()
 
 
 @dataclass
@@ -36,7 +36,7 @@ class EventRecord:
             event_id=str(uuid.uuid4()),
             task_id=task_id,
             run_id=run_id,
-            timestamp=utc_now_iso(),
+            timestamp=local_now_iso(),
             actor=actor,
             role=role,
             event_type=event_type,
@@ -52,6 +52,7 @@ class EventRecord:
 EVENT_TYPES = [
     "task_started",
     "task_finished",
+    "unknown_event_type",
     "tool_called",
     "tool_succeeded",
     "tool_failed",
@@ -64,5 +65,8 @@ EVENT_TYPES = [
     "search_round_started",
     "search_round_finished",
     "search_stopped",
+    "model_failed",
+    "model_reasoning",
+    "model_stopped_length",
+    "model_stopped_content_filter",
 ]
-

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+.DS_Store
+*.swp
+
+.env
+
+db/*.db
+app/observability/data/events.jsonl
+work/observability-postmortems/*.md
