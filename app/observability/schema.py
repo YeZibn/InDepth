@@ -52,7 +52,11 @@ class EventRecord:
 EVENT_TYPES = [
     "task_started",
     "task_finished",
+    "task_judged",
     "unknown_event_type",
+    "verification_started",
+    "verification_passed",
+    "verification_failed",
     "tool_called",
     "tool_succeeded",
     "tool_failed",

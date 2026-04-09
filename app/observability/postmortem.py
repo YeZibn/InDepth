@@ -36,6 +36,56 @@ def _format_trace(trace_rows: List[Dict[str, Any]], max_rows: int = 40) -> str:
     return "\n".join(lines)
 
 
+def _find_latest_judgement(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    judged = [x for x in rows if x.get("event_type") == "task_judged"]
+    if not judged:
+        return {}
+    judged_sorted = sorted(judged, key=lambda x: str(x.get("timestamp", "")))
+    payload = judged_sorted[-1].get("payload", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _summarize_failure_payload(event_type: str, payload: Dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return "{}"
+    if event_type == "tool_failed":
+        return f"tool={payload.get('tool', 'unknown')}"
+    if event_type == "model_failed":
+        return f"error={str(payload.get('error', ''))[:180]}"
+    if event_type in {"verification_failed", "task_judged", "task_finished"}:
+        return (
+            f"final_status={payload.get('final_status')} "
+            f"failure_type={payload.get('failure_type')} "
+            f"verified_success={payload.get('verified_success')}"
+        )
+    compact = {k: payload.get(k) for k in list(payload.keys())[:3]}
+    return str(compact)
+
+
+def _format_judgement_block(judgement: Dict[str, Any]) -> List[str]:
+    if not judgement:
+        return ["- 本次未生成 task_judged 评估结果。"]
+    lines = [
+        f"- 自报成功: {judgement.get('self_reported_success')}",
+        f"- 验证成功: {judgement.get('verified_success')}",
+        f"- 最终判定: {judgement.get('final_status')}",
+        f"- 失败类型: {judgement.get('failure_type')}",
+        f"- 过度宣称(overclaim): {judgement.get('overclaim')}",
+        f"- 置信度: {judgement.get('confidence')}",
+    ]
+    breakdown = judgement.get("verifier_breakdown", [])
+    if isinstance(breakdown, list) and breakdown:
+        lines.append("- 分项评估:")
+        for idx, item in enumerate(breakdown, 1):
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"  {idx}. {item.get('verifier_name')} | passed={item.get('passed')} | "
+                f"hard={item.get('hard')} | score={item.get('score')} | reason={item.get('reason')}"
+            )
+    return lines
+
+
 def generate_postmortem(
     task_id: str,
     run_id: Optional[str] = None,
@@ -50,6 +100,7 @@ def generate_postmortem(
 
     metrics = aggregate_task_metrics(rows)
     trace_rows = build_trace(rows)
+    judgement = _find_latest_judgement(rows)
 
     failed = [e for e in rows if e.get("status") == "error"]
     top_failures = failed[:5]
@@ -69,24 +120,29 @@ def generate_postmortem(
         f"- 子代理启动次数: {metrics['subagent_started_count']}",
         f"- 子代理失败次数: {metrics['subagent_failed_count']}",
         "",
-        "## 3. 关键时间线",
+        "## 3. 评估结论",
+        *_format_judgement_block(judgement),
+        "",
+        "## 4. 关键时间线",
         _format_trace(trace_rows),
         "",
-        "## 4. 失败与修复线索",
+        "## 5. 失败与修复线索",
     ]
 
     if not top_failures:
         lines.append("- 本次未记录到 error 级事件。")
     else:
         for idx, e in enumerate(top_failures, 1):
+            payload = e.get("payload", {}) if isinstance(e.get("payload", {}), dict) else {}
             lines.append(
-                f"{idx}. {e.get('event_type')} | actor={e.get('actor')} | role={e.get('role')} | payload={e.get('payload', {})}"
+                f"{idx}. [{e.get('event_type')}] actor={e.get('actor')} role={e.get('role')} "
+                f"summary={_summarize_failure_payload(str(e.get('event_type', '')), payload)}"
             )
 
     lines.extend(
         [
             "",
-            "## 5. 改进建议（Top 3）",
+            "## 6. 改进建议（Top 3）",
             "1. 对失败率最高的 event_type 添加参数自检与自动重试。",
             "2. 将高频失败路径前置门禁（输入校验/依赖检查/预算检查）。",
             "3. 为关键链路增加更细粒度埋点，缩短问题定位时间。",

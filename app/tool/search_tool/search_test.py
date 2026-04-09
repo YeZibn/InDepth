@@ -18,9 +18,9 @@ if __name__ == "__main__":
 
     # 创建智能体
     search_agent = BaseAgent(
-        name="search_agent", 
-        description="搜索智能体", 
-        instructions="你是一个专业、友好、知识渊博的 AI 助手，擅长回答各种问题。",
+        name="main_agent", 
+        description="主智能体", 
+        instructions="你是一个主智能体，可以帮助用户完成任务，包括搜索、任务分配、子智能体调用等。",
         tools=[execute_bash_command, get_current_time, read_file, write_file] + get_guarded_search_tools() + get_sub_agent_tools() + TodoTools.get_tools(),
         skills=None,
         load_memory_knowledge=True

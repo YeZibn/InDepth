@@ -1,13 +1,15 @@
 import json
 from typing import Any, Callable, Dict, List, Optional
 
+from app.eval.orchestrator import EvalOrchestrator
+from app.eval.schema import RunOutcome, TaskSpec
 from app.core.model.base import GenerationConfig, ModelProvider
 from app.core.memory.base import MemoryStore
 from app.core.tools.registry import ToolRegistry
 from app.observability.events import emit_event
 
 
-RUNTIME_SYSTEM_PROMPT = """你是 InDepth 自研运行时中的助手。
+RUNTIME_SYSTEM_PROMPT = """你是 InDepth 智能体运行时中的助手。
 你可以回答问题，或调用工具。
 
 优先使用模型原生 tool-calling 能力来调用工具。
@@ -27,6 +29,8 @@ class AgentRuntime:
         trace_steps: bool = True,
         trace_printer: Optional[Callable[[str], None]] = None,
         generation_config: Optional[GenerationConfig] = None,
+        eval_orchestrator: Optional[EvalOrchestrator] = None,
+        enable_llm_judge: bool = False,
     ):
         self.model_provider = model_provider
         self.tool_registry = tool_registry
@@ -37,8 +41,19 @@ class AgentRuntime:
         self.trace_steps = trace_steps
         self.trace_printer = trace_printer or print
         self.generation_config = generation_config
+        self.eval_orchestrator = eval_orchestrator or EvalOrchestrator(
+            enable_llm_judge=enable_llm_judge,
+            llm_judge_provider=model_provider,
+            llm_judge_config=generation_config,
+        )
 
-    def run(self, user_input: str, task_id: str = "runtime_task", run_id: str = "runtime_run") -> str:
+    def run(
+        self,
+        user_input: str,
+        task_id: str = "runtime_task",
+        run_id: str = "runtime_run",
+        task_spec: Optional[Dict[str, Any]] = None,
+    ) -> str:
         history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
             {"role": "user", "content": user_input}
@@ -183,17 +198,75 @@ class AgentRuntime:
             stop_reason = "max_steps_reached"
             self._trace("[runtime] max_steps_reached")
 
+        judgement_payload: Dict[str, Any] = {}
+        task_finished_status = task_status
+        try:
+            spec = TaskSpec.from_dict(task_spec)
+            run_outcome = RunOutcome(
+                task_id=task_id,
+                run_id=run_id,
+                user_input=user_input,
+                final_answer=final_answer,
+                stop_reason=stop_reason,
+                tool_failures=last_tool_failures[:],
+                runtime_status=task_status,
+            )
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="verification_started",
+                payload={"stop_reason": stop_reason},
+            )
+            judgement = self.eval_orchestrator.evaluate(task_spec=spec, run_outcome=run_outcome)
+            judgement_payload = judgement.to_dict()
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="verification_passed" if judgement.verified_success else "verification_failed",
+                status="ok" if judgement.verified_success else "error",
+                payload={
+                    "final_status": judgement.final_status,
+                    "failure_type": judgement.failure_type,
+                    "confidence": judgement.confidence,
+                },
+            )
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="task_judged",
+                status="ok" if judgement.verified_success else "error",
+                payload=judgement_payload,
+            )
+            task_finished_status = "ok" if judgement.verified_success else "error"
+        except Exception as e:
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="verification_failed",
+                status="error",
+                payload={"error": str(e)},
+            )
+
         emit_event(
             task_id=task_id,
             run_id=run_id,
             actor="main",
             role="general",
             event_type="task_finished",
-            status=task_status,
+            status=task_finished_status,
             payload={
                 "stop_reason": stop_reason,
                 "has_tool_failures": bool(last_tool_failures),
                 "tool_failure_count": len(last_tool_failures),
+                **judgement_payload,
             },
         )
         self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")

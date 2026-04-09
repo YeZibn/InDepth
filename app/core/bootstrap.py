@@ -20,6 +20,7 @@ def create_runtime(
     max_tokens: int | None = None,
     enable_thinking: bool | None = None,
     model_options: dict | None = None,
+    enable_llm_judge: bool = True,
 ) -> AgentRuntime:
     generation_config = GenerationConfig(
         temperature=temperature,
@@ -44,4 +45,5 @@ def create_runtime(
         memory_store=SQLiteMemoryStore(db_file="db/runtime_memory_cli.db"),
         skill_prompt=skill_prompt,
         generation_config=generation_config,
+        enable_llm_judge=enable_llm_judge,
     )
