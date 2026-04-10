@@ -7,6 +7,66 @@ from app.core.tools.registry import ToolRegistry
 
 
 class RuntimeEvalIntegrationTests(unittest.TestCase):
+    def test_runtime_does_not_inject_system_memory_context_by_default(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "任务正常完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "任务正常完成"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+
+        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
+            mock_store = mock_store_cls.return_value
+            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
+            result = runtime.run("请执行任务", task_id="runtime_mem_task", run_id="runtime_mem_run")
+
+        self.assertEqual(result, "任务正常完成")
+        self.assertTrue(provider.requests)
+        first_messages = provider.requests[0]["messages"]
+        memory_msgs = [
+            m for m in first_messages
+            if m.get("role") == "system" and "系统记忆召回" in str(m.get("content", ""))
+        ]
+        self.assertEqual(len(memory_msgs), 0)
+        self.assertFalse(mock_store.search_cards.called)
+
+    def test_runtime_forces_task_end_memory_finalization(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "发布检查已完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "发布检查已完成"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+
+        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
+            mock_store = mock_store_cls.return_value
+            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
+            result = runtime.run("请做上线前发布检查", task_id="runtime_pre_release_task", run_id="runtime_pre_release_run")
+
+        self.assertEqual(result, "发布检查已完成")
+        self.assertTrue(mock_store.upsert_card.called)
+        upsert_card = mock_store.upsert_card.call_args.args[0]
+        self.assertEqual(upsert_card.get("memory_type"), "experience")
+        self.assertEqual(upsert_card.get("scenario", {}).get("stage"), "postmortem")
+
     def test_runtime_emits_verification_events_and_judgement_payload(self):
         provider = MockModelProvider(
             scripted_outputs=[

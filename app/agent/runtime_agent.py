@@ -7,7 +7,7 @@ load_dotenv()
 
 
 if __name__ == "__main__":
-    runtime = create_runtime(system_prompt="遵守 InDepth 协议，优先结构化回答。", max_steps=10)
+    runtime = create_runtime(system_prompt="遵守 InDepth 协议，优先结构化回答。", max_steps=50)
     print("欢迎使用 InDepth Runtime（自研内核 MVP）！输入 'exit' 退出。\n")
 
     while True:

@@ -77,7 +77,10 @@ class SearchGuardManager:
         if session.rounds_used >= session.max_rounds:
             session.stopped = True
             session.stop_reason = "round budget exhausted"
-            return "Search blocked: round budget exhausted."
+            return (
+                "Search blocked: round budget exhausted. "
+                "Call request_search_budget_override with explicit reason and expected_gain to continue."
+            )
         if session.elapsed_seconds >= session.max_seconds:
             session.stopped = True
             session.stop_reason = "time budget exhausted"

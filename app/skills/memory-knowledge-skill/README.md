@@ -1,59 +1,38 @@
-# Memory Knowledge Skill
+# Memory Knowledge Skill (V2)
 
-This skill captures and retrieves long-term engineering memory as Markdown files.
+This skill now uses **structured system memory cards** as the only source of truth.
 
-## What It Stores
-
-1. `experience` - practice-based lessons learned
-2. `principle` - reusable rules and standards
-
-## Main Entry
-
-Use the unified CLI:
+## Core Commands
 
 ```bash
-python app/skills/memory-knowledge-skill/scripts/memory_cli.py --help
+# Show help
+python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py --help
+
+# Runtime capture (tool call inside runtime)
+# capture_runtime_memory_candidate(task_id, run_id, title, observation, ...)
+
+# Upsert one memory card from JSON
+python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
+  upsert-json app/skills/memory-knowledge-skill/references/memory_card.example.json
+
+# Search memory cards
+python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
+  search "idempotency retry" --stage pull_request --limit 5
+
+# List due-review cards
+python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
+  due --days 7 --limit 50
 ```
 
-### Examples
+## Storage
 
-```bash
-# Add experience
-python app/skills/memory-knowledge-skill/scripts/memory_cli.py add experience \
-  "Async DB timeout root cause" \
-  --category debugging \
-  --tags "python,async,postgres" \
-  --content "Connection pool was exhausted under burst traffic."
+- SQLite DB: `db/system_memory.db`
+- Main table: `memory_card`
+- Event tables: `memory_trigger_event`, `memory_retrieval_event`, `memory_decision_event`
 
-# Add principle
-python app/skills/memory-knowledge-skill/scripts/memory_cli.py add principle \
-  "Validate external input at boundaries" \
-  --category security \
-  --priority high \
-  --content "All external input must be validated before processing."
+## Notes
 
-# Search
-python app/skills/memory-knowledge-skill/scripts/memory_cli.py search async --type experience
-
-# List
-python app/skills/memory-knowledge-skill/scripts/memory_cli.py list --type principle --sort category
-```
-
-## Legacy Scripts (Still Supported)
-
-- `add_experience.py`
-- `add_principle.py`
-- `search_memory.py`
-- `list_memories.py`
-
-## Data Layout
-
-Runtime files are written to:
-
-- `memory-knowledge/experience/*.md`
-- `memory-knowledge/principle/*.md`
-
-Index files are auto-generated:
-
-- `memory-knowledge/experience/INDEX.md`
-- `memory-knowledge/principle/INDEX.md`
+- Legacy markdown-based memory workflow has been removed.
+- Runtime does not inject memory at task start.
+- Runtime forces memory finalization at task end.
+- Runtime candidate capture is part of this single skill (`capture_runtime_memory_candidate`).

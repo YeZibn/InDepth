@@ -8,6 +8,7 @@ class MockModelProvider:
 
     def __init__(self, scripted_outputs: List[Union[str, Dict[str, Any]]]):
         self._outputs = scripted_outputs[:]
+        self.requests: List[Dict[str, Any]] = []
 
     def generate(
         self,
@@ -15,6 +16,12 @@ class MockModelProvider:
         tools: List[Dict[str, Any]],
         config: GenerationConfig | None = None,
     ) -> ModelOutput:
+        self.requests.append(
+            {
+                "messages": [dict(m) for m in messages],
+                "tools": [dict(t) for t in tools],
+            }
+        )
         if not self._outputs:
             return ModelOutput(content='{"type":"final","content":"No scripted output left."}')
         item = self._outputs.pop(0)

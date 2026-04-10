@@ -8,7 +8,7 @@ from app.core.tools.adapters import build_default_registry
 
 def create_runtime(
     system_prompt: str = "",
-    max_steps: int = 8,
+    max_steps: int = 50,
     skill_paths: list[str] | None = None,
     temperature: float | None = 0.2,
     top_p: float | None = None,

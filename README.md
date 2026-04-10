@@ -1,7 +1,7 @@
 # InDepth 技术架构说明
 
 InDepth 是一个以“可执行、可观测、可验证”为核心目标的本地 Agent Runtime 项目。  
-它不是单纯的对话壳，而是一个包含 **运行时调度、工具调用、子代理协同、结果验证、观测复盘、记忆压缩** 的最小可用闭环。
+它不是单纯的对话壳，而是一个包含 **运行时调度、工具调用、子代理协同、结果验证、观测复盘、系统记忆闭环** 的最小可用闭环。
 
 ---
 
@@ -23,7 +23,21 @@ InDepth 是一个以“可执行、可观测、可验证”为核心目标的本
 
 ---
 
-## 2. 总体架构
+## 2. 快速开始
+
+### 2.1 三步跑通
+
+1. 安装依赖
+   - `pip install -r requirements.txt`
+2. 配置模型环境变量
+   - `LLM_MODEL_ID` / `LLM_MODEL_MINI_ID`
+   - `LLM_API_KEY` / `LLM_BASE_URL`
+3. 启动 Runtime CLI
+   - `python app/agent/runtime_agent.py`
+
+---
+
+## 3. 分层架构总览
 
 ```mermaid
 flowchart LR
@@ -31,7 +45,7 @@ flowchart LR
     A --> R["AgentRuntime"]
     R --> M["ModelProvider<br/>HttpChatModelProvider"]
     R --> T["ToolRegistry"]
-    R --> MEM["SQLiteMemoryStore"]
+    R --> MEM["SQLiteMemoryStore<br/>+ SystemMemoryStore"]
     R --> E["EvalOrchestrator"]
     R --> O["Observability Events"]
 
@@ -47,18 +61,41 @@ flowchart LR
     O --> PM["postmortem markdown"]
 ```
 
-### 分层说明
+InDepth 采用“自上而下约束、自下而上反馈”的分层架构，不依赖外部框架叙事，重点是可执行闭环的原创工程组织方式。
 
-- 接入层：`app/agent/*.py`（CLI 与 Agent 封装）
-- 运行时层：`app/core/runtime`（步进执行、tool_calls、收敛策略）
-- 能力层：`app/tool` + `app/core/skills`（工具与技能）
-- 评估层：`app/eval`（硬规则 + 软评分）
-- 观测层：`app/observability`（事件、指标、复盘）
-- 状态层：`app/core/memory` + `db/`（会话记忆）
+### L1 协议与目标层（Why）
+
+- 位置：`InDepth.md`
+- 职责：定义任务启动、时效检索、拆解边界、收敛标准、风险门禁。
+- 作用：先统一行为协议，再进入执行，避免“模型即流程”的不稳定性。
+
+### L2 编排与运行时层（How）
+
+- 位置：`app/agent/*.py` + `app/core/runtime/*`
+- 职责：管理多步推理循环、tool-calling、停止原因、失败收敛、执行追踪。
+- 核心对象：`AgentRuntime`，负责把对话转成可控执行流。
+
+### L3 能力执行层（Do）
+
+- 位置：`app/core/tools/*` + `app/tool/*` + `app/core/skills/*`
+- 职责：提供可组合能力（工具、子代理、技能、todo 工作流）。
+- 特点：能力可插拔，调用可审计，权限可按角色收敛。
+
+### L4 评估与观测层（Check）
+
+- 位置：`app/eval/*` + `app/observability/*`
+- 职责：区分“回答完成”和“任务完成”，并沉淀完整执行证据。
+- 机制：Deterministic Verifier + VerifierAgent + 事件/指标/时间线/复盘联动。
+
+### L5 记忆与资产层（Learn）
+
+- 位置：`app/core/memory/*` + `db/*` + `app/skills/memory-knowledge-skill/references/*`
+- 职责：管理会话记忆、系统记忆、经验卡沉淀与复用。
+- 闭环：运行中捕获候选，任务结束强制固化，形成可检索经验资产。
 
 ---
 
-## 3. 端到端执行链路
+## 4. 端到端执行链路
 
 一次标准调用（`runtime.run(...)`）的时序如下：
 
@@ -78,14 +115,17 @@ flowchart LR
 5. 记录观测事件并触发复盘  
    - `emit_event(...)` 写入 JSONL
    - `task_finished` 时自动生成 postmortem
-6. 记忆压缩  
-   - 写入消息后触发 `compact(...)`，保留近期消息并归档摘要
+6. 记忆闭环  
+   - 会话记忆压缩：写入消息后触发 `compact(...)`，保留近期消息并归档摘要  
+   - 运行前默认不做系统记忆自动注入（当前实现）  
+   - 运行中候选捕获：由 `memory-knowledge-skill` 通过 `capture_runtime_memory_candidate` 触发  
+   - 任务结束强制沉淀：框架自动写入 `memory_card`
 
 ---
 
-## 4. 核心模块拆解
+## 5. 核心模块拆解
 
-### 4.1 Runtime：`app/core/runtime/agent_runtime.py`
+### 5.1 Runtime：`app/core/runtime/agent_runtime.py`
 
 职责：
 
@@ -102,7 +142,7 @@ flowchart LR
 
 ---
 
-### 4.2 Model 适配：`app/core/model/*`
+### 5.2 Model 适配：`app/core/model/*`
 
 - 协议定义：`ModelProvider`（`generate(messages, tools, config)`）
 - 生产实现：`HttpChatModelProvider`
@@ -117,7 +157,7 @@ flowchart LR
 
 ---
 
-### 4.3 Tool 框架：`app/core/tools/*`
+### 5.3 Tool 框架：`app/core/tools/*`
 
 - 声明：`@tool(...)`（`decorator.py`）
 - 注册：`ToolRegistry.register`
@@ -134,10 +174,11 @@ flowchart LR
 - 搜索门禁工具（Search Guard）
 - SubAgent 管理工具
 - Todo 工作流工具
+- 运行中候选记忆捕获工具（`capture_runtime_memory_candidate`）
 
 ---
 
-### 4.4 SubAgent 协同：`app/tool/sub_agent_tool/*` + `app/agent/sub_agent.py`
+### 5.4 SubAgent 协同：`app/tool/sub_agent_tool/*` + `app/agent/sub_agent.py`
 
 ### 角色模型
 
@@ -151,6 +192,17 @@ flowchart LR
 
 每个角色有不同工具权限组合（例如 reviewer 默认不提供写文件能力）。
 
+角色工具重点：
+
+- `researcher/reviewer/verifier` 默认具备 `search_memory_cards`（只读）
+- `builder/general` 默认不挂载 `search_memory_cards`（降低噪音）
+
+创建门禁（已实现）：
+
+- `role=reviewer/verifier` 时，创建必须提供：
+  - `acceptance_criteria`
+  - `output_format`
+
 ### 管理机制
 
 - `SubAgentManager` 单例维护 Agent 池
@@ -159,7 +211,7 @@ flowchart LR
 
 ---
 
-### 4.5 Todo 工作流：`app/tool/todo_tool/todo_tool.py`
+### 5.5 Todo 工作流：`app/tool/todo_tool/todo_tool.py`
 
 职责：
 
@@ -175,7 +227,7 @@ flowchart LR
 
 ---
 
-### 4.6 搜索门禁：`app/tool/search_tool/search_guard.py`
+### 5.6 搜索门禁：`app/tool/search_tool/search_guard.py`
 
 目标：把“时效检索”从开放式搜索改为预算受控搜索。
 
@@ -185,42 +237,46 @@ flowchart LR
 - 强制时间基准、问题清单、轮次预算、时长预算、停止阈值
 - 每轮更新进度与证据覆盖率
 - 达到阈值后自动停止
+- 支持预算扩容（`request_search_budget_override`）
 
 这部分与 `InDepth.md` 中的“时效信息协议”一一对应。
 
 ---
 
-### 4.7 Skills 体系：`app/core/skills/*`
+### 5.7 Skills 体系：`app/core/skills/*`
 
-项目内存在两套技能接入方式：
+项目内技能接入分为两条原创链路：
 
-1. 轻量 Skill Prompt（`app/core/skills/loader.py`）  
+1. 轻量注入链路（`app/core/skills/loader.py`）  
    - 读取 `SKILL.md`，提取标题与摘要注入 system prompt
-2. Agno-style Skills Manager（`app/core/skills/manager.py`）  
-   - 动态暴露工具：`get_skill_instructions / get_skill_reference / get_skill_script`
-   - 允许按需读取 references/scripts，避免一次性注入全部内容
+2. 动态调度链路（`app/core/skills/manager.py`）  
+   - 暴露技能读取接口：`get_skill_instructions / get_skill_reference / get_skill_script`
+   - 按需加载 references/scripts，避免一次性注入造成上下文膨胀
 
 ---
 
-### 4.8 记忆层：`app/core/memory/sqlite_memory_store.py`
+### 5.8 记忆层：`app/core/memory/*`
 
-存储结构：
+记忆层采用双轨结构：
 
-- `messages`：完整消息序列
-- `summaries`：历史摘要
+1. 会话记忆（`sqlite_memory_store.py`）  
+   - `messages`：完整消息序列  
+   - `summaries`：历史摘要  
+   - 超过阈值后仅保留最近 `keep_recent` 条消息
 
-压缩策略：
+2. 系统记忆（`system_memory_store.py`）  
+   - `memory_card`：结构化任务/经验卡  
+   - Runtime 默认不做模型请求前自动注入  
+   - 运行中可捕获候选记忆（draft，来自 `memory-knowledge-skill`）  
+   - 任务结束由框架强制沉淀最终任务记忆
 
-- 超过阈值后，仅保留最近 `keep_recent` 条消息
-- 旧消息合并为摘要写入 `summaries`
-
-兼容策略：
+兼容策略（会话记忆）：
 
 - 历史 `tool` 角色消息迁移为 `assistant` 文本块，避免下游模型 payload 不兼容
 
 ---
 
-### 4.9 评估层：`app/eval/*`
+### 5.9 评估层：`app/eval/*`
 
 ### 数据结构
 
@@ -240,7 +296,7 @@ flowchart LR
 
 ---
 
-### 4.10 可观测性：`app/observability/*`
+### 5.10 可观测性：`app/observability/*`
 
 核心闭环：
 
@@ -253,7 +309,8 @@ flowchart LR
 落盘位置：
 
 - 事件：`app/observability/data/events.jsonl`
-- 复盘：`work/observability-postmortems/postmortem_*.md`
+- 复盘：`observability-evals/<task_id>__<run_id>/postmortem_*.md`
+- 系统记忆：`db/system_memory.db`
 
 自动化机制：
 
@@ -261,7 +318,7 @@ flowchart LR
 
 ---
 
-## 5. 目录与数据落点
+## 6. 目录与数据落点
 
 ```text
 app/
@@ -275,36 +332,42 @@ app/
   tool/                  # 具体工具实现（todo/search/subagent/file/bash）
   eval/                  # 任务评估体系
   observability/         # 观测、指标、复盘
-db/                      # runtime memory sqlite 文件
+  skills/
+    memory-knowledge-skill/
+      references/        # memory_card 模板、schema、指标 SQL
+db/                      # runtime + system memory sqlite 文件
 todo/                    # todo markdown 任务文件
-work/                    # 交付物与观测复盘输出
+work/                    # 业务交付物输出
+observability-evals/     # 评估/复盘输出（按任务子目录隔离）
 InDepth.md               # 运行协议（行为约束）
 ```
 
 ---
 
-## 6. 配置与启动
+## 7. 配置与启动
 
-### 6.1 安装
+### 7.1 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 6.2 环境变量
+### 7.2 环境变量
 
-运行模型配置读取顺序（优先 `CODEX_*`，后备 `LLM_*`）：
+运行模型配置使用 `LLM_*`：
 
-- `CODEX_MODEL_ID` / `LLM_MODEL_ID`
-- `CODEX_MODEL_MINI_ID` / `LLM_MODEL_MINI_ID`（缺省回退主模型）
-- `CODEX_API_KEY` / `LLM_API_KEY`
-- `CODEX_BASE_URL` / `LLM_BASE_URL`
+- `LLM_MODEL_ID`
+- `LLM_MODEL_MINI_ID`（缺省回退主模型）
+- `LLM_API_KEY`
+- `LLM_BASE_URL`
 
-### 6.3 运行
+### 7.3 运行
 
 ```bash
 python app/agent/runtime_agent.py
 ```
+
+说明：CLI Runtime 默认 `max_steps=20`。
 
 或：
 
@@ -314,22 +377,22 @@ python app/agent/agent.py
 
 ---
 
-## 7. 扩展指南
+## 8. 扩展指南
 
-### 7.1 新增 Tool
+### 8.1 新增 Tool
 
 1. 在 `app/tool/...` 中用 `@tool` 定义函数
 2. 在 `build_default_registry()` 或相应 Agent 注册逻辑中接入
 3. 补参数 schema（避免运行期校验失败）
 4. 补事件埋点（建议）
 
-### 7.2 新增 Skill
+### 8.2 新增 Skill
 
 1. 新建 `SKILL.md`
 2. 如需脚本与资料，增加 `scripts/`、`references/`
-3. 通过 `SkillLoader` 或 `Skills(LocalSkills(...))` 接入
+3. 通过 `SkillLoader`（轻量注入）或 `SkillsManager`（动态调度）接入
 
-### 7.3 新增 Verifier
+### 8.3 新增 Verifier
 
 1. 实现 `Verifier` 接口（`verify(task_spec, run_outcome)`）
 2. 在 `EvalOrchestrator` 中拼接到 verifier chain
@@ -337,7 +400,7 @@ python app/agent/agent.py
 
 ---
 
-## 8. 设计取舍与当前边界
+## 9. 设计取舍与当前边界
 
 当前架构优先“工程闭环完整性”，不是“单点能力最强”：
 
@@ -348,11 +411,11 @@ python app/agent/agent.py
 - 边界：
   - Tool schema 校验仍是轻量子集，不是完整 JSON Schema
   - SubAgent 隔离度主要靠角色与工具白名单，尚未引入更细粒度沙箱
-  - 记忆摘要为规则压缩，未引入语义级长期记忆检索
+  - 系统记忆检索当前以规则/关键词为主，尚未引入向量检索与学习排序
 
 ---
 
-## 9. 相关文档
+## 10. 相关文档
 
 - 运行协议：`InDepth.md`
 - 可观测性模块说明：`app/observability/README.md`

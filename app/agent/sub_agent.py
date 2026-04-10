@@ -15,6 +15,7 @@ from app.tool.bash_tool import execute_bash_command
 from app.tool.get_current_time_tool import get_current_time
 from app.tool.read_file_tool import read_file
 from app.tool.search_tool.search_guard import get_guarded_search_tools
+from app.tool.memory_query_tool import search_memory_cards
 from app.tool.write_file_tool import write_file
 
 
@@ -104,7 +105,7 @@ class SubAgent:
             model_provider=HttpChatModelProvider(default_config=generation_config),
             tool_registry=self._build_registry(),
             system_prompt=final_prompt,
-            max_steps=8,
+            max_steps=25,
             memory_store=SQLiteMemoryStore(db_file=memory_file),
             skill_prompt=skill_prompt,
             generation_config=generation_config,
@@ -124,10 +125,10 @@ class SubAgent:
     def _build_tools(self) -> List[Any]:
         role_tools: Dict[str, List[Any]] = {
             self.ROLE_GENERAL: [execute_bash_command, get_current_time, read_file, write_file] + get_guarded_search_tools(),
-            self.ROLE_RESEARCHER: [get_current_time, read_file] + get_guarded_search_tools(),
+            self.ROLE_RESEARCHER: [get_current_time, read_file, search_memory_cards] + get_guarded_search_tools(),
             self.ROLE_BUILDER: [execute_bash_command, get_current_time, read_file, write_file],
-            self.ROLE_REVIEWER: [get_current_time, read_file],
-            self.ROLE_VERIFIER: [execute_bash_command, get_current_time, read_file],
+            self.ROLE_REVIEWER: [get_current_time, read_file, search_memory_cards],
+            self.ROLE_VERIFIER: [execute_bash_command, get_current_time, read_file, search_memory_cards],
         }
         return role_tools.get(self.role, role_tools[self.ROLE_GENERAL])
 

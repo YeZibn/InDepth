@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -7,9 +8,21 @@ from .store import EventStore, _find_project_root
 from .trace import build_trace
 
 
-def _default_postmortem_dir() -> str:
+def _sanitize_segment(value: str, fallback: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return fallback
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
+    return sanitized or fallback
+
+
+def _default_postmortem_dir(task_id: str, run_id: Optional[str] = None) -> str:
     root = _find_project_root()
-    path = os.path.join(root, "work", "observability-postmortems")
+    base = os.path.join(root, "observability-evals")
+    task_seg = _sanitize_segment(task_id, "task")
+    run_seg = _sanitize_segment(run_id or "", "run") if run_id else ""
+    folder = f"{task_seg}__{run_seg}" if run_seg else task_seg
+    path = os.path.join(base, folder)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -151,8 +164,8 @@ def generate_postmortem(
     )
 
     ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
-    out_dir = output_dir or _default_postmortem_dir()
-    out_path = os.path.join(out_dir, f"postmortem_{task_id}_{ts}.md")
+    out_dir = output_dir or _default_postmortem_dir(task_id=task_id, run_id=run_id)
+    out_path = os.path.join(out_dir, f"postmortem_{ts}.md")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 

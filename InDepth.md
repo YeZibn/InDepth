@@ -112,11 +112,19 @@
 
 ### 4.2 SubAgent 决策规则
 
+主 Agent 在进入执行前 **MUST** 先做一次 SubAgent 评估，并记录结果（创建或不创建）。
+
 满足任一条件时，主 Agent **SHOULD** 创建 SubAgent：
 - 存在两个及以上可并行子任务
 - 子任务边界清晰、可独立推进
 - 子任务属于资源密集型（大量检索/数据处理）
 - 子任务需要特定领域能力或专门工具
+
+满足任一条件时，主 Agent **MAY** 不创建 SubAgent，但 **MUST** 记录理由：
+- 任务总规模很小（< 5 分钟）
+- 拆分成本高于并行收益
+- 所需工具/上下文仅主 Agent 持有
+- 当前链路对时延极敏感，不适合增加协同开销
 
 ### 4.2.1 高频协同要求（todo-skill + SubAgent）
 
@@ -136,11 +144,7 @@
    - 并发/调度参数配置
    严禁将上述配置动作作为隐式操作或跳过记录直接执行。
 
-### 4.3 强制检查点
-
-在任务拆解完成后，主 Agent **MUST** 立即进行一次 SubAgent 评估并记录结论。
-
-### 4.4 协同模板与示例（推荐）
+### 4.3 协同模板与示例（推荐）
 
 #### 模板 A：并行检索 + 中央汇总
 
@@ -160,7 +164,7 @@
 执行依据：
 - `app/tool/sub_agent_tool/sub_agent_tool.py`
 
-### 4.5 SubAgent 角色路由（显式必填）
+### 4.4 SubAgent 角色路由（显式必填）
 
 当调用 `create_sub_agent` 时，主 Agent **MUST** 在调用前先完成角色路由，并显式传入 `role`。  
 系统 **MUST NOT** 使用 `auto` 或隐式路由创建 SubAgent。
@@ -172,9 +176,21 @@
 4. `verifier`
 5. `general`
 
-约束要求：
-1. `role` **MUST** 显式传入，不得省略。
-2. 角色值不在允许集合内时，创建 **MUST** 失败并返回错误。
+### 4.5 角色创建时机（触发矩阵）
+
+主 Agent **SHOULD** 按以下时机创建角色：
+
+1. `researcher`：需要外部检索、信息归并、证据补全，且信息不确定性高。  
+2. `builder`：存在明确实现子任务（代码/文件/数据处理）且可独立交付中间结果。  
+3. `reviewer`：进入高风险变更、上线前检查、关键交付前质量把关阶段。  
+4. `verifier`：需要独立验收任务完成度、证据完整性或约束满足度。  
+5. `general`：任务边界清晰但不属于上述专门角色，或作为临时兜底执行者。
+
+创建约束：
+1. `reviewer` 与 `verifier` **SHOULD NOT** 负责实现性改动。  
+2. 同一子任务 **MUST NOT** 同时分配给多个角色重复执行（除非明确是交叉验证）。  
+3. 若创建 `reviewer` / `verifier`，主 Agent **MUST** 在 todo 中记录其验收口径与输出格式。  
+4. 系统记忆检索工具 `search_memory_cards` 仅推荐挂载给 `researcher` / `reviewer` / `verifier`，`builder` / `general` 默认不挂载以降低噪音。  
 
 ---
 
@@ -190,24 +206,45 @@
 - `app/tool/todo_tool/todo_tool.py`
 ---
 
-## 6. 经验沉淀协议
-## 6.1 复杂任务前置经验检索
-在任务正式开始前（任务拆分开始前），Agent **SHOULD** 在执行前先检索相似任务经验，并吸收相关经验：
-1. 是否存在“相似任务/相似问题”经验。
-2. 可直接复用的执行模板、注意事项、风险点。
-3. 本次任务与历史经验的差异点（如范围、时效、依赖）。
+## 6. 系统记忆协议（Memory / Knowledge）
 
-若未检索到相似经验，Agent **MUST** 明确记录“未命中”，再进入执行。
+### 6.1 最小目标
 
-### 6.2 任务完成后总结归纳
-任务闭环后，Agent **SHOULD** 进行结构化复盘，并沉淀到记忆系统：
-- 关键决策依据
-- 成功路径与失败路径
-- 风险与规避策略
-- 可复用模板与执行范式
+系统记忆只做三件事：可检索、可触发、可评估。禁止退化为纯文档堆积。
+
+### 6.2 存储与入口（强约束）
+
+1. 统一载体：`memory_card`。  
+2. 存储位置：`db/system_memory.db`，主表 `memory_card`。  
+3. 录入/查询唯一入口：`memory_card_cli.py`（`upsert-json` / `search` / `due`）。
 
 执行依据：
-- `app/skills/memory-knowledge-skill/SKILL.md`
+- `app/core/memory/system_memory_store.py`
+- `db/system_memory_schema.sql`
+- `app/skills/memory-knowledge-skill/scripts/memory_card_cli.py`
+
+### 6.3 触发与注入（运行约束）
+
+1. 运行中记忆捕获采用工具触发：主 Agent 可在 `pull_request` / `pre_release` / `postmortem` 等阶段调用 `capture_runtime_memory_candidate`。  
+2. `task_finished` 后框架 **MUST** 执行一次任务记忆强制沉淀（`postmortem` stage）。  
+3. Runtime 当前默认 **不做** 模型请求前的系统记忆自动注入。  
+4. 若后续启用注入，必须保持“未命中不阻塞、内容摘要化”。
+
+执行依据：
+- `app/core/runtime/agent_runtime.py`
+- `app/tool/runtime_memory_harvest_tool.py`
+- `app/observability/events.py`
+
+### 6.4 观测与治理（评估约束）
+
+1. 记忆链路 **MUST** 记录事件：`memory_triggered` / `memory_retrieved` / `memory_decision_made`。  
+2. 事件 **MUST** 落库到对应 SQLite 表。  
+3. 团队 **MUST** 周期跟踪：命中率、采纳率、噪音率、新鲜度、到期治理。
+
+执行依据：
+- `app/observability/schema.py`
+- `app/observability/store.py`
+- `app/skills/memory-knowledge-skill/references/metrics_sqlite.sql`
 
 ---
 

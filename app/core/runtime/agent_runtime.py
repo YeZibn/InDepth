@@ -1,10 +1,13 @@
 import json
+import re
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from app.eval.orchestrator import EvalOrchestrator
 from app.eval.schema import RunOutcome, TaskSpec
 from app.core.model.base import GenerationConfig, ModelProvider
 from app.core.memory.base import MemoryStore
+from app.core.memory.system_memory_store import SystemMemoryStore
 from app.core.tools.registry import ToolRegistry
 from app.observability.events import emit_event
 
@@ -23,7 +26,7 @@ class AgentRuntime:
         model_provider: ModelProvider,
         tool_registry: ToolRegistry,
         system_prompt: str = "",
-        max_steps: int = 8,
+        max_steps: int = 50,
         memory_store: Optional[MemoryStore] = None,
         skill_prompt: str = "",
         trace_steps: bool = True,
@@ -31,6 +34,7 @@ class AgentRuntime:
         generation_config: Optional[GenerationConfig] = None,
         eval_orchestrator: Optional[EvalOrchestrator] = None,
         enable_llm_judge: bool = False,
+        system_memory_store: Optional[SystemMemoryStore] = None,
     ):
         self.model_provider = model_provider
         self.tool_registry = tool_registry
@@ -46,6 +50,7 @@ class AgentRuntime:
             llm_judge_provider=model_provider,
             llm_judge_config=generation_config,
         )
+        self.system_memory_store = system_memory_store
 
     def run(
         self,
@@ -255,6 +260,16 @@ class AgentRuntime:
                 payload={"error": str(e)},
             )
 
+        self._finalize_task_memory(
+            task_id=task_id,
+            run_id=run_id,
+            user_input=user_input,
+            final_answer=final_answer,
+            stop_reason=stop_reason,
+            runtime_status=task_finished_status,
+            tool_failures=last_tool_failures,
+        )
+
         emit_event(
             task_id=task_id,
             run_id=run_id,
@@ -274,6 +289,145 @@ class AgentRuntime:
             self.memory_store.append_message(task_id, "assistant", final_answer)
             self.memory_store.compact(task_id)
         return final_answer
+
+    def _finalize_task_memory(
+        self,
+        task_id: str,
+        run_id: str,
+        user_input: str,
+        final_answer: str,
+        stop_reason: str,
+        runtime_status: str,
+        tool_failures: List[Dict[str, str]],
+    ) -> None:
+        try:
+            store = self.system_memory_store or SystemMemoryStore()
+        except Exception:
+            return
+
+        now = datetime.now().astimezone()
+        today = now.date().isoformat()
+        expire_at = (now.date() + timedelta(days=180)).isoformat()
+        mem_id = f"mem_task_{self._slug(task_id)}_{self._slug(run_id)}"
+        stage = "postmortem"
+        risk_level = "P1" if runtime_status == "error" else "P3"
+        short_answer = self._preview(final_answer, max_len=500)
+        failure_brief = "; ".join(
+            [f"{x.get('tool', 'unknown')}: {x.get('error', '')}" for x in (tool_failures or [])[:3]]
+        ).strip()
+
+        card = {
+            "id": mem_id,
+            "title": f"Task outcome memory: {task_id}",
+            "memory_type": "experience",
+            "domain": "runtime",
+            "tags": ["task-finish", runtime_status, stop_reason],
+            "scenario": {
+                "stage": stage,
+                "trigger_hint": f"Task {task_id} finished with status={runtime_status}",
+                "roles": ["dev", "reviewer", "verifier"],
+            },
+            "problem_pattern": {
+                "symptoms": [self._preview(user_input, max_len=200) or "task request"],
+                "root_cause_hypothesis": failure_brief or "See task output summary",
+                "risk_level": risk_level,
+            },
+            "solution": {
+                "steps": [
+                    "Review final answer and runtime stop reason",
+                    "Reuse successful pattern or avoid failed tool path in similar tasks",
+                ],
+                "expected_outcome": short_answer or "Task finished with no explicit answer.",
+                "rollback": "Fallback to manual troubleshooting when similar failures repeat",
+            },
+            "constraints": {
+                "applicable_if": ["Same or similar runtime task context appears"],
+                "dependencies": [],
+            },
+            "anti_pattern": {
+                "not_applicable_if": ["Task scope differs significantly from this run context"],
+                "danger_signals": [failure_brief] if failure_brief else [],
+            },
+            "evidence": {
+                "source_links": [f"urn:runtime:{task_id}:{run_id}"],
+                "verified_at": now.isoformat(),
+                "verifier": "runtime-framework",
+            },
+            "impact": {},
+            "owner": {"team": "runtime", "primary": "main-agent", "reviewers": []},
+            "lifecycle": {
+                "status": "active",
+                "version": "v1.0",
+                "effective_from": today,
+                "expire_at": expire_at,
+                "last_reviewed_at": today,
+                "change_log": [
+                    {
+                        "version": "v1.0",
+                        "changed_at": now.isoformat(),
+                        "summary": "Auto-finalized by runtime framework at task completion",
+                    }
+                ],
+            },
+            "confidence": "B" if runtime_status == "ok" else "C",
+        }
+        try:
+            store.upsert_card(card)
+        except Exception:
+            return
+
+        try:
+            triggered = emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="memory_triggered",
+                payload={
+                    "stage": stage,
+                    "context_id": run_id,
+                    "risk_level": risk_level,
+                    "source_event": "runtime_forced_finalize",
+                },
+            )
+            trigger_event_id = str(triggered.get("event_id", "")).strip()
+            if trigger_event_id:
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="memory_retrieved",
+                    payload={
+                        "trigger_event_id": trigger_event_id,
+                        "memory_id": mem_id,
+                        "score": 1.0,
+                        "stage": stage,
+                        "source": "runtime_finalize_upsert",
+                    },
+                )
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="memory_decision_made",
+                    payload={
+                        "trigger_event_id": trigger_event_id,
+                        "memory_id": mem_id,
+                        "decision": "accepted",
+                        "reason": "framework forced finalization",
+                        "stage": stage,
+                    },
+                )
+        except Exception:
+            pass
+
+    def _slug(self, value: str) -> str:
+        text = (value or "").strip().lower()
+        text = re.sub(r"[^a-z0-9]+", "-", text)
+        text = re.sub(r"-+", "-", text).strip("-")
+        return text or "na"
 
     def _extract_finish_reason_and_message(self, raw: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
         if not isinstance(raw, dict):

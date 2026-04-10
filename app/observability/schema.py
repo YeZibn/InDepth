@@ -73,4 +73,13 @@ EVENT_TYPES = [
     "model_reasoning",
     "model_stopped_length",
     "model_stopped_content_filter",
+    "memory_triggered",
+    "memory_retrieved",
+    "memory_decision_made",
 ]
+
+MEMORY_EVENT_TYPES = {
+    "memory_triggered",
+    "memory_retrieved",
+    "memory_decision_made",
+}

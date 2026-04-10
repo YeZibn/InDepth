@@ -1,0 +1,82 @@
+{
+  "id": "mem_payment_idempotency_retry_001",
+  "title": "支付重试必须幂等键先行",
+  "memory_type": "experience",
+  "domain": "payment",
+  "tags": ["transaction", "idempotency", "retry"],
+  "scenario": {
+    "stage": "pull_request",
+    "trigger_hint": "涉及支付扣款、重试或补偿逻辑时触发",
+    "roles": ["dev", "reviewer", "qa"]
+  },
+  "problem_pattern": {
+    "symptoms": [
+      "同一订单出现重复扣款",
+      "网络抖动后客户端重试导致重复写入"
+    ],
+    "root_cause_hypothesis": "服务端未基于业务主键做幂等约束，重试链路缺少去重",
+    "risk_level": "P1"
+  },
+  "solution": {
+    "steps": [
+      "在入口层校验并透传幂等键（idempotency_key）",
+      "以订单号+幂等键建立唯一约束",
+      "对重复请求返回首次处理结果而非再次执行扣款"
+    ],
+    "expected_outcome": "重试场景不再产生重复扣款",
+    "rollback": "如新逻辑异常，回退到只读重试并人工补偿"
+  },
+  "constraints": {
+    "applicable_if": [
+      "存在至少一次语义（at-least-once）重试",
+      "涉及金钱或库存等不可重复副作用"
+    ],
+    "dependencies": ["order-service", "payment-service", "mysql-8"]
+  },
+  "anti_pattern": {
+    "not_applicable_if": [
+      "纯查询接口",
+      "幂等由下游网关已全链路保证且可审计"
+    ],
+    "danger_signals": ["缺失唯一索引", "接口未返回幂等冲突码"]
+  },
+  "evidence": {
+    "source_links": [
+      "https://example.internal/postmortem/pm-2026-001",
+      "https://example.internal/pr/12345"
+    ],
+    "verified_at": "2026-04-10T10:30:00+08:00",
+    "verifier": "payment-sre"
+  },
+  "impact": {
+    "baseline": {
+      "defect_rate": 0.027,
+      "incident_repeat_rate": 0.18
+    },
+    "after": {
+      "defect_rate": 0.011,
+      "incident_repeat_rate": 0.04
+    },
+    "measurement_window_days": 30
+  },
+  "owner": {
+    "team": "payment-platform",
+    "primary": "alice.z",
+    "reviewers": ["bob.l", "carol.m"]
+  },
+  "lifecycle": {
+    "status": "active",
+    "version": "v1.0",
+    "effective_from": "2026-04-10",
+    "expire_at": "2026-10-10",
+    "last_reviewed_at": "2026-04-10",
+    "change_log": [
+      {
+        "version": "v1.0",
+        "changed_at": "2026-04-10T10:30:00+08:00",
+        "summary": "由支付重复扣款事故复盘沉淀"
+      }
+    ]
+  },
+  "confidence": "A"
+}

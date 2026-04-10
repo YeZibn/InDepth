@@ -194,7 +194,7 @@ class SubAgentManager:
             event_type="subagent_started",
             payload={"agent_id": agent_id, "message": message},
         )
-        
+
         try:
             result = instance.agent.chat(message)
             result_text = "" if result is None else str(result)
@@ -356,6 +356,8 @@ def create_sub_agent(
     role: str,
     instructions: str = "",
     task_id: str = "",
+    acceptance_criteria: str = "",
+    output_format: str = "",
 ) -> str:
     """
     创建 SubAgent
@@ -367,15 +369,46 @@ def create_sub_agent(
         role: 角色，必填：researcher/builder/reviewer/verifier/general
         instructions: 主Agent生成的附加指令，会与角色预设指令拼接
         task_id: 可选的任务ID，用于观测与复盘归档
+        acceptance_criteria: reviewer/verifier 必填，验收口径（可验证条件）
+        output_format: reviewer/verifier 必填，输出格式约束（如 JSON/checklist）
     
     Returns:
         str: agent_id，用于后续操作（如运行任务、销毁等）
     """
+    role_norm = (role or "").strip().lower()
+    if role_norm in {ROLE_REVIEWER, ROLE_VERIFIER}:
+        if not (acceptance_criteria or "").strip():
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"{role_norm} requires non-empty acceptance_criteria",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        if not (output_format or "").strip():
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"{role_norm} requires non-empty output_format",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+    full_task = (task or "").strip()
+    if role_norm in {ROLE_REVIEWER, ROLE_VERIFIER}:
+        full_task = (
+            f"{full_task}\n\n"
+            f"[验收口径]\n{acceptance_criteria.strip()}\n\n"
+            f"[输出格式]\n{output_format.strip()}"
+        )
+
     try:
         agent_id, resolved_role = _manager.create(
             name,
             description,
-            task,
+            full_task,
             role=role,
             instructions=instructions,
             task_id=task_id,
@@ -392,8 +425,10 @@ def create_sub_agent(
             "agent_id": agent_id,
             "name": name,
             "description": description,
-            "task": task,
+            "task": full_task,
             "role": resolved_role,
+            "acceptance_criteria": acceptance_criteria,
+            "output_format": output_format,
         },
         ensure_ascii=False,
         indent=2,
