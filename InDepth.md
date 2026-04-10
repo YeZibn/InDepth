@@ -216,7 +216,8 @@
 
 1. 统一载体：`memory_card`。  
 2. 存储位置：`db/system_memory.db`，主表 `memory_card`。  
-3. 录入/查询唯一入口：`memory_card_cli.py`（`upsert-json` / `search` / `due`）。
+3. 运行时会话记忆 **MUST** 按 Agent 类型聚合落盘：主 Agent 使用 `db/runtime_memory_main_agent.db`，SubAgent 使用 `db/runtime_memory_subagent_<role>.db`。  
+4. 录入/查询唯一入口：`memory_card_cli.py`（`upsert-json` / `search` / `due`）。
 
 执行依据：
 - `app/core/memory/system_memory_store.py`

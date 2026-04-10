@@ -73,7 +73,8 @@ class BaseAgent:
             enable_thinking=enable_thinking,
             provider_options=model_options or {},
         )
-        memory_file = f"db/runtime_memory_{self.name}.db"
+        # Aggregate runtime memory by agent type to avoid per-name DB fragmentation.
+        memory_file = "db/runtime_memory_main_agent.db"
         self.runtime = AgentRuntime(
             model_provider=HttpChatModelProvider(default_config=generation_config),
             tool_registry=self._build_registry(),

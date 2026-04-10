@@ -70,6 +70,7 @@ class AgentRuntime:
             self.memory_store.append_message(task_id, "user", user_input)
 
         final_answer: Optional[str] = None
+        final_answer_written = False
         last_tool_failures: List[Dict[str, str]] = []
         task_status = "ok"
         stop_reason = "completed"
@@ -128,7 +129,8 @@ class AgentRuntime:
                     self.memory_store.append_message(
                         task_id,
                         "assistant",
-                        json.dumps({"tool_calls": tool_calls}, ensure_ascii=False),
+                        raw_message.get("content", "") or "",
+                        tool_calls=tool_calls,
                     )
                 last_tool_failures = self._handle_native_tool_calls(tool_calls, messages, task_id, run_id)
                 continue
@@ -137,6 +139,7 @@ class AgentRuntime:
                 messages.append({"role": "assistant", "content": content})
                 if self.memory_store:
                     self.memory_store.append_message(task_id, "assistant", content)
+                    final_answer_written = True
                 if content:
                     final_answer = content
                     stop_reason = "stop"
@@ -190,6 +193,7 @@ class AgentRuntime:
             messages.append({"role": "assistant", "content": content})
             if self.memory_store:
                 self.memory_store.append_message(task_id, "assistant", content)
+                final_answer_written = True
 
             if content:
                 final_answer = content
@@ -286,7 +290,8 @@ class AgentRuntime:
         )
         self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
         if self.memory_store:
-            self.memory_store.append_message(task_id, "assistant", final_answer)
+            if not final_answer_written:
+                self.memory_store.append_message(task_id, "assistant", final_answer)
             self.memory_store.compact(task_id)
         return final_answer
 
@@ -510,8 +515,9 @@ class AgentRuntime:
             if self.memory_store:
                 self.memory_store.append_message(
                     task_id,
-                    "assistant",
-                    json.dumps({"tool": tool_name, "result": result}, ensure_ascii=False),
+                    "tool",
+                    json.dumps(result, ensure_ascii=False),
+                    tool_call_id=call_id,
                 )
         return failures
 

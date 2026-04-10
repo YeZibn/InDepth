@@ -18,6 +18,8 @@
 - `trace.py`：时间线构建
 - `postmortem.py`：生成 `observability-evals/<task_id>__<run_id>/postmortem_*.md`
 - `data/events.jsonl`：默认事件存储文件（运行后自动生成）
+- `db/runtime_memory_main_agent.db`：主 Agent 运行时记忆（按类型聚合）
+- `db/runtime_memory_subagent_<role>.db`：SubAgent 运行时记忆（按角色聚合）
 - `db/system_memory.db`：系统记忆事件 SQLite（运行后自动生成）
 - `db/system_memory.db::memory_card`：结构化经验卡（由 `SystemMemoryStore` 维护）
 

@@ -87,7 +87,8 @@ class SubAgent:
         skill_prompt = self.skills_manager.get_system_prompt_snippet() or SkillLoader().build_skill_prompt(
             ["app/skills/memory-knowledge-skill"]
         )
-        memory_file = f"db/runtime_memory_subagent_{self.role}_{self.name}.db"
+        # Aggregate runtime memory by sub-agent role.
+        memory_file = f"db/runtime_memory_subagent_{self.role}.db"
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=top_p,

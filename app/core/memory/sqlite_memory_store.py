@@ -1,6 +1,7 @@
 import os
+import json
 import sqlite3
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class SQLiteMemoryStore:
@@ -15,7 +16,6 @@ class SQLiteMemoryStore:
         self.summarize_threshold = summarize_threshold
         os.makedirs(os.path.dirname(db_file) or ".", exist_ok=True)
         self._init_db()
-        self._migrate_legacy_roles()
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_file)
@@ -29,6 +29,8 @@ class SQLiteMemoryStore:
                     conversation_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    tool_call_id TEXT,
+                    tool_calls_json TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -42,20 +44,44 @@ class SQLiteMemoryStore:
                 )
                 """
             )
+            self._ensure_columns(conn)
             conn.commit()
 
-    def append_message(self, conversation_id: str, role: str, content: str) -> None:
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        if "tool_call_id" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT")
+        if "tool_calls_json" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN tool_calls_json TEXT")
+
+    def append_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        tool_call_id: str = "",
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         if not conversation_id.strip() or not role.strip():
             return
+        tool_call_id_norm = (tool_call_id or "").strip() or None
+        tool_calls_json = (
+            json.dumps(tool_calls, ensure_ascii=False)
+            if isinstance(tool_calls, list) and tool_calls
+            else None
+        )
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
-                (conversation_id, role, content or ""),
+                """
+                INSERT INTO messages (conversation_id, role, content, tool_call_id, tool_calls_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (conversation_id, role, content or "", tool_call_id_norm, tool_calls_json),
             )
             conn.commit()
 
-    def get_recent_messages(self, conversation_id: str, limit: int = 20) -> List[Dict[str, str]]:
-        out: List[Dict[str, str]] = []
+    def get_recent_messages(self, conversation_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT summary FROM summaries WHERE conversation_id = ?",
@@ -66,7 +92,7 @@ class SQLiteMemoryStore:
 
             rows = conn.execute(
                 """
-                SELECT role, content FROM messages
+                SELECT role, content, tool_call_id, tool_calls_json FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id DESC
                 LIMIT ?
@@ -74,7 +100,17 @@ class SQLiteMemoryStore:
                 (conversation_id, max(limit, 1)),
             ).fetchall()
         rows.reverse()
-        out.extend([self._normalize_message_row(role=r[0], content=r[1]) for r in rows])
+        out.extend(
+            [
+                self._normalize_message_row(
+                    role=r[0],
+                    content=r[1],
+                    tool_call_id=r[2],
+                    tool_calls_json=r[3],
+                )
+                for r in rows
+            ]
+        )
         return out
 
     def compact(self, conversation_id: str) -> None:
@@ -135,22 +171,30 @@ class SQLiteMemoryStore:
             lines.append(f"- [{role}] {snippet}")
         return "\n".join(lines)
 
-    def _normalize_message_row(self, role: str, content: str) -> Dict[str, str]:
+    def _normalize_message_row(
+        self,
+        role: str,
+        content: str,
+        tool_call_id: Optional[str] = None,
+        tool_calls_json: Optional[str] = None,
+    ) -> Dict[str, Any]:
         role_norm = (role or "").strip().lower()
-        if role_norm in ("user", "assistant", "system"):
-            return {"role": role_norm, "content": content or ""}
-        # Legacy compatibility: convert tool/other roles to assistant text blocks.
+        msg: Dict[str, Any] = {"role": role_norm, "content": content or ""}
+        if role_norm == "assistant":
+            if tool_calls_json:
+                try:
+                    parsed = json.loads(tool_calls_json)
+                    if isinstance(parsed, list) and parsed:
+                        msg["tool_calls"] = parsed
+                except json.JSONDecodeError:
+                    pass
+            return msg
+        if role_norm == "tool":
+            call_id = (tool_call_id or "").strip()
+            if call_id:
+                msg["tool_call_id"] = call_id
+                return msg
+            return {"role": "assistant", "content": f"[history:tool] {content or ''}"}
+        if role_norm in ("user", "system"):
+            return msg
         return {"role": "assistant", "content": f"[history:{role_norm}] {content or ''}"}
-
-    def _migrate_legacy_roles(self) -> None:
-        """Best-effort migration to avoid invalid chat payloads with role=tool."""
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE messages
-                SET role = 'assistant',
-                    content = '[history:tool] ' || content
-                WHERE role = 'tool'
-                """
-            )
-            conn.commit()

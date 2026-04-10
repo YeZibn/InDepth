@@ -310,6 +310,9 @@ InDepth 采用“自上而下约束、自下而上反馈”的分层架构，不
 
 - 事件：`app/observability/data/events.jsonl`
 - 复盘：`observability-evals/<task_id>__<run_id>/postmortem_*.md`
+- 运行时记忆（按类型聚合）：
+  - 主 Agent：`db/runtime_memory_main_agent.db`
+  - SubAgent：`db/runtime_memory_subagent_<role>.db`
 - 系统记忆：`db/system_memory.db`
 
 自动化机制：
