@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f7faff"/>
+      <stop offset="100%" stop-color="#f6fff7"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 40px 'Helvetica Neue', Arial, sans-serif; fill: #133350; }
+      .sub { font: 500 18px 'Helvetica Neue', Arial, sans-serif; fill: #345775; }
+      .node { fill: #fff; stroke: #a9c4df; stroke-width: 2; }
+      .nt { font: 700 22px 'Helvetica Neue', Arial, sans-serif; fill: #14314d; }
+      .tx { font: 500 15px 'Helvetica Neue', Arial, sans-serif; fill: #2f526f; }
+      .arrow { stroke: #4f84b6; stroke-width: 3; fill: none; marker-end: url(#arr2); }
+    </style>
+    <marker id="arr2" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4f84b6"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="900" fill="url(#bg3)"/>
+  <text x="70" y="80" class="title">Memory &amp; Observability Closed Loop</text>
+  <text x="70" y="114" class="sub">runtime memory compaction + system memory cards + event evidence</text>
+
+  <rect x="90" y="220" width="320" height="130" rx="18" class="node"/>
+  <text x="120" y="272" class="nt">Runtime Messages</text>
+  <text x="120" y="300" class="tx">messages table</text>
+  <text x="120" y="324" class="tx">user/assistant/tool history</text>
+
+  <rect x="530" y="180" width="340" height="160" rx="18" class="node"/>
+  <text x="560" y="236" class="nt">Context Compressor</text>
+  <text x="560" y="266" class="tx">merge_summary(v1)</text>
+  <text x="560" y="290" class="tx">constraints/decisions/artifacts</text>
+  <text x="560" y="314" class="tx">consistency_guard</text>
+
+  <rect x="980" y="220" width="320" height="130" rx="18" class="node"/>
+  <text x="1010" y="272" class="nt">Summary Store</text>
+  <text x="1010" y="300" class="tx">summaries.summary_json</text>
+  <text x="1010" y="324" class="tx">structured history prompt</text>
+
+  <rect x="530" y="470" width="340" height="160" rx="18" class="node"/>
+  <text x="560" y="526" class="nt">System Memory Card</text>
+  <text x="560" y="556" class="tx">db/system_memory.db::memory_card</text>
+  <text x="560" y="580" class="tx">postmortem + candidate capture</text>
+  <text x="560" y="604" class="tx">search / due-review</text>
+
+  <rect x="980" y="500" width="320" height="130" rx="18" class="node"/>
+  <text x="1010" y="552" class="nt">Memory Events</text>
+  <text x="1010" y="580" class="tx">triggered / retrieved / decision</text>
+  <text x="1010" y="604" class="tx">SQLite + JSONL</text>
+
+  <rect x="90" y="500" width="320" height="130" rx="18" class="node"/>
+  <text x="120" y="552" class="nt">Postmortem &amp; Metrics</text>
+  <text x="120" y="580" class="tx">task_finished / task_judged</text>
+  <text x="120" y="604" class="tx">observability-evals/*</text>
+
+  <path class="arrow" d="M410 285 L530 260"/>
+  <path class="arrow" d="M870 260 L980 285"/>
+  <path class="arrow" d="M1140 350 L1140 470 L870 550"/>
+  <path class="arrow" d="M530 550 L410 565"/>
+  <path class="arrow" d="M870 550 L980 565"/>
+  <path class="arrow" d="M250 500 L250 360"/>
+
+  <text x="70" y="840" class="sub">Loop meaning: execution evidence -> structured memory -> retrieval decisions -> better next execution.</text>
+</svg>

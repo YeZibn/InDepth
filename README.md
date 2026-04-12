@@ -98,52 +98,150 @@ README 仅保留总览，具体技术实现细节统一放在 `doc/refer/`：
 
 ## 3. 分层架构总览
 
-```mermaid
-flowchart LR
-    U["User / CLI"] --> A["BaseAgent / RuntimeAgent"]
-    A --> R["AgentRuntime"]
-    R --> M["ModelProvider<br/>HttpChatModelProvider"]
-    R --> T["ToolRegistry"]
-    R --> MEM["SQLiteMemoryStore<br/>+ SystemMemoryStore"]
-    R --> E["EvalOrchestrator"]
-    R --> O["Observability Events"]
+### 架构可视化（图片版）
 
-    T --> TD["Default Tools<br/>bash/file/time/search/todo/subagent"]
-    TD --> SA["SubAgentManager / SubAgent"]
-    SA --> SR["Role-based Runtime"]
-    SR --> SM["Skills Manager"]
+#### 1) 总体架构图
 
-    E --> DV["Deterministic Verifiers"]
-    E --> LV["LLM Judge (VerifierAgent)"]
+![InDepth Architecture](doc/assets/readme/architecture-overview.svg)
 
-    O --> ES["events.jsonl"]
-    O --> PM["postmortem markdown"]
+#### 2) Runtime 执行流程图
+
+![Runtime Flow](doc/assets/readme/runtime-flow.svg)
+
+#### 3) 记忆与观测闭环图
+
+![Memory Loop](doc/assets/readme/memory-loop.svg)
+
+### 一趟任务的生命周期
+
+```
+用户 ──▶ 协议定规矩 ──▶ 调度中心指挥 ──▶ 执行者干活 ──▶ 检查官验收 ──▶ 档案员归档
 ```
 
-### L1 协议与目标层（Why）
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   L1 协议层  ──▶ 指挥官（定战略、立规矩）                                   │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  InDepth.md                                                      │   │
+│   │                                                                   │   │
+│   │  "做什么？做到哪算完成？有什么风险要守？"                            │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   L2 编排层  ──▶ 调度中心（循环推理、调用工具）                             │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  AgentRuntime                                                     │   │
+│   │                                                                   │   │
+│   │  system + history + user ──▶ 模型推理 ──▶ tool_calls / stop       │   │
+│   │                                   ▲                               │   │
+│   │                                   │ 循环                         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   L3 能力层  ──▶ 执行者（各司其职的工具人）                                │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  Tools (bash/文件/搜索/SubAgent/Todo...)                         │   │
+│   │                                                                   │   │
+│   │  SubAgentManager ──▶ researcher / builder / reviewer / verifier   │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   L4 验证层  ──▶ 检查官（判定成败）                                        │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  EvalOrchestrator                                                │   │
+│   │                                                                   │   │
+│   │  StopReasonVerifier ──▶ ToolFailureVerifier ──▶ LLM Judge        │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   L5 记忆层  ──▶ 档案员（沉淀经验）                                        │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  RuntimeMemory (压缩) + SystemMemory (经验卡)                    │   │
+│   │                                                                   │   │
+│   │  messages ──▶ 压缩 ──▶ summary_json                              │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-- 位置：`InDepth.md`
-- 职责：定义任务启动、时效检索、拆解边界、收敛标准、风险门禁。
+### 3.1 增强版 Mermaid 图
 
-### L2 编排与运行时层（How）
+```mermaid
+flowchart TB
+    subgraph L1 ["🛡️ 指挥官 L1：协议层"]
+        direction TB
+        P["InDepth.md<br/>任务目标 + 验收标准 + 风险门禁"]
+    end
 
-- 位置：`app/agent/*` + `app/core/runtime/*`
-- 职责：管理多步推理循环、tool-calling、失败收敛、执行追踪。
+    subgraph L2 ["⚙️ 调度中心 L2：编排层"]
+        direction TB
+        R["AgentRuntime<br/>推理循环 + 工具调用"]
+        R --> E["EvalOrchestrator"]
+    end
 
-### L3 能力执行层（Do）
+    subgraph L3 ["🛠️ 执行者 L3：能力层"]
+        direction TB
+        T["ToolRegistry"]
+        T --> B["bash / 文件 / 时间"]
+        T --> S["SubAgentManager"]
+        S --> SR["researcher"]
+        S --> SB["builder"]
+        S --> SV["verifier"]
+        S --> SRv["reviewer"]
+    end
 
-- 位置：`app/core/tools/*` + `app/tool/*` + `app/core/skills/*`
-- 职责：提供可组合能力（工具、子代理、技能、todo 工作流）。
+    subgraph L4 ["🔍 检查官 L4：验证层"]
+        direction TB
+        V1["StopReasonVerifier"]
+        V2["ToolFailureVerifier"]
+        V3["LLM Judge (VerifierAgent)"]
+    end
 
-### L4 评估与观测层（Check）
+    subgraph L5 ["📚 档案员 L5：记忆层"]
+        direction TB
+        M1["RuntimeMemory<br/>消息压缩 + 结构化摘要"]
+        M2["SystemMemory<br/>经验卡 + 知识检索"]
+    end
 
-- 位置：`app/eval/*` + `app/observability/*`
-- 职责：区分“回答完成”和“任务完成”，沉淀可审计执行证据。
+    U["👤 用户"] --> P
+    P --> R
+    R --> T
+    R --> E
+    E --> V1
+    E --> V2
+    E --> V3
+    R --> M1
+    M1 --> M2
 
-### L5 记忆与资产层（Learn）
+    style L1 fill:#ffcccc
+    style L2 fill:#ccffcc
+    style L3 fill:#ccccff
+    style L4 fill:#ffffcc
+    style L5 fill:#ffccff
+```
 
-- 位置：`app/core/memory/*` + `db/*`
-- 职责：管理会话记忆、系统记忆与经验卡沉淀。
+### 3.2 各层角色卡片
+
+```
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   🛡️ 指挥官 L1   │  │  ⚙️ 调度中心 L2  │  │   🛠️ 执行者 L3   │
+├─────────────────┤  ├─────────────────┤  ├─────────────────┤
+│ 位置: InDepth.md│  │ 位置: agent/*   │  │ 位置: tool/*   │
+│                 │  │        runtime/*│  │        skills/* │
+│ 职责:           │  │ 职责:           │  │ 职责:           │
+│ · 定任务目标    │  │ · 管理推理循环   │  │ · 提供具体能力  │
+│ · 定验收标准    │  │ · 调用工具       │  │ · SubAgent编排  │
+│ · 定风险门禁    │  │ · 收敛判断       │  │ · 工具隔离      │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+
+┌─────────────────┐  ┌─────────────────┐
+│   🔍 检查官 L4   │  │   📚 档案员 L5   │
+├─────────────────┤  ├─────────────────┤
+│ 位置: eval/*   │  │ 位置: memory/* │
+│        observability/*│  │        db/*      │
+│ 职责:           │  │ 职责:           │
+│ · 判定任务成功  │  │ · 压缩会话记忆  │
+│ · 验证工具执行  │  │ · 沉淀经验卡    │
+│ · LLM 软评分    │  │ · 检索知识      │
+└─────────────────┘  └─────────────────┘
+```
 
 ---
 
