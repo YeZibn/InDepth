@@ -4,6 +4,7 @@ from typing import Any, Iterable, Optional
 
 from dotenv import load_dotenv
 
+from app.config import load_runtime_compression_config
 from app.core.memory import SQLiteMemoryStore
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
@@ -73,6 +74,7 @@ class BaseAgent:
             enable_thinking=enable_thinking,
             provider_options=model_options or {},
         )
+        compression_config = load_runtime_compression_config()
         # Aggregate runtime memory by agent type to avoid per-name DB fragmentation.
         memory_file = "db/runtime_memory_main_agent.db"
         self.runtime = AgentRuntime(
@@ -80,10 +82,15 @@ class BaseAgent:
             tool_registry=self._build_registry(),
             system_prompt=self.instructions,
             max_steps=100,
-            memory_store=SQLiteMemoryStore(db_file=memory_file),
+            memory_store=SQLiteMemoryStore(
+                db_file=memory_file,
+                keep_recent=compression_config.keep_recent_turns,
+                consistency_guard=compression_config.consistency_guard,
+            ),
             skill_prompt=self.skill_prompt,
             generation_config=generation_config,
             enable_llm_judge=enable_llm_judge,
+            compression_config=compression_config,
         )
 
     def _build_registry(self) -> ToolRegistry:

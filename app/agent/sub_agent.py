@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
+from app.config import load_runtime_compression_config
 from app.core.memory import SQLiteMemoryStore
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
@@ -101,15 +102,21 @@ class SubAgent:
             enable_thinking=enable_thinking,
             provider_options=model_options or {},
         )
+        compression_config = load_runtime_compression_config()
 
         self.runtime = AgentRuntime(
             model_provider=HttpChatModelProvider(default_config=generation_config),
             tool_registry=self._build_registry(),
             system_prompt=final_prompt,
             max_steps=25,
-            memory_store=SQLiteMemoryStore(db_file=memory_file),
+            memory_store=SQLiteMemoryStore(
+                db_file=memory_file,
+                keep_recent=compression_config.keep_recent_turns,
+                consistency_guard=compression_config.consistency_guard,
+            ),
             skill_prompt=skill_prompt,
             generation_config=generation_config,
+            compression_config=compression_config,
         )
 
     def _normalize_role(self, role: str) -> str:

@@ -1,3 +1,4 @@
+from app.config import load_runtime_compression_config
 from app.core.memory import SQLiteMemoryStore
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
@@ -22,6 +23,7 @@ def create_runtime(
     model_options: dict | None = None,
     enable_llm_judge: bool = True,
 ) -> AgentRuntime:
+    compression_config = load_runtime_compression_config()
     generation_config = GenerationConfig(
         temperature=temperature,
         top_p=top_p,
@@ -42,8 +44,13 @@ def create_runtime(
         tool_registry=tool_registry,
         system_prompt=system_prompt,
         max_steps=max_steps,
-        memory_store=SQLiteMemoryStore(db_file="db/runtime_memory_cli.db"),
+        memory_store=SQLiteMemoryStore(
+            db_file="db/runtime_memory_cli.db",
+            keep_recent=compression_config.keep_recent_turns,
+            consistency_guard=compression_config.consistency_guard,
+        ),
         skill_prompt=skill_prompt,
         generation_config=generation_config,
         enable_llm_judge=enable_llm_judge,
+        compression_config=compression_config,
     )

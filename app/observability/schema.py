@@ -76,6 +76,10 @@ EVENT_TYPES = [
     "memory_triggered",
     "memory_retrieved",
     "memory_decision_made",
+    "context_compression_started",
+    "context_compression_succeeded",
+    "context_compression_failed",
+    "context_consistency_check_failed",
 ]
 
 MEMORY_EVENT_TYPES = {
