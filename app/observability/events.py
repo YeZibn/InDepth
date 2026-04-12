@@ -46,8 +46,10 @@ def emit_event(
 
     event_dict = event.to_dict()
 
-    # 强制策略：任务结束事件写入后自动生成复盘报告（best-effort，不阻塞主流程）
-    if normalized_event_type == "task_finished":
+    # 强制策略：
+    # - task_finished: 先产出一次复盘，供后续 verifier 检查证据目录
+    # - task_judged: 评估完成后再产出一次最终复盘（包含评估结论）
+    if normalized_event_type in {"task_finished", "task_judged"}:
         try:
             from .postmortem import generate_postmortem
 

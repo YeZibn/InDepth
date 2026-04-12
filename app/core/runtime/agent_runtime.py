@@ -207,6 +207,22 @@ class AgentRuntime:
             stop_reason = "max_steps_reached"
             self._trace("[runtime] max_steps_reached")
 
+        # Emit task_finished before verifier evaluation so postmortem evidence is
+        # generated and available to verifier agent in the same run.
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="task_finished",
+            status=task_status,
+            payload={
+                "stop_reason": stop_reason,
+                "has_tool_failures": bool(last_tool_failures),
+                "tool_failure_count": len(last_tool_failures),
+            },
+        )
+
         judgement_payload: Dict[str, Any] = {}
         task_finished_status = task_status
         try:
@@ -272,21 +288,6 @@ class AgentRuntime:
             stop_reason=stop_reason,
             runtime_status=task_finished_status,
             tool_failures=last_tool_failures,
-        )
-
-        emit_event(
-            task_id=task_id,
-            run_id=run_id,
-            actor="main",
-            role="general",
-            event_type="task_finished",
-            status=task_finished_status,
-            payload={
-                "stop_reason": stop_reason,
-                "has_tool_failures": bool(last_tool_failures),
-                "tool_failure_count": len(last_tool_failures),
-                **judgement_payload,
-            },
         )
         self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
         if self.memory_store:

@@ -108,13 +108,14 @@ InDepth 采用“自上而下约束、自下而上反馈”的分层架构，不
    - `tool_calls`：执行工具并将工具结果回注到消息
    - `stop`：作为最终答案收敛
    - `length/content_filter/error`：按失败路径收敛
-4. 执行后评估  
+4. 记录观测事件并触发复盘  
+   - `emit_event(...)` 写入 JSONL
+   - `task_finished` 先生成初版 postmortem（供评估读取）
+5. 执行后评估  
    - `EvalOrchestrator.evaluate(...)`
    - 默认硬校验：停止原因、工具失败
    - 可选软校验：VerifierAgent（LLM Judge）
-5. 记录观测事件并触发复盘  
-   - `emit_event(...)` 写入 JSONL
-   - `task_finished` 时自动生成 postmortem
+   - `task_judged` 后覆盖更新同一份 postmortem（不新增文件）
 6. 记忆闭环  
    - 会话记忆压缩：写入消息后触发 `compact(...)`，保留近期消息并归档摘要  
    - 运行前默认不做系统记忆自动注入（当前实现）  
@@ -309,7 +310,7 @@ InDepth 采用“自上而下约束、自下而上反馈”的分层架构，不
 落盘位置：
 
 - 事件：`app/observability/data/events.jsonl`
-- 复盘：`observability-evals/<task_id>__<run_id>/postmortem_*.md`
+- 复盘：`observability-evals/<task_id>__<run_id>/postmortem.md`（单文件覆盖更新）
 - 运行时记忆（按类型聚合）：
   - 主 Agent：`db/runtime_memory_main_agent.db`
   - SubAgent：`db/runtime_memory_subagent_<role>.db`
@@ -317,7 +318,8 @@ InDepth 采用“自上而下约束、自下而上反馈”的分层架构，不
 
 自动化机制：
 
-- 当事件类型为 `task_finished`，自动触发 postmortem（best-effort，不阻塞主流程）
+- 当事件类型为 `task_finished` 或 `task_judged`，自动触发 postmortem（best-effort，不阻塞主流程）
+- 同一 `task_id+run_id` 始终写同一个 `postmortem.md`，后续阶段覆盖更新内容
 
 ---
 

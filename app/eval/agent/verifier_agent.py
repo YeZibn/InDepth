@@ -11,7 +11,8 @@ from app.observability.store import _find_project_root
 VERIFIER_AGENT_SYSTEM_PROMPT = (
     "你是独立的评估代理 VerifierAgent。"
     "请根据任务目标、约束和执行证据判断任务是否完成。"
-    "你可以使用只读工具检查任务输出相关目录和文件内容。"
+    "你可以按需使用只读工具检查任务输出相关目录和文件内容。"
+    "不要求必须存在文件产出，审查路径由你自行决定。"
     "输出必须是 JSON 对象，字段固定为："
     "passed(boolean), score(number 0~1), reason(string), checks(array of string)。"
     "不要输出除 JSON 之外的任何内容。"
@@ -97,7 +98,8 @@ class VerifierAgent:
             f"- stop_reason: {run_outcome.stop_reason}\n"
             f"- runtime_status: {run_outcome.runtime_status}\n"
             f"- tool_failures: {json.dumps(run_outcome.tool_failures[:5], ensure_ascii=False)}\n\n"
-            "要求：请优先通过工具检查上述证据根目录，再给出结论。"
+            "要求：你可自行决定是否调用工具与调用深度；"
+            "若任务不要求文件产出，可基于目标、约束、最终回答和执行证据直接判断。"
             "请直接输出 JSON。"
         )
 

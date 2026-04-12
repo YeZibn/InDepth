@@ -163,9 +163,21 @@ def generate_postmortem(
         ]
     )
 
-    ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     out_dir = output_dir or _default_postmortem_dir(task_id=task_id, run_id=run_id)
-    out_path = os.path.join(out_dir, f"postmortem_{ts}.md")
+    out_path = os.path.join(out_dir, "postmortem.md")
+
+    # Keep a single canonical postmortem file per task/run folder.
+    # Clean up legacy timestamped snapshots when rewriting.
+    try:
+        for name in os.listdir(out_dir):
+            if not name.startswith("postmortem_") or not name.endswith(".md"):
+                continue
+            legacy_path = os.path.join(out_dir, name)
+            if os.path.isfile(legacy_path):
+                os.remove(legacy_path)
+    except Exception:
+        pass
+
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
