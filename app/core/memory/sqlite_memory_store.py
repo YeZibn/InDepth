@@ -1,9 +1,19 @@
 import os
 import json
 import sqlite3
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.core.memory.context_compressor import ContextCompressor
+
+
+@dataclass
+class _MessageRow:
+    id: int
+    role: str
+    content: str
+    tool_call_id: str
+    tool_calls_json: Optional[str]
 
 
 class SQLiteMemoryStore:
@@ -113,7 +123,7 @@ class SQLiteMemoryStore:
                 elif summary_text:
                     out.append({"role": "system", "content": f"历史摘要:\n{summary_text}"})
 
-            rows = conn.execute(
+            rows_raw = conn.execute(
                 """
                 SELECT role, content, tool_call_id, tool_calls_json FROM messages
                 WHERE conversation_id = ?
@@ -122,14 +132,26 @@ class SQLiteMemoryStore:
                 """,
                 (conversation_id, max(limit, 1)),
             ).fetchall()
-        rows.reverse()
+        rows_raw.reverse()
+        rows = self._filter_orphan_tool_rows(
+            [
+                _MessageRow(
+                    id=0,
+                    role=str(r[0] or ""),
+                    content=r[1] or "",
+                    tool_call_id=str(r[2] or ""),
+                    tool_calls_json=(r[3] if len(r) > 3 else None),
+                )
+                for r in rows_raw
+            ]
+        )
         out.extend(
             [
                 self._normalize_message_row(
-                    role=r[0],
-                    content=r[1],
-                    tool_call_id=r[2],
-                    tool_calls_json=r[3],
+                    role=r.role,
+                    content=r.content,
+                    tool_call_id=r.tool_call_id,
+                    tool_calls_json=r.tool_calls_json,
                 )
                 for r in rows
             ]
@@ -171,26 +193,17 @@ class SQLiteMemoryStore:
         min_total: int,
     ) -> Dict[str, Any]:
         with self._connect() as conn:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()[0]
+            all_rows = self._load_conversation_rows(conn, conversation_id=conversation_id)
+            total = len(all_rows)
             if not force and total < max(min_total, 1):
                 return {"success": True, "applied": False, "reason": "below_threshold", "total": total}
 
-            cut = total - self.keep_recent
-            if cut <= 0:
+            # keep_recent is interpreted as "assistant turns", not raw message count.
+            cut_idx = self._compute_turn_based_cut_index(all_rows, keep_recent_turns=self.keep_recent)
+            if cut_idx <= 0:
                 return {"success": True, "applied": False, "reason": "nothing_to_cut", "total": total}
 
-            old_rows = conn.execute(
-                """
-                SELECT id, role, content, tool_call_id FROM messages
-                WHERE conversation_id = ?
-                ORDER BY id ASC
-                LIMIT ?
-                """,
-                (conversation_id, cut),
-            ).fetchall()
+            old_rows = all_rows[:cut_idx]
             if not old_rows:
                 return {"success": True, "applied": False, "reason": "empty_rows", "total": total}
 
@@ -219,14 +232,14 @@ class SQLiteMemoryStore:
                 mode=mode,
                 trigger=trigger,
                 before_messages=total,
-                after_messages=self.keep_recent,
+                after_messages=total - len(old_rows),
                 dropped_messages=len(old_rows),
             )
             if self.consistency_guard and not self.compressor.validate_consistency(existing_json, merged_json):
                 return {"success": False, "applied": False, "reason": "consistency_check_failed", "total": total}
 
             merged_text = self.compressor.summary_to_text(merged_json)
-            anchor_id = old_rows[-1][0]
+            anchor_id = old_rows[-1].id
 
             conn.execute(
                 """
@@ -267,7 +280,7 @@ class SQLiteMemoryStore:
                 "trigger": trigger,
                 "mode": mode,
                 "before_messages": total,
-                "after_messages": self.keep_recent,
+                "after_messages": total - len(old_rows),
                 "dropped_messages": len(old_rows),
                 "immutable_constraints_count": len(immutable_constraints),
                 "immutable_constraints_preview": [
@@ -288,13 +301,13 @@ class SQLiteMemoryStore:
             lines.append(f"- [{role}] {snippet}")
         return "\n".join(lines)
 
-    def _rows_to_compaction_messages(self, rows: List[tuple]) -> List[Dict[str, Any]]:
+    def _rows_to_compaction_messages(self, rows: List[_MessageRow]) -> List[Dict[str, Any]]:
         messages: List[Dict[str, Any]] = []
         for idx, row in enumerate(rows, 1):
-            msg_id = row[0]
-            role = row[1]
-            content = row[2]
-            tool_call_id = row[3] if len(row) > 3 else ""
+            msg_id = row.id
+            role = row.role
+            content = row.content
+            tool_call_id = row.tool_call_id
             messages.append(
                 {
                     "id": msg_id,
@@ -305,6 +318,83 @@ class SQLiteMemoryStore:
                 }
             )
         return messages
+
+    def _load_conversation_rows(
+        self,
+        conn: sqlite3.Connection,
+        conversation_id: str,
+    ) -> List[_MessageRow]:
+        rows = conn.execute(
+            """
+            SELECT id, role, content, tool_call_id, tool_calls_json
+            FROM messages
+            WHERE conversation_id = ?
+            ORDER BY id ASC
+            """,
+            (conversation_id,),
+        ).fetchall()
+        return [
+            _MessageRow(
+                id=int(r[0]),
+                role=str(r[1] or ""),
+                content=r[2] or "",
+                tool_call_id=str(r[3] or ""),
+                tool_calls_json=(r[4] if len(r) > 4 else None),
+            )
+            for r in rows
+        ]
+
+    def _compute_turn_based_cut_index(self, rows: List[_MessageRow], keep_recent_turns: int) -> int:
+        if keep_recent_turns <= 0 or not rows:
+            return 0
+        assistant_seen = 0
+        for idx in range(len(rows) - 1, -1, -1):
+            role = str(rows[idx].role or "").strip().lower()
+            if role == "assistant":
+                assistant_seen += 1
+                if assistant_seen >= keep_recent_turns:
+                    return idx
+        return 0
+
+    def _filter_orphan_tool_rows(self, rows: List[_MessageRow]) -> List[_MessageRow]:
+        valid_call_ids: set[str] = set()
+        for row in rows:
+            if str(row.role or "").strip().lower() != "assistant":
+                continue
+            parsed = self._parse_tool_calls_json(row.tool_calls_json)
+            for call in parsed:
+                call_id = str(call.get("id", "")).strip()
+                if call_id:
+                    valid_call_ids.add(call_id)
+
+        filtered: List[_MessageRow] = []
+        for row in rows:
+            role = str(row.role or "").strip().lower()
+            if role != "tool":
+                filtered.append(row)
+                continue
+            call_id = str(row.tool_call_id or "").strip()
+            if not call_id:
+                filtered.append(row)
+                continue
+            if call_id in valid_call_ids:
+                filtered.append(row)
+        return filtered
+
+    def _parse_tool_calls_json(self, raw: Optional[str]) -> List[Dict[str, Any]]:
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
 
     def _normalize_message_row(
         self,

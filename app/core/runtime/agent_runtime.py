@@ -18,6 +18,9 @@ RUNTIME_SYSTEM_PROMPT = """你是 InDepth 智能体运行时中的助手。
 
 优先使用模型原生 tool-calling 能力来调用工具。
 当无需调用工具时，直接输出最终回答文本。
+
+调用 `update_task_status` 时，`status` 只能使用：`pending`、`in-progress`、`completed`。
+注意：必须使用 `in-progress`（连字符），不要使用 `in_progress`（下划线）。
 """
 
 

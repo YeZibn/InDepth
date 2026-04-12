@@ -70,6 +70,105 @@ class _InMemoryStore:
 
 
 class RuntimeContextCompressionTests(unittest.TestCase):
+    def test_get_recent_messages_filters_orphan_tool_message(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_orphan.db")
+            store = SQLiteMemoryStore(db_file=db_path, keep_recent=2, summarize_threshold=3)
+            task_id = "orphan_task"
+
+            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_orphan")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_ok",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": "{\"text\":\"ok\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_ok")
+
+            recent = store.get_recent_messages(task_id, limit=20)
+            tool_call_ids = [str(m.get("tool_call_id", "")) for m in recent if m.get("role") == "tool"]
+            self.assertIn("call_ok", tool_call_ids)
+            self.assertNotIn("call_orphan", tool_call_ids)
+
+    def test_compact_final_keeps_recent_assistant_turns_together(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_turns.db")
+            store = SQLiteMemoryStore(db_file=db_path, keep_recent=2, summarize_threshold=3)
+            task_id = "turn_task"
+
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_a",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": "{\"text\":\"a\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_a")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_b",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": "{\"text\":\"b\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_b")
+            store.append_message(task_id, "assistant", "done")
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+
+            with store._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT role, content, tool_call_id, tool_calls_json
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+
+            self.assertEqual(len(rows), 3)
+            self.assertEqual(rows[0][0], "assistant")
+            self.assertIsNotNone(rows[0][3])  # tool_calls_json of the kept assistant turn
+            self.assertEqual(rows[1][0], "tool")
+            self.assertEqual(rows[1][2], "call_b")
+            self.assertEqual(rows[2][0], "assistant")
+
+            recent = store.get_recent_messages(task_id, limit=20)
+            for msg in recent:
+                if msg.get("role") != "tool":
+                    continue
+                call_id = str(msg.get("tool_call_id", "")).strip()
+                matched = False
+                for a in recent:
+                    if a.get("role") != "assistant":
+                        continue
+                    for call in a.get("tool_calls", []) or []:
+                        if str(call.get("id", "")).strip() == call_id:
+                            matched = True
+                            break
+                    if matched:
+                        break
+                self.assertTrue(matched)
+
     def test_sqlite_memory_store_compact_writes_structured_summary(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "runtime_memory.db")

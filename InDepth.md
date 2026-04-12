@@ -1,270 +1,193 @@
-# InDepth 运行时执行协议
+# InDepth 运行时执行协议（精简强化版）
 
-本协议定义 InDepth 在任务执行过程中的强制规则与推荐实践，目标是确保：
-- 可执行（规则可落地）
-- 可追溯（过程可审计）
-- 可复用（经验可沉淀）
+目标：让执行可落地、可审计、可复用。
 
-术语约定：
-- **MUST**：强制要求，不可违反
-- **SHOULD**：推荐执行，若不执行需记录理由
-- **MAY**：可选策略，按场景采用
+术语：
+- MUST：强制，禁止违反。
+- SHOULD：推荐，若不做需说明理由。
+- MAY：按场景可选。
 
----
+## 1. 启动门禁
 
-## 1. 任务启动协议
+任务开始前，Agent MUST 明确：
+1. 任务目标
+2. 时间基准（时区 + 截止时刻）
+3. 执行范围
+4. 约束条件
+5. 交付标准
+6. 验收口径
 
-### 1.1 前置校验
+若边界不清、指标不明、上下文缺失，MUST 先澄清，再执行。
 
-1. Agent **MUST** 在任务开始前明确以下信息：
-   - 任务目标
-   - 任务时间基准（例如 `UTC+8, 2024-12-25 23:59`）
-   - 执行范围
-   - 约束条件
-   - 交付标准
-   - 验收口径
+复杂任务启动时，SHOULD 同步完成：
+- 用 `todo_tool` 做任务拆解
+- 用记忆能力做历史经验检索
 
-2. 若存在边界不清、指标不明确、场景缺失，Agent **MUST** 先发起澄清，再进入执行。
+## 2. 时效任务强约束
 
-3. 对复杂任务，Agent **SHOULD** 在启动阶段同步完成：
-   - 任务拆解规划（`todo_tool`）
-   - 历史经验检索（`memory-knowledge-skill`）
+凡包含“最新/近期/动态/趋势/新闻”等语义，检索前 MUST 通过四项门禁：
+1. 时间基准已定义
+2. 问题清单已定义（3-5 个核心问题）
+3. 检索预算已定义（轮次或时长）
+4. 停止阈值已定义（何时信息足够）
 
----
+任一缺失：MUST NOT 启动检索。
 
-## 2. 时效性信息协议（前置强约束）
+输出 MUST 标注时间基准；MUST NOT 主观臆测“最新”。
 
-### 2.0 执行门禁（未通过不得执行）
+### 2.1 检索预算与止损
 
-对于任何含“最新/近期/动态/趋势/新闻/时效”语义的任务，以下门禁项 **MUST 全部满足** 后方可开始检索：
-1. 已定义时间基准（时区 + 截止时间）。
-2. 已定义问题清单（3-5 个核心问题）。
-3. 已定义检索预算（轮次或时间）。
-4. 已定义停止阈值（何时判定“信息已足够”）。
+1. 检索前 MUST 先写问题清单，禁止无目标泛搜。
+2. 检索前 MUST 设预算。默认上限：单子任务最多 3 轮或 10 分钟（先到即止）。
+3. 每轮 MUST 优先核心来源，再补充次级来源。
+4. 每个结论点 SHOULD 控制在 2-3 个高质量来源。
+5. 每轮结束 MUST 去重与裁剪，只保留与问题直接相关的信息。
+6. 核心问题覆盖且结论稳定时 MUST 立即停止扩搜。
+7. 超预算仍不充分时 MUST 输出：当前结论 + 信息缺口 + 后续建议。
+8. MUST NOT 因“可能还有更多信息”无限追加轮次。
+9. 若要突破预算，MUST 先记录：突破理由、追加预算、预期收益。
 
-任一门禁缺失时，Agent **MUST NOT** 启动检索动作。
+### 2.2 检索收敛格式
 
-1. 涉及时效内容（新闻、事件、行业动态）时，Agent **MUST** 先确定时间基准。
-2. 输出中 **MUST** 标注时间基准（例如 `UTC+8, YYYY-MM-DD HH:mm`）。
-3. Agent **MUST NOT** 主观臆测“最新”或“当前时间范围”。
+检索结果 MUST 统一为：
+1. 核心结论
+2. 关键证据
+3. 信息缺口
+4. 下一步建议
 
-### 2.1 检索预算与停止条件
+禁止无结构堆叠。
 
-为防止无限检索导致时间与资源浪费，Agent **MUST** 在检索类任务中执行以下限制：
+## 3. 拆解与执行边界
 
-1. **先定问题清单**：检索前必须先写出待回答的核心问题（建议 3-5 个），禁止无目标泛搜。  
-2. **先定预算**：开始检索前必须设定预算（时间或轮次）。  
-   - 默认硬上限：单个检索子任务 **最多 3 轮** 或 **最多 10 分钟**（先到即止）。  
-3. **分层检索**：每轮检索必须按“核心来源优先 -> 补充来源次之”进行，避免同时铺开大量低价值来源。  
-4. **来源上限**：单个结论点引用来源 **SHOULD** 控制在 2-3 个高质量来源，避免堆砌。  
-5. **去重与裁剪**：每轮结束必须做一次去重，删除重复事实与低相关信息，只保留与问题清单直接相关的内容。  
-6. **满足即停**：当核心问题已覆盖且结论稳定时，必须立即停止新增检索并转入输出。  
-7. **超预算止损**：达到预算仍未满足阈值时，必须停止继续扩搜，并输出“当前结论 + 信息缺口 + 后续建议”。  
-8. **禁止无限循环**：不得因“可能还有更多信息”而无限追加搜索轮次。  
-9. **升级条件**：若确需突破预算，Agent **MUST** 先记录“突破理由 + 追加预算 + 预期收益”，再进入下一轮。
-
-### 2.2 检索输出收敛格式
-
-为避免“内容过多但可用性低”，检索结果 **MUST** 按以下结构收敛：
-
-1. `核心结论`：直接回答问题清单。  
-2. `关键证据`：仅保留支撑结论的必要信息。  
-3. `信息缺口`：明确未覆盖或不确定项。  
-4. `下一步建议`：给出是否需要继续检索与推荐方向。  
-
-禁止输出无结构的大段信息堆叠。
-
----
-
-## 3. 任务拆解与执行边界协议
-
-### 3.1 拆解触发条件
-
-当满足任一条件时，Agent **MUST** 进行任务拆解：
-- 至少 3 个可识别执行步骤
+满足任一条件时，MUST 拆解任务：
+- 至少 3 个可识别步骤
 - 涉及跨文件或跨组件修改
-- 预计执行时长超过 5 分钟
-- 存在明确依赖关系或并行机会
+- 预计执行超过 5 分钟
+- 存在依赖或并行机会
 
-### 3.2 拆解粒度要求
+拆解结果 MUST 覆盖完整链路：
+- Agent 调度
+- 工具/API 调用
+- 数据/文件操作
+- 状态更新
+- 汇总交付
 
-拆解结果 **MUST** 覆盖完整执行链路，包括但不限于：
-- Agent 创建与调度动作
-- 工具调用/API 调用
-- 数据处理与文件操作
-- 状态更新与结果汇总
+执行边界：
+1. 后续动作 MUST 以子任务清单为执行依据。
+2. 清单外动作 MUST 先补入清单再执行。
+3. MUST NOT 跳过规划直接做未登记动作。
 
-### 3.3 执行边界要求
+## 4. SubAgent 协同
 
-1. 拆解完成后，后续动作 **MUST** 以子任务清单为唯一执行依据。每一步的执行动作 **MUST** 确定是否属于当前要执行的子任务。
-2. 未在清单中的新增动作，**MUST** 先补充到清单，再执行。
-3. Agent **MUST NOT** 在清单之外执行未规划动作。
----
+角色职责：
+- 主 Agent：调度、依赖管理、状态监控、汇总交付
+- SubAgent：执行已分配子任务
 
-## 4. SubAgent 协同协议
+主 Agent SHOULD NOT 在复杂任务中包揽全部动作（除非记录例外理由）。
 
-### 4.1 角色分工
+### 4.1 创建决策
 
-- 主 Agent：统筹调度、依赖管理、状态监控、结果汇总
-- SubAgent：执行分配的子任务
+执行前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
 
-主 Agent **SHOULD NOT** 包揽全部执行动作（除非满足例外条件并记录理由）。
+满足任一条件时，SHOULD 创建 SubAgent：
+- 存在 2 个及以上可并行子任务
+- 子任务边界清晰可独立推进
+- 子任务资源密集（大量检索/处理）
+- 子任务需要专门工具或领域能力
 
-### 4.2 SubAgent 决策规则
-
-主 Agent 在进入执行前 **MUST** 先做一次 SubAgent 评估，并记录结果（创建或不创建）。
-
-满足任一条件时，主 Agent **SHOULD** 创建 SubAgent：
-- 存在两个及以上可并行子任务
-- 子任务边界清晰、可独立推进
-- 子任务属于资源密集型（大量检索/数据处理）
-- 子任务需要特定领域能力或专门工具
-
-满足任一条件时，主 Agent **MAY** 不创建 SubAgent，但 **MUST** 记录理由：
-- 任务总规模很小（< 5 分钟）
+可不创建，但 MUST 记录理由：
+- 任务很小（< 5 分钟）
 - 拆分成本高于并行收益
-- 所需工具/上下文仅主 Agent 持有
-- 当前链路对时延极敏感，不适合增加协同开销
+- 关键工具/上下文仅主 Agent 可用
+- 当前链路对时延极敏感
 
-### 4.2.1 高频协同要求（todo-skill + SubAgent）
+### 4.2 高频协同要求（todo + SubAgent）
 
-为提升吞吐与稳定性，主 Agent 在复杂任务中 **SHOULD 高频使用** `todo-skill` 与 SubAgent 的组合调度，而非“先大段执行、后补状态”。
+1. 拆解完成后，MUST 先把“创建/启动 SubAgent”写入 todo，再执行。
+2. 并行流 SHOULD 拆成两步：
+   - 创建 SubAgent 配置
+   - 启动 SubAgent 执行
+3. 主 Agent MUST 在关键节点同步状态：启动、完成、阻塞、恢复。
+4. 不创建 SubAgent 时 MUST 记录原因。
+5. 与 Agent 有关的配置动作 MUST 显式入 todo（角色、工具、I/O 约束、验收口径、并发参数）。
 
-执行要求：
-1. 完成任务拆解后，主 Agent **MUST** 先把“创建/启动 SubAgent”写入子任务清单，再执行。
-2. 每个可并行工作流 **SHOULD** 拆成两步：
-   - `创建 SubAgent 配置`
-   - `启动 SubAgent 执行子任务`
-3. 主 Agent **MUST** 在每个关键节点同步状态（启动、完成、阻塞、恢复）。
-4. 若某子任务无需 SubAgent，主 Agent **MUST** 记录“不创建原因”。
-5. 与 Agent 相关的配置动作 **MUST** 被显式纳入 todo 子任务，包括但不限于：
-   - Agent 角色/职责定义
-   - 工具与权限配置
-   - 输入输出约束与验收标准配置
-   - 并发/调度参数配置
-   严禁将上述配置动作作为隐式操作或跳过记录直接执行。
+### 4.3 角色路由（显式必填）
 
-### 4.3 协同模板与示例（推荐）
-
-#### 模板 A：并行检索 + 中央汇总
-
-```
-任务：行业动态调研报告
-├── Task 1: 创建全球信息检索 SubAgent 配置
-├── Task 2: 启动 SubAgent-A 执行全球检索
-├── Task 3: 创建国内信息检索 SubAgent 配置
-├── Task 4: 启动 SubAgent-B 执行国内检索
-├── Task 5: 创建细分赛道检索 SubAgent 配置
-├── Task 6: 启动 SubAgent-C 执行赛道检索
-├── Task 7: 主 Agent 汇总去重（依赖 2,4,6）
-├── Task 8: 主 Agent 归纳分析（依赖 7）
-└── Task 9: 主 Agent 输出交付物（依赖 8）
-```
-
-执行依据：
-- `app/tool/sub_agent_tool/sub_agent_tool.py`
-
-### 4.4 SubAgent 角色路由（显式必填）
-
-当调用 `create_sub_agent` 时，主 Agent **MUST** 在调用前先完成角色路由，并显式传入 `role`。  
-系统 **MUST NOT** 使用 `auto` 或隐式路由创建 SubAgent。
+调用 `create_sub_agent` 前，MUST 先确定并显式传入 `role`。
+MUST NOT 使用 `auto` 或隐式路由。
 
 允许角色：
-1. `researcher`
-2. `builder`
-3. `reviewer`
-4. `verifier`
-5. `general`
+- `researcher`
+- `builder`
+- `reviewer`
+- `verifier`
+- `general`
 
-### 4.5 角色创建时机（触发矩阵）
-
-主 Agent **SHOULD** 按以下时机创建角色：
-
-1. `researcher`：需要外部检索、信息归并、证据补全，且信息不确定性高。  
-2. `builder`：存在明确实现子任务（代码/文件/数据处理）且可独立交付中间结果。  
-3. `reviewer`：进入高风险变更、上线前检查、关键交付前质量把关阶段。  
-4. `verifier`：需要独立验收任务完成度、证据完整性或约束满足度。  
-5. `general`：任务边界清晰但不属于上述专门角色，或作为临时兜底执行者。
+时机建议：
+- `researcher`：外部检索、证据补全
+- `builder`：实现类子任务（代码/文件/数据）
+- `reviewer`：高风险变更前质量把关
+- `verifier`：独立验收与约束核验
+- `general`：通用或兜底执行
 
 创建约束：
-1. `reviewer` 与 `verifier` **SHOULD NOT** 负责实现性改动。  
-2. 同一子任务 **MUST NOT** 同时分配给多个角色重复执行（除非明确是交叉验证）。  
-3. 若创建 `reviewer` / `verifier`，主 Agent **MUST** 在 todo 中记录其验收口径与输出格式。  
-4. 系统记忆检索工具 `search_memory_cards` 仅推荐挂载给 `researcher` / `reviewer` / `verifier`，`builder` / `general` 默认不挂载以降低噪音。  
+1. `reviewer` 与 `verifier` SHOULD NOT 做实现改动。
+2. 同一子任务 MUST NOT 重复分配给多个角色（交叉验证除外）。
+3. 创建 `reviewer/verifier` 时，MUST 在 todo 写清验收口径与输出格式。
+4. `search_memory_cards` 默认仅推荐给 `researcher/reviewer/verifier`。
 
----
+## 5. 状态管理与审计
 
-## 5. 状态管理与审计协议
+状态更新 MUST 真实、及时：
+1. 开始执行：`pending -> in-progress`
+2. 执行完成：`completed`
+3. 出现阻塞：MUST 回写状态并标注阻塞原因
 
-### 5.1 状态更新
+执行依据：`app/tool/todo_tool/todo_tool.py`
 
-1. 子任务进入执行时，状态 **MUST** 从 `pending` 更新为 `in-progress`。
-2. 子任务完成时，状态 **MUST** 更新为 `completed`。
-3. 发现阻塞时，状态 **MUST** 按事实回退并标注阻塞原因。
+## 6. 系统记忆（Memory / Knowledge）
 
-执行依据：
-- `app/tool/todo_tool/todo_tool.py`
----
+最小目标：可检索、可触发、可评估。禁止文档堆积。
 
-## 6. 系统记忆协议（Memory / Knowledge）
+### 6.1 存储与入口
 
-### 6.1 最小目标
+1. 统一载体：`memory_card`
+2. 存储：`db/system_memory.db`（主表 `memory_card`）
+3. 运行时会话记忆 MUST 按 Agent 类型聚合落盘：
+   - 主 Agent：`db/runtime_memory_main_agent.db`
+   - SubAgent：`db/runtime_memory_subagent_<role>.db`
+4. 录入/查询统一入口：`memory_card_cli.py`（`upsert-json/search/due`）
 
-系统记忆只做三件事：可检索、可触发、可评估。禁止退化为纯文档堆积。
+### 6.2 触发与注入
 
-### 6.2 存储与入口（强约束）
+1. 运行中可在 `pull_request/pre_release/postmortem` 阶段调用 `capture_runtime_memory_candidate`
+2. `task_finished` 后，框架 MUST 强制沉淀一次 `postmortem` 记忆
+3. Runtime 当前默认不做模型请求前自动注入
+4. 若启用注入，MUST 保持“未命中不阻塞、内容摘要化”
 
-1. 统一载体：`memory_card`。  
-2. 存储位置：`db/system_memory.db`，主表 `memory_card`。  
-3. 运行时会话记忆 **MUST** 按 Agent 类型聚合落盘：主 Agent 使用 `db/runtime_memory_main_agent.db`，SubAgent 使用 `db/runtime_memory_subagent_<role>.db`。  
-4. 录入/查询唯一入口：`memory_card_cli.py`（`upsert-json` / `search` / `due`）。
+### 6.3 观测与治理
 
-执行依据：
-- `app/core/memory/system_memory_store.py`
-- `db/system_memory_schema.sql`
-- `app/skills/memory-knowledge-skill/scripts/memory_card_cli.py`
+记忆链路 MUST 记录：
+- `memory_triggered`
+- `memory_retrieved`
+- `memory_decision_made`
 
-### 6.3 触发与注入（运行约束）
+事件 MUST 入库，并周期跟踪：命中率、采纳率、噪音率、新鲜度、到期治理。
 
-1. 运行中记忆捕获采用工具触发：主 Agent 可在 `pull_request` / `pre_release` / `postmortem` 等阶段调用 `capture_runtime_memory_candidate`。  
-2. `task_finished` 后框架 **MUST** 执行一次任务记忆强制沉淀（`postmortem` stage）。  
-3. Runtime 当前默认 **不做** 模型请求前的系统记忆自动注入。  
-4. 若后续启用注入，必须保持“未命中不阻塞、内容摘要化”。
+## 7. Skill 主动选择
 
-执行依据：
-- `app/core/runtime/agent_runtime.py`
-- `app/tool/runtime_memory_harvest_tool.py`
-- `app/observability/events.py`
+1. 任务开始时，Agent MUST 主动判断所需能力，不等待用户提示。
+2. 复杂任务 SHOULD 组合多个能力模块。
+3. 关键能力决策 MUST 可追溯（为何调用/为何不调用）。
 
-### 6.4 观测与治理（评估约束）
+## 8. 最小执行闭环
 
-1. 记忆链路 **MUST** 记录事件：`memory_triggered` / `memory_retrieved` / `memory_decision_made`。  
-2. 事件 **MUST** 落库到对应 SQLite 表。  
-3. 团队 **MUST** 周期跟踪：命中率、采纳率、噪音率、新鲜度、到期治理。
+复杂任务至少完成以下闭环：
+1. 前置校验
+2. 任务拆解
+3. SubAgent 评估
+4. 执行与状态同步
+5. 结果汇总与交付
+6. 复盘沉淀
 
-执行依据：
-- `app/observability/schema.py`
-- `app/observability/store.py`
-- `app/skills/memory-knowledge-skill/references/metrics_sqlite.sql`
-
----
-
-## 7. Skill 主动选择协议
-
-1. Agent **MUST** 在任务开始阶段主动判断所需能力，不等待用户提示。
-2. Agent **SHOULD** 组合使用多个能力模块完成复杂任务。
-3. Agent **MUST** 记录关键能力调用决策（为何调用/为何不调用）。
-
----
-
-## 8. 最小执行闭环（Checklist）
-
-每个复杂任务至少完成以下闭环：
-1. 前置校验完成
-2. 任务拆解完成
-3. SubAgent 评估完成
-4. 执行与状态同步完成
-5. 结果汇总与交付完成
-6. 复盘沉淀完成
-
-若任一步骤缺失，Agent **MUST** 在交付前补齐或说明原因。
+任一步缺失，MUST 在交付前补齐或说明原因。
