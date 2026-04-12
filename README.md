@@ -1,251 +1,111 @@
-# InDepth 技术架构说明
+# InDepth
 
-InDepth 是一个以“可执行、可观测、可验证”为目标的本地 Agent Runtime 项目。  
-它不是对话壳，而是一个包含运行时调度、工具调用、子代理协同、结果验证、观测复盘与记忆闭环的工程化系统。
+InDepth 是一个面向本地执行场景的 Agent Runtime，强调三件事：
+- 可执行：把对话转成可控执行流程（tool-calling + runtime loop）
+- 可观测：全链路事件、时间线、复盘报告
+- 可验证：区分"回答完成"和"任务完成"
 
----
+## 1. 背景与动机
 
-## 1. 项目目标
+### 1.1 问题
 
-本项目主要解决 3 个工程问题：
+LLM 对话界面天然适合"问-答"模式，但在实际工作中，我们需要的往往不是一段回答，而是**一个可交付的结果**：
 
-1. 如何把 LLM 对话转成可执行流程（Tool Calling + Runtime Loop）
-2. 如何让执行过程可审计（事件埋点 + 指标聚合 + 时间线）
-3. 如何让“回答完成”与“任务完成”区分开（Eval + VerifierAgent）
+| 对话模式 | 实际需求 |
+|---------|---------|
+| "帮我写一段代码" | 写完、跑通、通过 code review |
+| "帮我分析竞品" | 输出结构化报告、附上数据来源 |
+| "帮我做这个功能" | 代码改好、测试通过、可合并 |
 
-对应代码主线：
+问题在于：对话系统无法区分"回答像完成了"和"任务真完成了"。
 
-- 运行时：`app/core/runtime/*`
-- 工具体系：`app/core/tools/*` + `app/tool/*`
-- 评估体系：`app/eval/*`
-- 可观测性：`app/observability/*`
-- 记忆体系：`app/core/memory/*`
+### 1.2 解决思路
 
----
+InDepth 的核心命题：**把"任务完成"变成一个可验证、可复盘、可积累的工程过程**。
 
-## 2. 快速开始
+- **可执行**：不只给答案，要让 AI 能真正调用工具、修改文件、执行命令
+- **可验证**：不只靠"看起来对"，要有硬判定（stop reason、tool failure）和软判定（LLM judge）
+- **可观测**：不只记录最终输出，要记录完整执行路径（事件流、时间线）
+- **可积累**：不只一次性的对话，要在多次运行中沉淀经验（memory card）
 
-### 2.1 三步跑通
+### 1.3 核心区别
+
+| 维度 | 对话式 AI | InDepth |
+|------|----------|---------|
+| 执行能力 | 文本生成 | tool-calling + 真实环境操作 |
+| 结果验证 | 主观判断 | deterministic verifier + LLM judge |
+| 执行追踪 | 无 | 全链路事件 + 时间线 |
+| 经验复用 | 无 | system memory + 经验卡 |
+
+## 2. 设计哲学
+
+InDepth 的设计遵循以下原则：
+
+### 2.1 协议先行（Protocol First）
+
+**定义边界比执行更重要**。在开始干活之前，先把"什么算成功"写清楚。
+
+- `InDepth.md` 是任务的宪法，所有参与者（Runtime、Agent、工具层）都必须遵循
+- 验收标准必须是明确的、可判定的，而不是模糊的"看起来不错"
+
+### 2.2 验证与执行分离（Separation of Execution and Judgement）
+
+**做的人和判断的人要分开**。
+
+- 执行层（Runtime + Tools）负责把事情做出来
+- 验证层（EvalOrchestrator）负责判断是否真完成了
+- 两者独立运作，互不干扰
+
+### 2.3 可审计（Auditability）
+
+**每一个决定都要有迹可循**。
+
+- 所有关键事件（agent started、tool called、task finished）都写入事件流
+- 每次判定都有 breakdown，说明为什么 pass/partial/fail
+- 每次运行都生成 postmortem，记录学到了什么
+
+### 2.4 经验可积累（Learning from Experience）
+
+**不要每次都从零开始**。
+
+- Runtime memory 压缩历史，避免上下文爆炸
+- System memory 沉淀经验卡，供后续任务检索
+- 记忆事件（triggered/retrieved/decision）进入观测链路
+
+### 2.5 子代理角色化（Role-based SubAgent）
+
+**专业的人做专业的事**。
+
+- `researcher`：调研、检索、资料收集
+- `builder`：开发、代码实现、修复
+- `reviewer`：审查、风险评估、回归检查
+- `verifier`：验证、测试、lint/typecheck
+- `general`：默认角色
+
+## 3. 核心能力
+
+- Runtime 编排：多轮推理、工具调用、收敛控制
+- Tool 体系：统一声明、注册、参数校验、调用封装
+- SubAgent 协同：角色化子代理与并行执行
+- Eval 判定：deterministic verifier + 可选 LLM judge
+- Observability：事件落盘、指标聚合、postmortem
+- Memory 闭环：运行时压缩摘要 + 系统经验卡沉淀
+
+## 4. 快速开始
+
+### 2.1 安装与运行
 
 1. 安装依赖
    - `pip install -r requirements.txt`
 2. 配置模型环境变量
-   - `LLM_MODEL_ID` / `LLM_MODEL_MINI_ID`
-   - `LLM_API_KEY` / `LLM_BASE_URL`
-3. 启动 Runtime CLI
+   - `LLM_MODEL_ID`
+   - `LLM_MODEL_MINI_ID`
+   - `LLM_API_KEY`
+   - `LLM_BASE_URL`
+3. 启动 CLI
    - `python app/agent/runtime_agent.py`
 
-### 2.2 参考文档（Refer）
-
-README 仅保留总览，具体技术实现细节统一放在 `doc/refer/`：
-
-| 文档 | 说明 |
-|------|------|
-| [总索引](doc/refer/README.md) | 文档索引与阅读顺序 |
-| [架构参考](doc/refer/architecture-reference.md) | 系统整体架构、模块设计、技术选型 |
-| [Runtime](doc/refer/runtime-reference.md) | AgentRuntime 主循环、收敛逻辑 |
-| [记忆模块](doc/refer/memory-reference.md) | 运行时压缩、结构化摘要、系统记忆 |
-| [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
-| [Eval](doc/refer/eval-reference.md) | 任务评估模型、verifier 链路 |
-| [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
-| [Agent 协同](doc/refer/agent-collaboration-reference.md) | 主从 Agent 协同、角色路由 |
-| [配置](doc/refer/config-reference.md) | 模型配置、压缩配置、环境变量 |
-
-### 2.3 实现级参考（概要）
-
-以下为当前实现对齐的核心事实，详细说明见 `doc/refer/`。
-
-1. Runtime（`app/core/runtime/agent_runtime.py`）
-   - 主循环：`system + history + user -> model -> tool_calls/stop -> 收敛`
-   - 支持 run 内压缩触发（轮次 / token / 工具突发）与 run 末 `compact_final()`
-   - 结束后事件顺序：`task_finished -> verification_* -> task_judged`
-   - 任务结束强制沉淀一条 `postmortem` stage 的系统记忆卡
-
-2. Memory（`app/core/memory/*`）
-   - Runtime memory：`messages` + `summaries(summary_json)` 双表
-   - 压缩器：`ContextCompressor(v1)` 维护 `task_state/constraints/decisions/artifacts/anchors`
-   - 一致性守护：可阻断压缩（`COMPACTION_CONSISTENCY_GUARD=true`）
-   - System memory：`db/system_memory.db::memory_card`，支持 upsert/search/due-review
-
-3. Tools（`app/core/tools/*` + `app/tool/*`）
-   - 标准链路：`@tool -> registry -> validator -> invoke`
-   - 默认工具包含：bash、文件读写、时间、search guard、subagent、todo、runtime memory harvest
-   - 直接搜索工具（`ddg_search/url_search/baidu_search`）已废弃，统一走 search guard
-   - SubAgent 角色工具隔离：`researcher/builder/reviewer/verifier/general` 能力不同
-
-4. Eval（`app/eval/*`）
-   - 默认 deterministic verifiers：`StopReasonVerifier + ToolFailureVerifier`
-   - 可选 LLM judge：`VerifierAgent`（软评分，不作为硬失败）
-   - 判定输出：`RunJudgement(pass/partial/fail, overclaim, verifier_breakdown)`
-
-5. Observability（`app/observability/*`）
-   - 事件统一写入 `app/observability/data/events.jsonl`
-   - 记忆事件额外写入 SQLite：`memory_trigger/retrieval/decision` 三表
-   - `task_finished` 与 `task_judged` 会自动触发 postmortem 生成/覆盖
-   - 输出路径：`observability-evals/<task_id>__<run_id>/postmortem.md`
-
-6. Agent 协同（`app/agent/*` + `app/tool/sub_agent_tool/*`）
-   - `create_sub_agent` 强制显式 role 路由
-   - `reviewer/verifier` 创建时必须提供 `acceptance_criteria` 与 `output_format`
-   - `SubAgentManager` 提供同步、异步、并行执行与生命周期管理
-
-7. Config（`app/config/runtime_config.py`）
-   - 模型配置必填：`LLM_MODEL_ID/LLM_MODEL_MINI_ID/LLM_API_KEY/LLM_BASE_URL`
-   - 压缩配置可调：`ENABLE_MID_RUN_COMPACTION` 与 `COMPACTION_*` 系列阈值
-   - Provider 采用 OpenAI-compatible `/chat/completions` 协议并带重试退避
-
----
-
-## 3. 分层架构总览
-
-### 架构可视化（图片版）
-
-#### 1) 总体架构图
-
-![InDepth Architecture](doc/assets/readme/architecture-overview.svg)
-
-#### 2) Runtime 执行流程图
-
-![Runtime Flow](doc/assets/readme/runtime-flow.svg)
-
-#### 3) 记忆与观测闭环图
-
-![Memory Loop](doc/assets/readme/memory-loop.svg)
-
-### 一趟任务的生命周期
-
-```
-用户 ──▶ 协议定规矩 ──▶ 调度中心指挥 ──▶ 执行者干活 ──▶ 检查官验收 ──▶ 档案员归档
-```
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│   L1 协议层  ──▶ 指挥官（定战略、立规矩）                                   │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │  InDepth.md                                                      │   │
-│   │                                                                   │   │
-│   │  "做什么？做到哪算完成？有什么风险要守？"                            │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│   L2 编排层  ──▶ 调度中心（循环推理、调用工具）                             │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │  AgentRuntime                                                     │   │
-│   │                                                                   │   │
-│   │  system + history + user ──▶ 模型推理 ──▶ tool_calls / stop       │   │
-│   │                                   ▲                               │   │
-│   │                                   │ 循环                         │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│   L3 能力层  ──▶ 执行者（各司其职的工具人）                                │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │  Tools (bash/文件/搜索/SubAgent/Todo...)                         │   │
-│   │                                                                   │   │
-│   │  SubAgentManager ──▶ researcher / builder / reviewer / verifier   │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│   L4 验证层  ──▶ 检查官（判定成败）                                        │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │  EvalOrchestrator                                                │   │
-│   │                                                                   │   │
-│   │  StopReasonVerifier ──▶ ToolFailureVerifier ──▶ LLM Judge        │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│   L5 记忆层  ──▶ 档案员（沉淀经验）                                        │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │  RuntimeMemory (压缩) + SystemMemory (经验卡)                    │   │
-│   │                                                                   │   │
-│   │  messages ──▶ 压缩 ──▶ summary_json                              │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 3.1 增强版 Mermaid 图
-
-```mermaid
-flowchart TB
-    subgraph L1 ["🛡️ 指挥官 L1：协议层"]
-        direction TB
-        P["InDepth.md<br/>任务目标 + 验收标准 + 风险门禁"]
-    end
-
-    subgraph L2 ["⚙️ 调度中心 L2：编排层"]
-        direction TB
-        R["AgentRuntime<br/>推理循环 + 工具调用"]
-        R --> E["EvalOrchestrator"]
-    end
-
-    subgraph L3 ["🛠️ 执行者 L3：能力层"]
-        direction TB
-        T["ToolRegistry"]
-        T --> B["bash / 文件 / 时间"]
-        T --> S["SubAgentManager"]
-        S --> SR["researcher"]
-        S --> SB["builder"]
-        S --> SV["verifier"]
-        S --> SRv["reviewer"]
-    end
-
-    subgraph L4 ["🔍 检查官 L4：验证层"]
-        direction TB
-        V1["StopReasonVerifier"]
-        V2["ToolFailureVerifier"]
-        V3["LLM Judge (VerifierAgent)"]
-    end
-
-    subgraph L5 ["📚 档案员 L5：记忆层"]
-        direction TB
-        M1["RuntimeMemory<br/>消息压缩 + 结构化摘要"]
-        M2["SystemMemory<br/>经验卡 + 知识检索"]
-    end
-
-    U["👤 用户"] --> P
-    P --> R
-    R --> T
-    R --> E
-    E --> V1
-    E --> V2
-    E --> V3
-    R --> M1
-    M1 --> M2
-
-    style L1 fill:#ffcccc
-    style L2 fill:#ccffcc
-    style L3 fill:#ccccff
-    style L4 fill:#ffffcc
-    style L5 fill:#ffccff
-```
-
-### 3.2 各层角色卡片
-
-```
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   🛡️ 指挥官 L1   │  │  ⚙️ 调度中心 L2  │  │   🛠️ 执行者 L3   │
-├─────────────────┤  ├─────────────────┤  ├─────────────────┤
-│ 位置: InDepth.md│  │ 位置: agent/*   │  │ 位置: tool/*   │
-│                 │  │        runtime/*│  │        skills/* │
-│ 职责:           │  │ 职责:           │  │ 职责:           │
-│ · 定任务目标    │  │ · 管理推理循环   │  │ · 提供具体能力  │
-│ · 定验收标准    │  │ · 调用工具       │  │ · SubAgent编排  │
-│ · 定风险门禁    │  │ · 收敛判断       │  │ · 工具隔离      │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-
-┌─────────────────┐  ┌─────────────────┐
-│   🔍 检查官 L4   │  │   📚 档案员 L5   │
-├─────────────────┤  ├─────────────────┤
-│ 位置: eval/*   │  │ 位置: memory/* │
-│        observability/*│  │        db/*      │
-│ 职责:           │  │ 职责:           │
-│ · 判定任务成功  │  │ · 压缩会话记忆  │
-│ · 验证工具执行  │  │ · 沉淀经验卡    │
-│ · LLM 软评分    │  │ · 检索知识      │
-└─────────────────┘  └─────────────────┘
-```
-
----
-
-## 4. 目录概览
+### 2.2 关键目录
 
 ```text
 app/
@@ -259,10 +119,95 @@ app/
   tool/                  # 具体工具实现
   eval/                  # 任务评估体系
   observability/         # 观测、指标、复盘
-  skills/                # 项目内技能
-db/                      # runtime + system memory sqlite 文件
-todo/                    # todo markdown 任务文件
-work/                    # 业务交付物输出
-observability-evals/     # 评估/复盘输出
-InDepth.md               # 运行协议（行为约束）
+db/                      # runtime/system memory sqlite
+todo/                    # 任务拆解文件
+work/                    # 交付物输出
+observability-evals/     # 评估与复盘输出
+InDepth.md               # 运行协议
 ```
+
+## 5. 分层架构
+
+InDepth 的执行过程可以理解为一条连续的生产线：先定义边界，再推进执行；先完成结果，再验证结果；最后把过程沉淀为可复用经验。
+
+1. 协议层（L1）
+   - 作用：在执行前定义“什么是成功”，避免后续流程方向漂移。
+   - 关键模块：`InDepth.md`。
+   - 主要内容：
+     - 任务目标与范围边界
+     - 时效性信息门禁（时间基准、检索预算、停止阈值）
+     - 子任务拆解与 SubAgent 协同规则
+     - 结果验收口径与风险约束
+   - 输出：一组可执行的规则约束，供 Runtime 与工具层遵循。
+
+2. 编排层（L2）
+   - 作用：把用户输入转换为稳定的“推理-执行-收敛”循环。
+   - 关键模块：`app/core/runtime/agent_runtime.py`。
+   - 主要流程：
+     - 组装消息上下文（system + history + user）
+     - 调模型并解析 `finish_reason`
+     - 执行 tool-calling 分支并回写工具结果
+     - 处理 stop/length/content_filter 等收敛分支
+     - 在运行中触发上下文压缩，在结束时执行最终压缩
+   - 输出：`final_answer`、`stop_reason`、运行状态，以及后续评估所需执行证据。
+
+3. 能力层（L3）
+   - 作用：把抽象计划落成具体动作（命令、文件、检索、任务编排）。
+   - 关键模块：
+     - 工具框架：`app/core/tools/*`
+     - 工具实现：`app/tool/*`
+     - 子代理体系：`app/agent/sub_agent.py` + `app/tool/sub_agent_tool/*`
+   - 主要能力：
+     - 基础执行：bash、读写文件、时间工具
+     - 检索执行：search guard 门禁下的受控搜索
+     - 任务编排：todo 工具（创建子任务、状态流转、依赖约束）
+     - 并行协同：SubAgent 角色化执行（researcher/builder/reviewer/verifier）
+   - 输出：结构化工具结果、子任务状态变化、可追溯执行日志。
+
+4. 验证层（L4）
+   - 作用：把“回答像完成”与“任务真完成”分离。
+   - 关键模块：`app/eval/*`（`EvalOrchestrator`、`verifiers`、`VerifierAgent`）。
+   - 判定机制：
+     - 硬判定：`StopReasonVerifier`、`ToolFailureVerifier`
+     - 软判定：可选 LLM Judge（评分与理由）
+     - 最终输出：`pass / partial / fail` + `overclaim` + breakdown
+   - 输出：`task_judged` 判定结果（系统级最终判定依据）。
+
+5. 记忆层（L5）
+   - 作用：让系统具备“经验可积累、后续可复用”的长期能力。
+   - 关键模块：
+     - Runtime memory：`app/core/memory/sqlite_memory_store.py`
+     - 压缩器：`app/core/memory/context_compressor.py`
+     - System memory：`app/core/memory/system_memory_store.py`
+   - 主要机制：
+     - 运行中压缩历史消息为 `summary_json`（保留关键约束/决策/产物锚点）
+     - 任务结束强制沉淀经验卡（`memory_card`）
+     - 记忆事件（triggered/retrieved/decision）进入 observability 链路
+   - 输出：结构化历史摘要、系统经验卡、可统计的记忆治理数据。
+
+### 5.1 System Architecture
+
+![InDepth System Architecture](doc/assets/readme/architecture-paper-style.svg)
+
+## 6. 参考文档
+
+详细实现说明在 `doc/refer/`：
+
+| 文档 | 说明 |
+|------|------|
+| [总索引](doc/refer/README.md) | 文档索引与阅读顺序 |
+| [Runtime](doc/refer/runtime-reference.md) | AgentRuntime 主循环、收敛逻辑 |
+| [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
+| [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
+| [Eval](doc/refer/eval-reference.md) | 判定模型、verifier 链路 |
+| [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
+| [Agent 协同](doc/refer/agent-collaboration-reference.md) | 主从 Agent 协同与角色路由 |
+| [配置](doc/refer/config-reference.md) | 模型配置、压缩配置、环境变量 |
+
+## 7. 当前实现事实（简要）
+
+- Runtime：`task_finished` 先于 `task_judged`，最终判定以 `task_judged` 为准
+- Memory：run 内可压缩，run 末强制 `compact_final()`；任务结束强制沉淀 postmortem 记忆卡
+- Tools：默认启用 search guard；直接搜索工具已弃用
+- Eval：默认 `StopReasonVerifier + ToolFailureVerifier`，可追加 LLM judge
+- Observability：事件写入 `app/observability/data/events.jsonl`，并生成 `observability-evals/*/postmortem.md`
