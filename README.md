@@ -39,15 +39,17 @@ InDepth 是一个以“可执行、可观测、可验证”为目标的本地 Ag
 
 README 仅保留总览，具体技术实现细节统一放在 `doc/refer/`：
 
-- 总索引：`doc/refer/README.md`
-- 架构参考：`doc/refer/architecture-reference.md`
-- 记忆模块：`doc/refer/memory-reference.md`
-- Runtime：`doc/refer/runtime-reference.md`
-- Tools：`doc/refer/tools-reference.md`
-- Eval：`doc/refer/eval-reference.md`
-- Observability：`doc/refer/observability-reference.md`
-- Agent 协同：`doc/refer/agent-collaboration-reference.md`
-- 配置：`doc/refer/config-reference.md`
+| 文档 | 说明 |
+|------|------|
+| [总索引](doc/refer/README.md) | 文档索引与阅读顺序 |
+| [架构参考](doc/refer/architecture-reference.md) | 系统整体架构、模块设计、技术选型 |
+| [Runtime](doc/refer/runtime-reference.md) | AgentRuntime 主循环、收敛逻辑 |
+| [记忆模块](doc/refer/memory-reference.md) | 运行时压缩、结构化摘要、系统记忆 |
+| [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
+| [Eval](doc/refer/eval-reference.md) | 任务评估模型、verifier 链路 |
+| [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
+| [Agent 协同](doc/refer/agent-collaboration-reference.md) | 主从 Agent 协同、角色路由 |
+| [配置](doc/refer/config-reference.md) | 模型配置、压缩配置、环境变量 |
 
 ### 2.3 实现级参考（概要）
 
