@@ -1,106 +1,99 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1080" viewBox="0 0 1800 1080">
   <defs>
     <style>
-      .title { font: 700 42px 'Times New Roman', 'Nimbus Roman', serif; fill: #111827; }
-      .subtitle { font: 400 22px 'Times New Roman', 'Nimbus Roman', serif; fill: #374151; }
-      .panel-title { font: 700 24px 'Times New Roman', serif; fill: #111827; }
-      .label { font: 700 19px 'Times New Roman', serif; fill: #111827; }
-      .text { font: 400 17px 'Times New Roman', serif; fill: #1f2937; }
-      .small { font: 400 15px 'Times New Roman', serif; fill: #4b5563; }
-      .box { fill: #ffffff; stroke: #374151; stroke-width: 1.8; rx: 14; ry: 14; }
-      .group { fill: #f9fafb; stroke: #9ca3af; stroke-width: 1.6; rx: 16; ry: 16; }
+      .title { font-family: 'Times New Roman', serif; font-size: 40px; font-weight: 700; fill: #111827; }
+      .subtitle { font-family: 'Times New Roman', serif; font-size: 21px; font-weight: 400; fill: #374151; }
+      .panelTitle { font-family: 'Times New Roman', serif; font-size: 24px; font-weight: 700; fill: #111827; }
+      .h { font-family: 'Times New Roman', serif; font-size: 19px; font-weight: 700; fill: #111827; }
+      .t { font-family: 'Times New Roman', serif; font-size: 17px; font-weight: 400; fill: #1f2937; }
+      .s { font-family: 'Times New Roman', serif; font-size: 15px; font-weight: 400; fill: #4b5563; }
+      .panel { fill: #f9fafb; stroke: #9ca3af; stroke-width: 1.6; }
+      .box { fill: #ffffff; stroke: #374151; stroke-width: 1.8; }
       .arrow { stroke: #111827; stroke-width: 2.2; fill: none; marker-end: url(#arr); }
       .dash { stroke-dasharray: 7 6; }
     </style>
-    <marker id="arr" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
-      <path d="M0,0 L11,5.5 L0,11 z" fill="#111827"/>
+    <marker id="arr" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#111827"/>
     </marker>
   </defs>
 
-  <rect width="1800" height="1080" fill="#ffffff"/>
+  <rect x="0" y="0" width="1800" height="1080" fill="#ffffff"/>
 
-  <text x="80" y="78" class="title">InDepth: Execution-to-Memory Closed Loop Architecture</text>
-  <text x="82" y="112" class="subtitle">A layered local agent runtime for controllable execution, verification, observability, and experience reuse</text>
+  <text x="80" y="74" class="title">InDepth: Execution-to-Memory Closed Loop Architecture</text>
+  <text x="82" y="108" class="subtitle">A layered local runtime for controllable execution, verification, observability, and reusable memory</text>
 
-  <!-- Main layered panel -->
-  <rect x="70" y="150" width="1160" height="860" class="group"/>
-  <text x="92" y="188" class="panel-title">(A) Layered Runtime Stack</text>
+  <!-- Left: layered stack -->
+  <rect x="70" y="150" width="1160" height="860" rx="16" ry="16" class="panel"/>
+  <text x="94" y="188" class="panelTitle">(A) Layered Runtime Stack</text>
 
-  <!-- L1 -->
-  <rect x="100" y="215" width="1100" height="125" class="box"/>
-  <text x="125" y="252" class="label">L1. Protocol Layer (InDepth.md)</text>
-  <text x="125" y="282" class="text">Defines task goal, constraints, acceptance criteria, and risk gates before execution starts.</text>
-  <text x="125" y="308" class="small">Output: execution policy and boundary conditions.</text>
+  <rect x="100" y="215" width="1100" height="125" rx="14" ry="14" class="box"/>
+  <text x="124" y="250" class="h">L1. Protocol Layer (InDepth.md)</text>
+  <text x="124" y="280" class="t">Defines task objective, constraints, acceptance criteria, and risk gates before execution.</text>
+  <text x="124" y="306" class="s">Output: explicit execution policy and boundary conditions.</text>
 
-  <!-- L2 -->
-  <rect x="100" y="365" width="1100" height="150" class="box"/>
-  <text x="125" y="402" class="label">L2. Orchestration Layer (AgentRuntime)</text>
-  <text x="125" y="432" class="text">Builds system/history/user context, performs model inference, dispatches tool calls, and controls stop reasons.</text>
-  <text x="125" y="458" class="small">Includes mid-run compaction trigger and end-of-run finalization hooks.</text>
+  <rect x="100" y="365" width="1100" height="150" rx="14" ry="14" class="box"/>
+  <text x="124" y="400" class="h">L2. Orchestration Layer (AgentRuntime)</text>
+  <text x="124" y="430" class="t">Builds system/history/user context, performs model inference, dispatches tool calls, and manages stop reasons.</text>
+  <text x="124" y="456" class="s">Includes mid-run compaction trigger and end-of-run finalization hooks.</text>
 
-  <!-- L3 -->
-  <rect x="100" y="540" width="1100" height="145" class="box"/>
-  <text x="125" y="576" class="label">L3. Capability Layer (Tools + SubAgents)</text>
-  <text x="125" y="606" class="text">Tool registry manages bash/file/time/search/todo/memory tools; SubAgents execute role-specific subtasks in parallel.</text>
-  <text x="125" y="632" class="small">Roles: researcher, builder, reviewer, verifier, general.</text>
+  <rect x="100" y="540" width="1100" height="145" rx="14" ry="14" class="box"/>
+  <text x="124" y="575" class="h">L3. Capability Layer (Tools + SubAgents)</text>
+  <text x="124" y="605" class="t">Tool registry manages bash/file/time/search/todo/memory tools; SubAgents run role-specific subtasks in parallel.</text>
+  <text x="124" y="631" class="s">Roles: researcher, builder, reviewer, verifier, general.</text>
 
-  <!-- L4 -->
-  <rect x="100" y="710" width="1100" height="130" class="box"/>
-  <text x="125" y="746" class="label">L4. Evaluation Layer (EvalOrchestrator)</text>
-  <text x="125" y="776" class="text">Combines deterministic verifiers with optional LLM judge to output pass / partial / fail judgement.</text>
-  <text x="125" y="802" class="small">Final truth source: task_judged event payload.</text>
+  <rect x="100" y="710" width="1100" height="130" rx="14" ry="14" class="box"/>
+  <text x="124" y="745" class="h">L4. Evaluation Layer (EvalOrchestrator)</text>
+  <text x="124" y="775" class="t">Combines deterministic verifiers with optional LLM judge to produce pass / partial / fail.</text>
+  <text x="124" y="801" class="s">Final truth source: task_judged event payload.</text>
 
-  <!-- L5 -->
-  <rect x="100" y="865" width="1100" height="120" class="box"/>
-  <text x="125" y="901" class="label">L5. Memory Layer (Runtime + System Memory)</text>
-  <text x="125" y="931" class="text">Compresses runtime history into structured summaries and persists reusable memory cards for future tasks.</text>
-  <text x="125" y="956" class="small">Stores: runtime memory DBs + db/system_memory.db::memory_card.</text>
+  <rect x="100" y="865" width="1100" height="120" rx="14" ry="14" class="box"/>
+  <text x="124" y="900" class="h">L5. Memory Layer (Runtime + System Memory)</text>
+  <text x="124" y="930" class="t">Compresses runtime history into structured summaries and persists reusable memory cards for future tasks.</text>
+  <text x="124" y="955" class="s">Stores: runtime memory DBs + db/system_memory.db::memory_card.</text>
 
-  <!-- Vertical flow arrows -->
   <path d="M650 340 L650 365" class="arrow"/>
   <path d="M650 515 L650 540" class="arrow"/>
   <path d="M650 685 L650 710" class="arrow"/>
   <path d="M650 840 L650 865" class="arrow"/>
 
-  <!-- Right panel B -->
-  <rect x="1260" y="150" width="470" height="420" class="group"/>
-  <text x="1282" y="188" class="panel-title">(B) Runtime Event Timeline</text>
+  <!-- Right-top: timeline -->
+  <rect x="1260" y="150" width="470" height="420" rx="16" ry="16" class="panel"/>
+  <text x="1284" y="188" class="panelTitle">(B) Runtime Event Timeline</text>
 
-  <rect x="1290" y="215" width="410" height="70" class="box"/>
-  <text x="1310" y="258" class="text">1. task_started -> model/tool loop</text>
+  <rect x="1290" y="215" width="410" height="70" rx="12" ry="12" class="box"/>
+  <text x="1312" y="258" class="t">1. task_started -&gt; model/tool loop</text>
 
-  <rect x="1290" y="300" width="410" height="70" class="box"/>
-  <text x="1310" y="343" class="text">2. task_finished (initial postmortem)</text>
+  <rect x="1290" y="300" width="410" height="70" rx="12" ry="12" class="box"/>
+  <text x="1312" y="343" class="t">2. task_finished (initial postmortem)</text>
 
-  <rect x="1290" y="385" width="410" height="70" class="box"/>
-  <text x="1310" y="428" class="text">3. verification_* -> task_judged</text>
+  <rect x="1290" y="385" width="410" height="70" rx="12" ry="12" class="box"/>
+  <text x="1312" y="428" class="t">3. verification_* -&gt; task_judged</text>
 
-  <rect x="1290" y="470" width="410" height="70" class="box"/>
-  <text x="1310" y="513" class="text">4. memory finalize -> compact_final</text>
+  <rect x="1290" y="470" width="410" height="70" rx="12" ry="12" class="box"/>
+  <text x="1312" y="513" class="t">4. memory finalize -&gt; compact_final</text>
 
   <path d="M1495 285 L1495 300" class="arrow"/>
   <path d="M1495 370 L1495 385" class="arrow"/>
   <path d="M1495 455 L1495 470" class="arrow"/>
 
-  <!-- Right panel C -->
-  <rect x="1260" y="600" width="470" height="410" class="group"/>
-  <text x="1282" y="638" class="panel-title">(C) Observability & Learning Assets</text>
+  <!-- Right-bottom: assets -->
+  <rect x="1260" y="600" width="470" height="410" rx="16" ry="16" class="panel"/>
+  <text x="1284" y="638" class="panelTitle">(C) Observability &amp; Learning Assets</text>
 
-  <rect x="1290" y="665" width="410" height="85" class="box"/>
-  <text x="1310" y="702" class="label">Event Store</text>
-  <text x="1310" y="728" class="text">app/observability/data/events.jsonl</text>
+  <rect x="1290" y="665" width="410" height="85" rx="12" ry="12" class="box"/>
+  <text x="1312" y="701" class="h">Event Store</text>
+  <text x="1312" y="727" class="t">app/observability/data/events.jsonl</text>
 
-  <rect x="1290" y="770" width="410" height="95" class="box"/>
-  <text x="1310" y="808" class="label">Postmortem Reports</text>
-  <text x="1310" y="834" class="text">observability-evals/&lt;task&gt;__&lt;run&gt;/postmortem.md</text>
+  <rect x="1290" y="770" width="410" height="95" rx="12" ry="12" class="box"/>
+  <text x="1312" y="807" class="h">Postmortem Reports</text>
+  <text x="1312" y="833" class="t">observability-evals/&lt;task&gt;__&lt;run&gt;/postmortem.md</text>
 
-  <rect x="1290" y="885" width="410" height="95" class="box"/>
-  <text x="1310" y="923" class="label">System Memory Events</text>
-  <text x="1310" y="949" class="text">memory_trigger/retrieval/decision + memory cards</text>
+  <rect x="1290" y="885" width="410" height="95" rx="12" ry="12" class="box"/>
+  <text x="1312" y="922" class="h">System Memory</text>
+  <text x="1312" y="948" class="t">memory events + memory_card persistence</text>
 
-  <!-- Cross-panel dashed links -->
   <path d="M1200 445 C1260 445, 1260 340, 1290 340" class="arrow dash"/>
   <path d="M1200 925 C1260 925, 1260 930, 1290 930" class="arrow dash"/>
 
-  <text x="70" y="1045" class="small">Figure 1: InDepth architecture with layered execution path, runtime event chronology, and persistent learning loop.</text>
+  <text x="70" y="1045" class="s">Figure 1: InDepth architecture with layered execution path, runtime event chronology, and persistent learning loop.</text>
 </svg>
