@@ -56,7 +56,8 @@
 1. MUST 先创建 todo 主任务（`create_task`）再进入执行。
 2. 主任务标题 MUST 包含目标对象与动作，MUST NOT 使用空泛标题。
 3. 主任务描述 MUST 至少包含：范围边界、交付物、验收口径、时间基准（如有时效要求）。
-4. 创建后 MUST 保存返回的 `todo_id`，后续状态更新与查询 MUST 统一复用该 `todo_id`。
+4. 调用 `create_task` 时 MUST 提供顶层 `split_reason`（整体拆分理由），且写入 Context 区块。
+5. 创建后 MUST 保存返回的 `todo_id`，后续状态更新与查询 MUST 统一复用该 `todo_id`。
 
 子任务细则：
 1. 每个子任务 MUST 是“单一可验证动作”，建议粒度为 5-30 分钟可完成。

@@ -333,10 +333,29 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
                 "description": description.strip(),
                 "priority": priority.strip().lower(),
                 "dependencies": normalized_deps,
+                "split_rationale": (
+                    item.get("split_rationale")
+                    or item.get("split_reason")
+                    or item.get("rationale")
+                    or item.get("reason")
+                    or ""
+                ),
             }
         )
 
     return normalized
+
+
+def _default_split_rationale(subtask: Dict[str, Any], task_index: int, total: int) -> str:
+    deps = subtask.get("dependencies", [])
+    if deps:
+        deps_text = ", ".join([f"Task {d}" for d in deps])
+        return f"This step is separated to respect execution order and wait for prerequisite outputs from {deps_text}."
+    if task_index == 1:
+        return "This is isolated as the first step to establish context and reduce downstream rework risk."
+    if task_index == total:
+        return "This final step is split out to consolidate outputs and verify completion criteria."
+    return "This is split as an independently verifiable action to improve traceability and status tracking."
 
 
 @tool(
@@ -350,6 +369,7 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
         "properties": {
             "task_name": {"type": "string"},
             "context": {"type": "string"},
+            "split_reason": {"type": "string"},
             "subtasks": {
                 "type": "array",
                 "items": {
@@ -359,6 +379,10 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
                         "title": {"type": "string"},
                         "description": {"type": "string"},
                         "priority": {"type": "string"},
+                        "split_rationale": {"type": "string"},
+                        "split_reason": {"type": "string"},
+                        "rationale": {"type": "string"},
+                        "reason": {"type": "string"},
                         "dependencies": {
                             "type": "array",
                             "items": {"type": "integer"},
@@ -372,16 +396,17 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
                 },
             },
         },
-        "required": ["task_name", "context", "subtasks"],
+        "required": ["task_name", "context", "split_reason", "subtasks"],
     },
 )
-def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+def create_task(task_name: str, context: str, split_reason: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Create a markdown task file with structured subtasks and dependency metadata.
 
     Args:
         task_name: Human-readable task title.
         context: Goal and constraints for this task.
+        split_reason: Overall rationale for why this task should be decomposed.
         subtasks: Ordered subtask list. Each item should include name/description,
             and may include priority/dependencies.
 
@@ -389,6 +414,9 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
         Dict with success flag, filepath, todo_id, and subtask_count.
     """
     try:
+        if not isinstance(split_reason, str) or not split_reason.strip():
+            raise ValueError("split_reason must be a non-empty string")
+
         normalized_subtasks = _normalize_subtasks(subtasks)
         _ensure_todo_dir()
         todo_id = _generate_todo_id(task_name)
@@ -408,6 +436,7 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
         context_section = f"""
 ## Context
 **Goal**: {context}
+**Split Reason**: {split_reason.strip()}
 
 **Acceptance Criteria**:
 - Task completion criteria will be defined during execution
@@ -417,11 +446,15 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
             deps = subtask.get("dependencies", [])
             deps_str = ", ".join([f"Task {d}" for d in deps])
             deps_line = f"- **Dependencies**: {deps_str}" if deps_str else "- **Dependencies**: None"
+            split_rationale = str(subtask.get("split_rationale", "")).strip()
+            if not split_rationale:
+                split_rationale = _default_split_rationale(subtask, i, len(normalized_subtasks))
             subtasks_section += f"""
 ### Task {i}: {subtask['name']}
 - **Status**: pending
 - **Priority**: {subtask.get('priority', 'medium')}
 {deps_line}
+- **Split Rationale**: {split_rationale}
 - **[ ]** {subtask['description']}
 """
         dependencies_section = """
@@ -455,6 +488,7 @@ Task created automatically. Update as needed during execution.
                 "subtask_count": len(normalized_subtasks),
                 "filepath": filepath,
                 "todo_id": todo_id,
+                "split_reason": split_reason.strip(),
             },
         )
         return {

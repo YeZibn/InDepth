@@ -10,7 +10,7 @@ from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.skills import build_skills_manager
-from app.core.tools.adapters import register_tool_functions
+from app.core.tools.adapters import build_default_registry, register_tool_functions
 from app.core.tools.registry import ToolRegistry
 
 
@@ -36,6 +36,7 @@ class BaseAgent:
         description: str,
         instructions: str = "",
         tools: Optional[Iterable[Any]] = None,
+        load_default_tools: bool = True,
         skills: Any = None,
         load_memory_knowledge: bool = True,
         temperature: float | None = 0.2,
@@ -54,6 +55,7 @@ class BaseAgent:
         self.description = description
         self.skills = skills
         self.tools = list(tools) if tools else []
+        self.load_default_tools = bool(load_default_tools)
         self.skill_paths = self._extract_skill_paths(skills)
         self.skills_manager = build_skills_manager(self.skill_paths, validate=False)
         self.skill_prompt = self.skills_manager.get_system_prompt_snippet()
@@ -97,7 +99,7 @@ class BaseAgent:
         self._awaiting_user_input = False
 
     def _build_registry(self) -> ToolRegistry:
-        registry = ToolRegistry()
+        registry = build_default_registry() if self.load_default_tools else ToolRegistry()
         all_tools = list(self.tools)
         if self.skills_manager.get_skill_names():
             all_tools.extend(self.skills_manager.get_tools())

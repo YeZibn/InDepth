@@ -38,6 +38,7 @@ class CreateSkillAgent:
             description="Skill 创建专家，擅长设计、构建和打包 Agent Skills",
             instructions=instructions,
             tools=[execute_bash_command, read_file, write_file],
+            load_default_tools=False,
             skills=None,
             load_memory_knowledge=False,
         )

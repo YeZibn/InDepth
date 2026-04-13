@@ -1,20 +1,26 @@
 from dotenv import load_dotenv
-import uuid
 
-from app.core import create_runtime
+from app.agent.agent import BaseAgent
 
 
 load_dotenv()
 
 
-if __name__ == "__main__":
-    runtime = create_runtime(
-        system_prompt="遵守 InDepth 协议，优先结构化回答。",
-        max_steps=50,
-        skill_paths=["app/skills"],
+def build_runtime_cli_agent() -> BaseAgent:
+    return BaseAgent(
+        name="runtime_cli",
+        description="Runtime CLI agent powered by BaseAgent",
+        instructions="遵守 InDepth 协议，优先结构化回答。",
+        tools=[],
+        load_default_tools=True,
+        skills="app/skills",
+        load_memory_knowledge=True,
     )
-    session_task_id = f"runtime_cli_task_{uuid.uuid4().hex[:8]}"
-    print("欢迎使用 InDepth Runtime（自研内核 MVP）！输入 'exit' 退出。\n")
+
+
+if __name__ == "__main__":
+    agent = build_runtime_cli_agent()
+    print("欢迎使用 InDepth Runtime（BaseAgent 模式）！输入 'exit' 退出。\n")
 
     while True:
         user_input = input("请输入: ").strip()
@@ -23,6 +29,6 @@ if __name__ == "__main__":
             break
         if not user_input:
             continue
-        run_id = f"runtime_cli_run_{uuid.uuid4().hex[:8]}"
-        answer = runtime.run(user_input=user_input, task_id=session_task_id, run_id=run_id)
-        print(f"\nRuntime: {answer}\n")
+        print("\nRuntime: ", end="")
+        agent.chat(user_input)
+        print()

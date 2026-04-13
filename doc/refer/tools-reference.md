@@ -375,7 +375,8 @@ build_search_conclusion() ──▶ 生成结构化结论
 create_task(
     task_name: str,
     context: str,
-    subtasks: List[Dict[str, Any]]  # [{name, description, status?}] 必填
+    split_reason: str,  # 顶层拆分理由，必填
+    subtasks: List[Dict[str, Any]]  # [{name, description, split_reason?, dependencies?, priority?}] 必填
 ) -> Dict
 
 # 更新状态

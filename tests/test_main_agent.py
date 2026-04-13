@@ -45,6 +45,25 @@ def _dummy_tool(query: str) -> str:
 
 
 class MainAgentTests(unittest.TestCase):
+    def test_base_agent_loads_default_tools_when_enabled(self):
+        with (
+            patch("app.agent.agent.AgentRuntime", _FakeRuntime),
+            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+        ):
+            agent = BaseAgent(
+                name="main_agent",
+                description="test agent",
+                instructions="hello",
+                tools=[],
+                load_default_tools=True,
+                load_memory_knowledge=False,
+                enable_llm_judge=False,
+            )
+
+        registry = agent.runtime.kwargs["tool_registry"]
+        self.assertTrue(registry.has("create_task"))
+        self.assertTrue(registry.has("create_sub_agent"))
+
     def test_main_agent_registers_only_supplied_tools(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
@@ -55,12 +74,14 @@ class MainAgentTests(unittest.TestCase):
                 description="test agent",
                 instructions="hello",
                 tools=[_dummy_tool],
+                load_default_tools=False,
                 load_memory_knowledge=False,
                 enable_llm_judge=False,
             )
 
         registry = agent.runtime.kwargs["tool_registry"]
         self.assertTrue(registry.has("dummy_tool"))
+        self.assertFalse(registry.has("create_task"))
         self.assertFalse(registry.has("non_existing_tool"))
 
     def test_chat_delegates_to_runtime_with_expected_task_and_run_id(self):
