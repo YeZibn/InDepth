@@ -78,14 +78,32 @@
 
 创建决策：
 1. 执行前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
-2. 满足任一条件时 SHOULD 创建：存在 2 个及以上可并行子任务、子任务边界清晰可独立推进、子任务资源密集、子任务需要专门工具或领域能力。
-3. 不创建时 MUST 记录理由（任务很小、拆分成本高、关键工具仅主 Agent 可用、链路时延敏感）。
+2. 强烈建议使用 SubAgent，除非任务很小、拆分成本高、关键工具仅主 Agent 可用、链路时延敏感。
+
+场景分层（优先按 MUST/SHOULD/SHOULD NOT 判定）：
+1. MUST 使用 SubAgent：
+   - 存在 2 条及以上可独立推进的并行子任务，且任一子任务预计 > 3 分钟
+   - 需要“实现”和“独立验证”并行推进（如 builder + verifier）
+   - 主 Agent 若同时承担调度与执行将导致关键状态无法及时同步
+   - 子任务边界清晰，可独立输入/输出
+   - 子任务资源密集（大量检索、批量文件处理、长链路命令）
+   - 子任务需要专门工具或领域能力（researcher/reviewer/verifier 等）
+3. SHOULD NOT 使用 SubAgent：
+   - 任务可在 5 分钟内一次性完成
+   - 子任务强耦合，频繁来回共享上下文，拆分成本高于收益
+   - 关键工具或上下文仅主 Agent 可访问，分拆后无法闭环
+
+不创建时 MUST 记录理由（任务很小、拆分成本高、关键工具仅主 Agent 可用、链路时延敏感）。
 
 角色路由：
 1. 调用 `create_sub_agent` 前 MUST 显式传入 `role`；MUST NOT 使用 `auto` 或隐式路由。
 2. 允许角色：`researcher`、`builder`、`reviewer`、`verifier`、`general`。
 3. `reviewer` 与 `verifier` SHOULD NOT 做实现改动。
 4. 同一子任务 MUST NOT 重复分配给多个角色（交叉验证除外）。
+
+快速示例：
+1. SHOULD 用：一条线改代码，一条线补测试并跑验证，可并行且验收口径清晰。
+2. SHOULD NOT 用：只改 1 个文件的文案与变量名，5 分钟内可完成。
 
 ### 2.3 Todo + SubAgent 协作模块
 
@@ -99,6 +117,20 @@
 1. 主 Agent MUST 在关键节点同步状态：启动、完成、阻塞、恢复。
 2. 不创建 SubAgent 时 MUST 记录原因并回写 todo。
 3. 并行执行时，MUST 为每条并行流绑定独立子任务编号，MUST NOT 多个执行流共享同一子任务状态位。
+
+协作示范（最小模板）：
+1. 创建 todo 主任务并获得 `todo_id`，子任务先登记为：
+   - `#1` 创建 `researcher` 子代理并定义检索范围（`pending`）
+   - `#2` 启动 `researcher` 执行并产出证据摘要（`pending`）
+   - `#3` 创建 `builder` 子代理并定义实现范围（`pending`）
+   - `#4` 启动 `builder` 实现并提交产物（`pending`）
+   - `#5` 主 Agent 汇总验收并交付（`pending`）
+2. 执行时按流转更新：
+   - 启动 `researcher` 前：`#1 -> in-progress -> completed`，随后 `#2 -> in-progress`
+   - `researcher` 完成后：`#2 -> completed`，再激活 `#3/#4`
+   - `builder` 实现中遇阻：`#4 -> blocked`，写明阻塞原因与所需输入；解除后 `blocked -> in-progress -> completed`
+   - 最后 `#5 -> in-progress -> completed`，并在交付说明附上关键证据与未完成项
+3. 若中途新增动作（如补一次回归测试），MUST 先新增子任务（如 `#6`）再执行，MUST NOT 直接做未登记动作。
 
 ### 2.4 状态确认模块
 

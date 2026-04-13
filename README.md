@@ -205,6 +205,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 | [Skills](doc/refer/skills-reference.md) | 技能加载、`<skills_system>` 注入、技能访问工具 |
 | [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
 | [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
+| [Search Guard](doc/refer/search-guard-reference.md) | 检索门禁、预算与自动扩容策略 |
 | [Eval](doc/refer/eval-reference.md) | 判定模型、verifier 链路 |
 | [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
 | [Agent 协同](doc/refer/agent-collaboration-reference.md) | 主从 Agent 协同与角色路由 |

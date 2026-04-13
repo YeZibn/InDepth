@@ -10,6 +10,7 @@
 - `runtime-reference.md`：`AgentRuntime` 主循环、收敛逻辑、评估与记忆收尾。
 - `memory-reference.md`：运行时记忆压缩、结构化摘要、系统记忆卡与事件闭环。
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
+- `search-guard-reference.md`：检索门禁会话模型、预算控制、自动扩容与状态诊断。
 - `skills-reference.md`：技能加载、`<skills_system>` 注入、技能访问工具与 Agent 默认差异。
 - `eval-reference.md`：任务评估模型、verifier 链路、判定标准。
 - `observability-reference.md`：事件模型、JSONL/SQLite 落盘、postmortem 生成。
@@ -21,12 +22,13 @@
 1. `architecture-reference.md`（概览）
 2. `runtime-reference.md`
 3. `tools-reference.md`
-4. `skills-reference.md`
-5. `memory-reference.md`
-6. `eval-reference.md`
-7. `observability-reference.md`
-8. `agent-collaboration-reference.md`
-9. `config-reference.md`
+4. `search-guard-reference.md`
+5. `skills-reference.md`
+6. `memory-reference.md`
+7. `eval-reference.md`
+8. `observability-reference.md`
+9. `agent-collaboration-reference.md`
+10. `config-reference.md`
 
 ## 3. 代码主映射
 

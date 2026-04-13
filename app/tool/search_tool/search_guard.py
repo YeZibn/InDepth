@@ -25,6 +25,21 @@ class SearchSession:
     answered_question_ids: List[str] = field(default_factory=list)
     stable_conclusion: bool = False
     logs: List[Dict[str, Any]] = field(default_factory=list)
+    initial_max_rounds: int = 0
+    initial_max_seconds: int = 0
+    auto_override_enabled: bool = True
+    auto_override_rounds_left_threshold: int = 1
+    auto_override_seconds_left_threshold: int = 120
+    auto_override_rounds_step: int = 1
+    auto_override_seconds_step: int = 180
+    auto_override_max_times: int = 4
+    auto_override_max_total_rounds: int = 6
+    auto_override_max_total_seconds: int = 1800
+    auto_overrides_used: int = 0
+    auto_override_total_rounds: int = 0
+    auto_override_total_seconds: int = 0
+    consecutive_no_gain_progress: int = 0
+    progress_update_count: int = 0
 
     @property
     def elapsed_seconds(self) -> int:
@@ -52,6 +67,14 @@ class SearchGuardManager:
         max_rounds: int,
         max_seconds: int,
         stop_threshold: str,
+        auto_override_enabled: bool = True,
+        auto_override_rounds_left_threshold: int = 1,
+        auto_override_seconds_left_threshold: int = 120,
+        auto_override_rounds_step: int = 1,
+        auto_override_seconds_step: int = 180,
+        auto_override_max_times: int = 4,
+        auto_override_max_total_rounds: int = 6,
+        auto_override_max_total_seconds: int = 1800,
     ) -> SearchSession:
         session = SearchSession(
             task_id=task_id,
@@ -61,6 +84,16 @@ class SearchGuardManager:
             stop_threshold=stop_threshold,
             max_rounds=max_rounds,
             max_seconds=max_seconds,
+            initial_max_rounds=max_rounds,
+            initial_max_seconds=max_seconds,
+            auto_override_enabled=auto_override_enabled,
+            auto_override_rounds_left_threshold=auto_override_rounds_left_threshold,
+            auto_override_seconds_left_threshold=auto_override_seconds_left_threshold,
+            auto_override_rounds_step=auto_override_rounds_step,
+            auto_override_seconds_step=auto_override_seconds_step,
+            auto_override_max_times=auto_override_max_times,
+            auto_override_max_total_rounds=auto_override_max_total_rounds,
+            auto_override_max_total_seconds=auto_override_max_total_seconds,
         )
         self._sessions[task_id] = session
         return session
@@ -74,7 +107,13 @@ class SearchGuardManager:
             return "Search gate not initialized. Call init_search_guard first."
         if session.stopped:
             return f"Search is stopped: {session.stop_reason or 'threshold reached'}"
+        if session.rounds_left <= session.auto_override_rounds_left_threshold:
+            self._maybe_auto_override(session, trigger="near_round_threshold")
+        elif session.seconds_left <= session.auto_override_seconds_left_threshold:
+            self._maybe_auto_override(session, trigger="near_time_threshold")
         if session.rounds_used >= session.max_rounds:
+            if self._maybe_auto_override(session, trigger="round_exhausted"):
+                return None
             session.stopped = True
             session.stop_reason = "round budget exhausted"
             return (
@@ -82,10 +121,60 @@ class SearchGuardManager:
                 "Call request_search_budget_override with explicit reason and expected_gain to continue."
             )
         if session.elapsed_seconds >= session.max_seconds:
+            if self._maybe_auto_override(session, trigger="time_exhausted"):
+                return None
             session.stopped = True
             session.stop_reason = "time budget exhausted"
             return "Search blocked: time budget exhausted."
         return None
+
+    def _maybe_auto_override(self, session: SearchSession, trigger: str) -> bool:
+        if not session.auto_override_enabled:
+            return False
+        if session.auto_overrides_used >= session.auto_override_max_times:
+            return False
+        if session.consecutive_no_gain_progress >= 2:
+            return False
+
+        rounds_budget_left = max(session.auto_override_max_total_rounds - session.auto_override_total_rounds, 0)
+        seconds_budget_left = max(session.auto_override_max_total_seconds - session.auto_override_total_seconds, 0)
+        extra_rounds = min(session.auto_override_rounds_step, rounds_budget_left)
+        extra_seconds = min(session.auto_override_seconds_step, seconds_budget_left)
+        if extra_rounds <= 0 and extra_seconds <= 0:
+            return False
+
+        session.max_rounds += extra_rounds
+        session.max_seconds += extra_seconds
+        session.auto_overrides_used += 1
+        session.auto_override_total_rounds += extra_rounds
+        session.auto_override_total_seconds += extra_seconds
+        session.stopped = False
+        session.stop_reason = ""
+        session.logs.append(
+            {
+                "type": "auto_budget_override",
+                "timestamp": int(time.time()),
+                "trigger": trigger,
+                "extra_rounds": extra_rounds,
+                "extra_seconds": extra_seconds,
+                "auto_overrides_used": session.auto_overrides_used,
+                "max_rounds": session.max_rounds,
+                "max_seconds": session.max_seconds,
+            }
+        )
+        _emit_obs(
+            task_id=session.task_id,
+            event_type="search_budget_auto_overridden",
+            payload={
+                "trigger": trigger,
+                "auto_overrides_used": session.auto_overrides_used,
+                "extra_rounds": extra_rounds,
+                "extra_seconds": extra_seconds,
+                "max_rounds": session.max_rounds,
+                "max_seconds": session.max_seconds,
+            },
+        )
+        return True
 
     def add_log(self, task_id: str, log: Dict[str, Any]) -> None:
         session = self.get_session(task_id)
@@ -113,10 +202,19 @@ class SearchGuardManager:
         if not session:
             return {"success": False, "error": "Session not found"}
 
+        prev_answered_count = len(session.answered_question_ids)
         known_ids = set(session.question_ids)
         valid_ids = [qid for qid in answered_question_ids if qid in known_ids]
         session.answered_question_ids = sorted(set(valid_ids))
         session.stable_conclusion = stable_conclusion
+        answered_count = len(session.answered_question_ids)
+        coverage_grew = answered_count > prev_answered_count
+        has_gain = new_evidence_count > 0 or coverage_grew
+        session.progress_update_count += 1
+        if has_gain:
+            session.consecutive_no_gain_progress = 0
+        else:
+            session.consecutive_no_gain_progress += 1
         session.logs.append(
             {
                 "type": "progress_update",
@@ -126,6 +224,9 @@ class SearchGuardManager:
                 "new_evidence_count": new_evidence_count,
                 "dedup_count": dedup_count,
                 "note": note,
+                "coverage_grew": coverage_grew,
+                "has_gain": has_gain,
+                "consecutive_no_gain_progress": session.consecutive_no_gain_progress,
             }
         )
 
@@ -194,6 +295,19 @@ class SearchGuardManager:
             "answered_question_ids": session.answered_question_ids,
             "stable_conclusion": session.stable_conclusion,
             "log_count": len(session.logs),
+            "auto_override_enabled": session.auto_override_enabled,
+            "auto_override_rounds_left_threshold": session.auto_override_rounds_left_threshold,
+            "auto_override_seconds_left_threshold": session.auto_override_seconds_left_threshold,
+            "auto_override_rounds_step": session.auto_override_rounds_step,
+            "auto_override_seconds_step": session.auto_override_seconds_step,
+            "auto_override_max_times": session.auto_override_max_times,
+            "auto_override_max_total_rounds": session.auto_override_max_total_rounds,
+            "auto_override_max_total_seconds": session.auto_override_max_total_seconds,
+            "auto_overrides_used": session.auto_overrides_used,
+            "auto_override_total_rounds": session.auto_override_total_rounds,
+            "auto_override_total_seconds": session.auto_override_total_seconds,
+            "consecutive_no_gain_progress": session.consecutive_no_gain_progress,
+            "progress_update_count": session.progress_update_count,
         }
 
 
@@ -246,6 +360,14 @@ def init_search_guard(
     stop_threshold: str,
     max_rounds: int = 3,
     max_seconds: int = 900,
+    auto_override_enabled: bool = True,
+    auto_override_rounds_left_threshold: int = 1,
+    auto_override_seconds_left_threshold: int = 120,
+    auto_override_rounds_step: int = 1,
+    auto_override_seconds_step: int = 180,
+    auto_override_max_times: int = 4,
+    auto_override_max_total_rounds: int = 6,
+    auto_override_max_total_seconds: int = 1800,
 ) -> str:
     """
     Initialize a guarded search session with time basis, questions, and budgets.
@@ -296,6 +418,22 @@ def init_search_guard(
         return "Error: max_rounds must be between 1 and 8."
     if max_seconds < 60 or max_seconds > 3600:
         return "Error: max_seconds must be between 60 and 3600."
+    if auto_override_rounds_left_threshold < 0 or auto_override_rounds_left_threshold > 3:
+        return "Error: auto_override_rounds_left_threshold must be between 0 and 3."
+    if auto_override_seconds_left_threshold < 0 or auto_override_seconds_left_threshold > 900:
+        return "Error: auto_override_seconds_left_threshold must be between 0 and 900."
+    if auto_override_rounds_step < 0 or auto_override_rounds_step > 4:
+        return "Error: auto_override_rounds_step must be between 0 and 4."
+    if auto_override_seconds_step < 0 or auto_override_seconds_step > 1200:
+        return "Error: auto_override_seconds_step must be between 0 and 1200."
+    if auto_override_max_times < 0 or auto_override_max_times > 10:
+        return "Error: auto_override_max_times must be between 0 and 10."
+    if auto_override_max_total_rounds < 0 or auto_override_max_total_rounds > 20:
+        return "Error: auto_override_max_total_rounds must be between 0 and 20."
+    if auto_override_max_total_seconds < 0 or auto_override_max_total_seconds > 7200:
+        return "Error: auto_override_max_total_seconds must be between 0 and 7200."
+    if auto_override_enabled and auto_override_rounds_step == 0 and auto_override_seconds_step == 0:
+        return "Error: auto override step cannot be zero for both rounds and seconds."
 
     session = _guard.init_session(
         task_id=task_id.strip(),
@@ -305,6 +443,14 @@ def init_search_guard(
         max_rounds=max_rounds,
         max_seconds=max_seconds,
         stop_threshold=stop_threshold.strip(),
+        auto_override_enabled=auto_override_enabled,
+        auto_override_rounds_left_threshold=auto_override_rounds_left_threshold,
+        auto_override_seconds_left_threshold=auto_override_seconds_left_threshold,
+        auto_override_rounds_step=auto_override_rounds_step,
+        auto_override_seconds_step=auto_override_seconds_step,
+        auto_override_max_times=auto_override_max_times,
+        auto_override_max_total_rounds=auto_override_max_total_rounds,
+        auto_override_max_total_seconds=auto_override_max_total_seconds,
     )
     _emit_obs(
         task_id=session.task_id,
@@ -314,6 +460,10 @@ def init_search_guard(
             "max_seconds": session.max_seconds,
             "question_count": len(session.questions),
             "time_basis": session.time_basis,
+            "auto_override_enabled": session.auto_override_enabled,
+            "auto_override_max_times": session.auto_override_max_times,
+            "auto_override_max_total_rounds": session.auto_override_max_total_rounds,
+            "auto_override_max_total_seconds": session.auto_override_max_total_seconds,
         },
     )
     return json.dumps(
@@ -325,6 +475,14 @@ def init_search_guard(
             "questions": session.questions,
             "max_rounds": session.max_rounds,
             "max_seconds": session.max_seconds,
+            "auto_override_enabled": session.auto_override_enabled,
+            "auto_override_rounds_left_threshold": session.auto_override_rounds_left_threshold,
+            "auto_override_seconds_left_threshold": session.auto_override_seconds_left_threshold,
+            "auto_override_rounds_step": session.auto_override_rounds_step,
+            "auto_override_seconds_step": session.auto_override_seconds_step,
+            "auto_override_max_times": session.auto_override_max_times,
+            "auto_override_max_total_rounds": session.auto_override_max_total_rounds,
+            "auto_override_max_total_seconds": session.auto_override_max_total_seconds,
             "stop_threshold": session.stop_threshold,
             "message": "Search gate initialized. Use guarded_ddg_search/guarded_url_search only.",
         },
