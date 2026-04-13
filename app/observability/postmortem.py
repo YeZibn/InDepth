@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from datetime import datetime
@@ -20,9 +21,19 @@ def _default_postmortem_dir(task_id: str, run_id: Optional[str] = None) -> str:
     root = _find_project_root()
     base = os.path.join(root, "observability-evals")
     task_seg = _sanitize_segment(task_id, "task")
-    run_seg = _sanitize_segment(run_id or "", "run") if run_id else ""
-    folder = f"{task_seg}__{run_seg}" if run_seg else task_seg
-    path = os.path.join(base, folder)
+    path = os.path.join(base, task_seg)
+    if run_id:
+        run_seg = _sanitize_segment(run_id, "run")
+        path = os.path.join(path, run_seg)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _task_root_dir(task_id: str) -> str:
+    root = _find_project_root()
+    base = os.path.join(root, "observability-evals")
+    task_seg = _sanitize_segment(task_id, "task")
+    path = os.path.join(base, task_seg)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -56,6 +67,21 @@ def _find_latest_judgement(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     judged_sorted = sorted(judged, key=lambda x: str(x.get("timestamp", "")))
     payload = judged_sorted[-1].get("payload", {})
     return payload if isinstance(payload, dict) else {}
+
+
+def _find_latest_judgement_with_run(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    judged = [x for x in rows if x.get("event_type") == "task_judged"]
+    if not judged:
+        return {}
+    latest = sorted(judged, key=lambda x: str(x.get("timestamp", "")))[-1]
+    payload = latest.get("payload", {})
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "run_id": str(latest.get("run_id", "")).strip(),
+        "timestamp": str(latest.get("timestamp", "")).strip(),
+        "payload": payload,
+    }
 
 
 def _summarize_failure_payload(event_type: str, payload: Dict[str, Any]) -> str:
@@ -97,6 +123,87 @@ def _format_judgement_block(judgement: Dict[str, Any]) -> List[str]:
                 f"hard={item.get('hard')} | score={item.get('score')} | reason={item.get('reason')}"
             )
     return lines
+
+
+def _write_json(path: str, payload: Dict[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _write_run_events(path: str, rows: List[Dict[str, Any]]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _write_judgement_history(path: str, rows: List[Dict[str, Any]]) -> None:
+    judged_rows = [
+        x
+        for x in sorted(rows, key=lambda r: str(r.get("timestamp", "")))
+        if x.get("event_type") == "task_judged"
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        for row in judged_rows:
+            payload = row.get("payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
+            item = {
+                "event_id": str(row.get("event_id", "")).strip(),
+                "task_id": str(row.get("task_id", "")).strip(),
+                "run_id": str(row.get("run_id", "")).strip(),
+                "timestamp": str(row.get("timestamp", "")).strip(),
+                "status": str(row.get("status", "")).strip(),
+                "judgement": payload,
+            }
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def _build_task_summary(task_id: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    runs: Dict[str, Dict[str, Any]] = {}
+    sorted_rows = sorted(rows, key=lambda x: str(x.get("timestamp", "")))
+    for row in sorted_rows:
+        run_id = str(row.get("run_id", "")).strip() or "run"
+        rec = runs.get(run_id)
+        if rec is None:
+            rec = {
+                "run_id": run_id,
+                "event_count": 0,
+                "first_event_at": "",
+                "last_event_at": "",
+                "last_event_type": "",
+                "last_status": "",
+                "runtime_state": "",
+                "has_final_judgement": False,
+                "verification_skipped": False,
+            }
+            runs[run_id] = rec
+        rec["event_count"] += 1
+        ts = str(row.get("timestamp", "")).strip()
+        if ts and not rec["first_event_at"]:
+            rec["first_event_at"] = ts
+        if ts:
+            rec["last_event_at"] = ts
+        rec["last_event_type"] = str(row.get("event_type", "")).strip()
+        rec["last_status"] = str(row.get("status", "")).strip()
+        payload = row.get("payload", {})
+        if isinstance(payload, dict):
+            state = str(payload.get("runtime_state", "")).strip()
+            if state:
+                rec["runtime_state"] = state
+        if rec["last_event_type"] == "task_judged":
+            rec["has_final_judgement"] = True
+        if rec["last_event_type"] == "verification_skipped":
+            rec["verification_skipped"] = True
+
+    ordered_runs = sorted(runs.values(), key=lambda x: (x.get("first_event_at", ""), x.get("run_id", "")))
+    latest_judgement = _find_latest_judgement_with_run(rows)
+    return {
+        "task_id": task_id,
+        "updated_at": datetime.now().astimezone().isoformat(),
+        "run_count": len(ordered_runs),
+        "final_run_id": latest_judgement.get("run_id", ""),
+        "runs": ordered_runs,
+    }
 
 
 def generate_postmortem(
@@ -180,6 +287,53 @@ def generate_postmortem(
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+    try:
+        _write_run_events(os.path.join(out_dir, "events.jsonl"), rows)
+    except Exception:
+        pass
+
+    try:
+        run_judgement = _find_latest_judgement(rows)
+        if run_judgement:
+            _write_json(
+                os.path.join(out_dir, "judgement.json"),
+                {
+                    "task_id": task_id,
+                    "run_id": run_id or "",
+                    "updated_at": datetime.now().astimezone().isoformat(),
+                    "judgement": run_judgement,
+                },
+            )
+    except Exception:
+        pass
+
+    try:
+        task_root = _task_root_dir(task_id)
+        all_task_rows = event_store.query(task_id=task_id)
+        if not all_task_rows:
+            all_task_rows = rows
+        summary = _build_task_summary(task_id=task_id, rows=all_task_rows)
+        _write_json(os.path.join(task_root, "task_summary.json"), summary)
+
+        latest = _find_latest_judgement_with_run(all_task_rows)
+        payload = latest.get("payload", {})
+        if isinstance(payload, dict) and payload:
+            _write_json(
+                os.path.join(task_root, "task_judgement.json"),
+                {
+                    "task_id": task_id,
+                    "final_run_id": latest.get("run_id", ""),
+                    "judged_at": latest.get("timestamp", ""),
+                    "judgement": payload,
+                },
+            )
+        _write_judgement_history(
+            os.path.join(task_root, "task_judgement_history.jsonl"),
+            all_task_rows,
+        )
+    except Exception:
+        pass
 
     return {
         "success": True,

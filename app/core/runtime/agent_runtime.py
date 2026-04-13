@@ -57,6 +57,10 @@ class AgentRuntime:
         )
         self.system_memory_store = system_memory_store
         self.compression_config = compression_config or load_runtime_compression_config()
+        self.last_runtime_state = "idle"
+        self.last_stop_reason = ""
+        self.last_run_id = ""
+        self.last_task_id = ""
 
     def run(
         self,
@@ -64,13 +68,40 @@ class AgentRuntime:
         task_id: str = "runtime_task",
         run_id: str = "runtime_run",
         task_spec: Optional[Dict[str, Any]] = None,
+        resume_from_waiting: bool = False,
     ) -> str:
+        self.last_run_id = run_id
+        self.last_task_id = task_id
+        self.last_runtime_state = "running"
+        self.last_stop_reason = ""
         history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
             {"role": "user", "content": user_input}
         ]
         tools = self.tool_registry.list_tool_schemas()
-        emit_event(task_id=task_id, run_id=run_id, actor="main", role="general", event_type="task_started")
+        if resume_from_waiting:
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="user_clarification_received",
+            )
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="run_resumed",
+            )
+        else:
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="task_started",
+            )
         self._trace(f"[runtime] task_started task_id={task_id} run_id={run_id}")
         if self.memory_store:
             self.memory_store.append_message(task_id, "user", user_input)
@@ -81,6 +112,7 @@ class AgentRuntime:
         consecutive_tool_calls = 0
         task_status = "ok"
         stop_reason = "completed"
+        runtime_state = "running"
         for step in range(1, self.max_steps + 1):
             messages = self._maybe_compact_mid_run(
                 step=step,
@@ -100,6 +132,7 @@ class AgentRuntime:
                 final_answer = f"模型调用失败：{str(e)}"
                 task_status = "error"
                 stop_reason = "model_failed"
+                runtime_state = "failed"
                 self._trace(f"[step {step}] model_failed error={str(e)}")
                 emit_event(
                     task_id=task_id,
@@ -158,7 +191,24 @@ class AgentRuntime:
                     final_answer_written = True
                 if content:
                     final_answer = content
-                    stop_reason = "stop"
+                    if self._is_clarification_request(content):
+                        stop_reason = "awaiting_user_input"
+                        runtime_state = "awaiting_user_input"
+                        emit_event(
+                            task_id=task_id,
+                            run_id=run_id,
+                            actor="main",
+                            role="general",
+                            event_type="clarification_requested",
+                            payload={
+                                "question_preview": self._preview(content, max_len=300),
+                                "missing_info_hints": self._extract_missing_info_hints(content),
+                                "step": step,
+                            },
+                        )
+                    else:
+                        stop_reason = "stop"
+                        runtime_state = "completed"
                 elif last_tool_failures:
                     details = "; ".join(
                         [
@@ -169,10 +219,12 @@ class AgentRuntime:
                     final_answer = f"任务未完成：工具调用失败（{details}）。"
                     task_status = "error"
                     stop_reason = "tool_failed_before_stop"
+                    runtime_state = "failed"
                 else:
                     final_answer = "模型未返回有效内容，任务可能未完成。"
                     task_status = "error"
                     stop_reason = "empty_stop_content"
+                    runtime_state = "failed"
                 self._trace(f"[step {step}] completed finish_reason=stop final={self._preview(final_answer)}")
                 break
 
@@ -180,6 +232,7 @@ class AgentRuntime:
                 final_answer = content or "模型达到输出长度上限，已停止。"
                 task_status = "error"
                 stop_reason = "length"
+                runtime_state = "failed"
                 self._trace(f"[step {step}] stopped finish_reason=length")
                 emit_event(
                     task_id=task_id,
@@ -195,6 +248,7 @@ class AgentRuntime:
                 final_answer = "输出被内容策略拦截，已停止。"
                 task_status = "error"
                 stop_reason = "content_filter"
+                runtime_state = "failed"
                 self._trace(f"[step {step}] stopped finish_reason=content_filter")
                 emit_event(
                     task_id=task_id,
@@ -214,6 +268,7 @@ class AgentRuntime:
             if content:
                 final_answer = content
                 stop_reason = "fallback_content"
+                runtime_state = "completed"
                 self._trace(f"[step {step}] completed finish_reason=fallback final={self._preview(final_answer)}")
                 break
 
@@ -221,7 +276,26 @@ class AgentRuntime:
             final_answer = "未在预算步数内收敛，建议缩小问题范围后重试。"
             task_status = "error"
             stop_reason = "max_steps_reached"
+            runtime_state = "failed"
             self._trace("[runtime] max_steps_reached")
+
+        if runtime_state == "awaiting_user_input":
+            self.last_runtime_state = runtime_state
+            self.last_stop_reason = stop_reason
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="verification_skipped",
+                payload={
+                    "reason": "awaiting_user_input",
+                    "stop_reason": stop_reason,
+                    "runtime_state": runtime_state,
+                },
+            )
+            self._trace(f"[runtime] paused awaiting_user_input final={self._preview(final_answer)}")
+            return final_answer
 
         # Emit task_finished before verifier evaluation so postmortem evidence is
         # generated and available to verifier agent in the same run.
@@ -234,6 +308,7 @@ class AgentRuntime:
             status=task_status,
             payload={
                 "stop_reason": stop_reason,
+                "runtime_state": runtime_state,
                 "has_tool_failures": bool(last_tool_failures),
                 "tool_failure_count": len(last_tool_failures),
             },
@@ -314,6 +389,8 @@ class AgentRuntime:
                 compact_final(task_id)
             else:
                 self.memory_store.compact(task_id)
+        self.last_runtime_state = runtime_state
+        self.last_stop_reason = stop_reason
         return final_answer
 
     def _maybe_compact_mid_run(
@@ -675,3 +752,48 @@ class AgentRuntime:
     def _estimate_context_usage(self, estimated_tokens: int) -> float:
         window = max(int(self.compression_config.context_window_tokens), 1024)
         return min(estimated_tokens / window, 1.0)
+
+    def _is_clarification_request(self, content: str) -> bool:
+        text = (content or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        clarification_hints = [
+            "请确认",
+            "请补充",
+            "请提供",
+            "请明确",
+            "你是指",
+            "是否",
+            "能否",
+            "which",
+            "what exactly",
+            "can you clarify",
+            "please clarify",
+            "need more details",
+        ]
+        if any(hint in lowered for hint in clarification_hints):
+            return True
+        if "？" in text or "?" in text:
+            complete_hints = ["已完成", "完成了", "done", "completed", "success", "成功"]
+            if not any(hint in lowered for hint in complete_hints):
+                return True
+        return False
+
+    def _extract_missing_info_hints(self, content: str) -> List[str]:
+        text = (content or "").strip()
+        if not text:
+            return []
+        fields = [
+            ("时间", ["时间", "日期", "截止", "deadline", "when"]),
+            ("范围", ["范围", "边界", "scope"]),
+            ("目标", ["目标", "预期", "goal", "outcome"]),
+            ("环境", ["环境", "分支", "workspace", "repo"]),
+            ("验收标准", ["验收", "标准", "acceptance", "criteria"]),
+        ]
+        lowered = text.lower()
+        hits: List[str] = []
+        for label, hints in fields:
+            if any(h in lowered for h in hints):
+                hits.append(label)
+        return hits

@@ -49,7 +49,8 @@ def emit_event(
     # 强制策略：
     # - task_finished: 先产出一次复盘，供后续 verifier 检查证据目录
     # - task_judged: 评估完成后再产出一次最终复盘（包含评估结论）
-    if normalized_event_type in {"task_finished", "task_judged"}:
+    # - verification_skipped: 记录中间轮次（如 awaiting_user_input）复盘
+    if normalized_event_type in {"task_finished", "task_judged", "verification_skipped"}:
         try:
             from .postmortem import generate_postmortem
 

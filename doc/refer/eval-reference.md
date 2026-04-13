@@ -267,7 +267,7 @@ class VerifierAgent:
 
 ```
 1. expected_artifacts 中指定的路径
-2. observability-evals/<task_id>__<run_id>
+2. observability-evals/<task_id>/<run_id>
 3. 历史 work/ 目录
 ```
 
@@ -301,6 +301,15 @@ VerifierAgent 必须输出严格 JSON：
 AgentRuntime.run() 结束
          │
          ▼
+若 runtime_state=awaiting_user_input
+         │
+         ├──▶ emit_event(verification_skipped)
+         │
+         └──▶ 返回澄清问题（不触发 task_judged）
+         
+否则（终态 completed/failed）
+         │
+         ▼
 emit_event(task_finished)
          │  <- 此时 payload 只有 runtime 信息，无验证结果
          ▼
@@ -323,6 +332,7 @@ postmortem 生成（覆盖写）
 
 - `task_finished`：先生成初版（给 VerifierAgent 提供同 run 证据）
 - `task_judged`：评估后覆盖写最终版
+- `verification_skipped`：澄清等待阶段也会生成 run 级复盘（无最终判定）
 
 ## 7. 扩展指南
 

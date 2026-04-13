@@ -44,8 +44,8 @@ class SystemMemoryStore:
                     last_reviewed_at TEXT,
                     confidence TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
                 )
                 """
             )
@@ -79,7 +79,7 @@ class SystemMemoryStore:
                     :problem_pattern_json, :solution_json, :constraints_json, :anti_pattern_json,
                     :evidence_json, :impact_json, :owner_team, :owner_primary, :owner_reviewers_json,
                     :status, :version, :effective_from, :expire_at, :last_reviewed_at, :confidence,
-                    :payload_json, datetime('now'), datetime('now')
+                    :payload_json, datetime('now','localtime'), datetime('now','localtime')
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
@@ -104,7 +104,7 @@ class SystemMemoryStore:
                     last_reviewed_at = excluded.last_reviewed_at,
                     confidence = excluded.confidence,
                     payload_json = excluded.payload_json,
-                    updated_at = datetime('now')
+                    updated_at = datetime('now','localtime')
                 """,
                 normalized,
             )
@@ -160,7 +160,7 @@ class SystemMemoryStore:
 
         if only_active:
             clauses.append("status = 'active'")
-            clauses.append("(expire_at IS NULL OR date(expire_at) >= date('now'))")
+            clauses.append("(expire_at IS NULL OR date(expire_at) >= date('now','localtime'))")
 
         sql = f"""
             SELECT id, payload_json, scenario_stage, title, status, expire_at
@@ -199,7 +199,7 @@ class SystemMemoryStore:
                 FROM memory_card
                 WHERE status = 'active'
                   AND expire_at IS NOT NULL
-                  AND date(expire_at) <= date('now', ?)
+                  AND date(expire_at) <= date('now','localtime', ?)
                 ORDER BY date(expire_at) ASC
                 LIMIT ?
                 """,

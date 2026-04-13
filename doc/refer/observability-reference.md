@@ -130,6 +130,8 @@ class EventRecord:
 | **任务** | `task_started` | 任务开始 |
 | | `task_finished` | 任务结束 |
 | | `task_judged` | 任务判定完成 |
+| | `run_resumed` | 同一 run 从等待态恢复 |
+| | `user_clarification_received` | 接收到用户澄清补充 |
 | **模型** | `model_reasoning` | 模型思考中 |
 | | `model_failed` | 模型调用失败 |
 | | `model_stopped_length` | 超出长度限制 |
@@ -156,6 +158,7 @@ class EventRecord:
 | **评估** | `verification_started` | 开始评估 |
 | | `verification_passed` | 评估通过 |
 | | `verification_failed` | 评估失败 |
+| | `verification_skipped` | 评估跳过（等待用户输入） |
 
 ### 3.3 未知事件处理
 
@@ -282,8 +285,17 @@ def build_trace(events: List[EventRecord]) -> List[Dict]:
 ### 7.1 输出路径
 
 默认路径：
-- `observability-evals/<task_id>__<run_id>/postmortem.md`
+- `observability-evals/<task_id>/<run_id>/postmortem.md`
 - 无 run_id 时：`observability-evals/<task_id>/postmortem.md`
+
+同目录补充文件：
+- `events.jsonl`（该 run 事件流水）
+- `judgement.json`（该 run 最终判定，若存在）
+
+任务根目录补充文件：
+- `task_summary.json`（任务级 run 聚合）
+- `task_judgement.json`（最新一次任务判定快照）
+- `task_judgement_history.jsonl`（全部 task_judged 历史）
 
 ### 7.2 内容结构
 
@@ -331,8 +343,9 @@ task_started
 task_finished
     payload: {
         stop_reason,
+        runtime_state,
         tool_failure_count,
-        final_answer_preview
+        has_tool_failures
     }
 
 task_judged
@@ -341,6 +354,13 @@ task_judged
         verified_success,
         failure_type,
         verifier_breakdown
+    }
+
+verification_skipped
+    payload: {
+        reason,          # awaiting_user_input
+        stop_reason,
+        runtime_state
     }
 ```
 

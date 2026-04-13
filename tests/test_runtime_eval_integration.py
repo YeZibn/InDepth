@@ -96,10 +96,9 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         self.assertEqual(result, "任务已完成")
         self.assertTrue(any(e.get("event_type") == "verification_started" for e in captured))
         self.assertTrue(any(e.get("event_type") == "task_judged" for e in captured))
-
-        finished = [e for e in captured if e.get("event_type") == "task_finished"]
-        self.assertEqual(len(finished), 1)
-        payload = finished[0].get("payload", {})
+        judged = [e for e in captured if e.get("event_type") == "task_judged"]
+        self.assertEqual(len(judged), 1)
+        payload = judged[0].get("payload", {})
         self.assertEqual(payload.get("verified_success"), True)
         self.assertEqual(payload.get("final_status"), "pass")
 
@@ -144,9 +143,94 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
 
         finished = [e for e in captured if e.get("event_type") == "task_finished"]
         self.assertEqual(len(finished), 1)
-        self.assertEqual(finished[0].get("status"), "error")
-        self.assertEqual(finished[0].get("payload", {}).get("verified_success"), False)
+        self.assertEqual(finished[0].get("status"), "ok")
+        judged = [e for e in captured if e.get("event_type") == "task_judged"]
+        self.assertEqual(len(judged), 1)
+        self.assertEqual(judged[0].get("status"), "error")
+        self.assertEqual(judged[0].get("payload", {}).get("verified_success"), False)
         self.assertTrue(any(e.get("event_type") == "verification_failed" for e in captured))
+
+    def test_runtime_skips_evaluation_when_clarification_is_requested(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "我需要先确认一下：你希望输出中文还是英文？",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "我需要先确认一下：你希望输出中文还是英文？"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        captured = []
+
+        def _capture_emit_event(*args, **kwargs):
+            captured.append(kwargs)
+            return {}
+
+        with patch("app.core.runtime.agent_runtime.emit_event", side_effect=_capture_emit_event):
+            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
+            result = runtime.run("请写一个摘要", task_id="runtime_eval_task4", run_id="runtime_eval_run4")
+
+        self.assertIn("确认", result)
+        self.assertTrue(any(e.get("event_type") == "clarification_requested" for e in captured))
+        self.assertTrue(any(e.get("event_type") == "verification_skipped" for e in captured))
+        self.assertFalse(any(e.get("event_type") == "verification_started" for e in captured))
+        self.assertFalse(any(e.get("event_type") == "task_judged" for e in captured))
+
+    def test_runtime_resumes_same_run_after_user_clarification(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "请确认是否需要包含测试报告？",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "请确认是否需要包含测试报告？"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "已完成并包含测试报告。",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成并包含测试报告。"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+        captured = []
+
+        def _capture_emit_event(*args, **kwargs):
+            captured.append(kwargs)
+            return {}
+
+        with patch("app.core.runtime.agent_runtime.emit_event", side_effect=_capture_emit_event):
+            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
+            first = runtime.run("请产出发布说明", task_id="runtime_eval_task5", run_id="runtime_eval_run5")
+            second = runtime.run(
+                "需要包含测试报告",
+                task_id="runtime_eval_task5",
+                run_id="runtime_eval_run5",
+                resume_from_waiting=True,
+            )
+
+        self.assertIn("确认", first)
+        self.assertIn("完成", second)
+        self.assertTrue(any(e.get("event_type") == "run_resumed" for e in captured))
+        self.assertTrue(any(e.get("event_type") == "user_clarification_received" for e in captured))
+        judged = [e for e in captured if e.get("event_type") == "task_judged"]
+        self.assertEqual(len(judged), 1)
 
     def test_runtime_can_enable_llm_judge(self):
         provider = MockModelProvider(

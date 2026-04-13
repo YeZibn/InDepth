@@ -247,6 +247,8 @@ _finalize_task_memory() ──▶ SystemMemoryStore.upsert_card()
 memory_store.compact_final()
 ```
 
+说明：若本轮命中澄清状态（`awaiting_user_input`），运行时会先发 `verification_skipped` 并返回澄清问题；同一 `run_id` 在用户补充后通过 `run_resumed` 继续，不在该阶段触发 `task_judged`。
+
 ### 4.2 SubAgent 并行流程
 
 ```

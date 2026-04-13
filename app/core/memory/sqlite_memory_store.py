@@ -46,7 +46,7 @@ class SQLiteMemoryStore:
                     content TEXT NOT NULL,
                     tool_call_id TEXT,
                     tool_calls_json TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
                 )
                 """
             )
@@ -58,7 +58,7 @@ class SQLiteMemoryStore:
                     schema_version TEXT,
                     summary_json TEXT,
                     last_anchor_msg_id INTEGER,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
                 )
                 """
             )
@@ -246,14 +246,14 @@ class SQLiteMemoryStore:
                 INSERT INTO summaries (
                     conversation_id, summary, schema_version, summary_json, last_anchor_msg_id, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
                 ON CONFLICT(conversation_id) DO UPDATE
                 SET
                     summary = excluded.summary,
                     schema_version = excluded.schema_version,
                     summary_json = excluded.summary_json,
                     last_anchor_msg_id = excluded.last_anchor_msg_id,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = datetime('now','localtime')
                 """,
                 (
                     conversation_id,

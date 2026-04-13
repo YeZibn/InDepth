@@ -22,6 +22,21 @@ class _FakeProvider:
         self.kwargs = kwargs
 
 
+class _FakeRuntimeClarify:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.run_calls = []
+        self.last_runtime_state = "idle"
+
+    def run(self, **kwargs):
+        self.run_calls.append(kwargs)
+        if len(self.run_calls) == 1:
+            self.last_runtime_state = "awaiting_user_input"
+            return "请确认输出语言。"
+        self.last_runtime_state = "completed"
+        return "已完成。"
+
+
 @tool(name="dummy_tool", description="dummy tool for main agent tests")
 def _dummy_tool(query: str) -> str:
     return query
@@ -68,6 +83,40 @@ class MainAgentTests(unittest.TestCase):
         self.assertEqual(call["user_input"], "ping")
         self.assertEqual(call["task_id"], "main_agent_task")
         self.assertEqual(call["run_id"], "main_agent_abcdef12")
+        self.assertEqual(call["resume_from_waiting"], False)
+
+    def test_chat_reuses_same_run_id_when_waiting_for_user_clarification(self):
+        with (
+            patch("app.agent.agent.AgentRuntime", _FakeRuntimeClarify),
+            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch(
+                "app.agent.agent.uuid.uuid4",
+                side_effect=[
+                    SimpleNamespace(hex="aaaabbbbccccdddd"),
+                    SimpleNamespace(hex="eeeeffff00001111"),
+                ],
+            ),
+        ):
+            agent = BaseAgent(
+                name="main_agent",
+                description="test agent",
+                instructions="hello",
+                tools=[_dummy_tool],
+                load_memory_knowledge=False,
+                enable_llm_judge=False,
+            )
+            first = agent.chat("先做个草稿")
+            second = agent.chat("中文即可")
+
+        self.assertIn("确认", first)
+        self.assertIn("完成", second)
+        self.assertEqual(len(agent.runtime.run_calls), 2)
+        call1 = agent.runtime.run_calls[0]
+        call2 = agent.runtime.run_calls[1]
+        self.assertEqual(call1["run_id"], "main_agent_aaaabbbb")
+        self.assertEqual(call2["run_id"], "main_agent_aaaabbbb")
+        self.assertEqual(call1["resume_from_waiting"], False)
+        self.assertEqual(call2["resume_from_waiting"], True)
 
     def test_load_memory_knowledge_switch_controls_system_prompt(self):
         with (

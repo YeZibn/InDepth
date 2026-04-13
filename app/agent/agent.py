@@ -92,6 +92,8 @@ class BaseAgent:
             enable_llm_judge=enable_llm_judge,
             compression_config=compression_config,
         )
+        self._active_run_id: Optional[str] = None
+        self._awaiting_user_input = False
 
     def _build_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
@@ -99,9 +101,22 @@ class BaseAgent:
         return registry
 
     def chat(self, message: str) -> str:
-        run_id = f"{self.name}_{uuid.uuid4().hex[:8]}"
         task_id = f"{self.name}_task"
-        answer = self.runtime.run(user_input=message, task_id=task_id, run_id=run_id)
+        resume_from_waiting = self._awaiting_user_input and bool(self._active_run_id)
+        run_id = self._active_run_id or f"{self.name}_{uuid.uuid4().hex[:8]}"
+        answer = self.runtime.run(
+            user_input=message,
+            task_id=task_id,
+            run_id=run_id,
+            resume_from_waiting=resume_from_waiting,
+        )
+        runtime_state = str(getattr(self.runtime, "last_runtime_state", "")).strip()
+        if runtime_state == "awaiting_user_input":
+            self._awaiting_user_input = True
+            self._active_run_id = run_id
+        else:
+            self._awaiting_user_input = False
+            self._active_run_id = None
         print(answer)
         return answer
 

@@ -188,6 +188,7 @@ def run(
     task_id: str = "runtime_task",
     run_id: str = "runtime_run",
     task_spec: Optional[Dict[str, Any]] = None,
+    resume_from_waiting: bool = False,
 ) -> str:
 ```
 
@@ -198,6 +199,7 @@ def run(
 | `final_answer` | `Optional[str]` | 最终回答文本 |
 | `task_status` | `str` | `ok` / `error` |
 | `stop_reason` | `str` | 收敛原因 |
+| `runtime_state` | `str` | `running/awaiting_user_input/completed/failed` |
 | `last_tool_failures` | `List[Dict]` | 工具失败记录 |
 | `consecutive_tool_calls` | `int` | 连续工具调用计数 |
 
@@ -205,7 +207,8 @@ def run(
 
 | finish_reason | 处理逻辑 | stop_reason |
 |--------------|---------|-------------|
-| `stop` | 正常收敛 | `stop` |
+| `stop` + 澄清意图 | 挂起等待用户输入（同 run 可恢复） | `awaiting_user_input` |
+| `stop` + 非澄清 | 正常收敛 | `stop` |
 | `length` | 超出上下文 | `length` |
 | `content_filter` | 内容过滤 | `content_filter` |
 | `tool_calls` | 执行工具（循环） | - |
@@ -359,6 +362,9 @@ def _finalize_task_memory(self, task_id, run_id, task_status):
 | `verification_started` | 开始评估 | - |
 | `verification_passed` | 评估通过 | verifier_results |
 | `verification_failed` | 评估失败 | verifier_results |
+| `verification_skipped` | 跳过评估（等待用户输入） | reason, runtime_state |
+| `user_clarification_received` | 收到用户补充 | - |
+| `run_resumed` | 同一 run 恢复执行 | - |
 | `task_finished` | 任务结束 | stop_reason, tool_failure_count |
 | `task_judged` | 任务判定 | 完整 judgement |
 | `memory_triggered` | 记忆触发 | card_id |
