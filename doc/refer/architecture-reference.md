@@ -190,8 +190,7 @@ app/
 │   └── trace.py                    # trace 构建
 │
 └── skills/                         # 项目内技能
-    ├── todo-skill/                 # 任务管理技能
-    ├── memory-knowledge-skill/      # 记忆知识技能
+    ├── memory-knowledge-skill/     # 记忆知识技能
     ├── ppt-skill/                 # PPT 生成技能
     └── skill-creator/              # 技能创建工具
 ```

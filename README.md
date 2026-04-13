@@ -107,7 +107,7 @@ InDepth 的设计遵循以下原则：
    - `LLM_BASE_URL`
 3. 启动 CLI
    - `python app/agent/runtime_agent.py`
-   - 默认加载 `app/skills/` 下全部技能（当前为 `memory-knowledge-skill`、`ppt-skill`、`skill-creator`、`todo-skill`）
+   - 默认加载 `app/skills/` 下全部技能（当前为 `memory-knowledge-skill`、`ppt-skill`、`skill-creator`）
 
 ### 4.2 关键目录
 

@@ -61,11 +61,8 @@
 2. `tests/test_postmortem_output_layout.py`
 
 文档/技能：
-1. `app/skills/todo-skill/SKILL.md`
-2. `app/skills/todo-skill/references/examples.md`
-3. `app/skills/todo-skill/references/task_format.md`
-4. `app/skills/todo-skill/references/task_template.md`
-5. `doc/refer/tools-reference.md`
+1. `doc/refer/tools-reference.md`
+2. `app/skills/todo-skill/*`（历史实现；已于后续版本移除）
 
 ## 5. 兼容性与影响
 
@@ -98,4 +95,3 @@
 后续建议：
 1. 在 Runtime/system prompt 中明确 Todo 工具参数为 `todo_id`
 2. 增加一条集成测试，覆盖 `create_task -> update_task_status -> postmortem` 全链路
-

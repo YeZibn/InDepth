@@ -41,9 +41,13 @@ class BootstrapTests(unittest.TestCase):
             ) as mock_builder,
             patch("app.core.bootstrap.register_tool_functions") as mock_register,
         ):
-            runtime = create_runtime(system_prompt="hello", skill_paths=["app/skills/todo-skill"], enable_llm_judge=False)
+            runtime = create_runtime(
+                system_prompt="hello",
+                skill_paths=["app/skills/skill-creator"],
+                enable_llm_judge=False,
+            )
 
-        mock_builder.assert_called_once_with(["app/skills/todo-skill"], validate=False)
+        mock_builder.assert_called_once_with(["app/skills/skill-creator"], validate=False)
         mock_register.assert_called_once()
         self.assertEqual(runtime.kwargs["skill_prompt"], "SKILL-SYSTEM-PROMPT")
 
