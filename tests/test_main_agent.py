@@ -104,7 +104,7 @@ class MainAgentTests(unittest.TestCase):
         self.assertEqual(len(agent.runtime.run_calls), 1)
         call = agent.runtime.run_calls[0]
         self.assertEqual(call["user_input"], "ping")
-        self.assertEqual(call["task_id"], "main_agent_task")
+        self.assertTrue(call["task_id"].startswith("main_agent_task_"))
         self.assertEqual(call["run_id"], "main_agent_abcdef12")
         self.assertEqual(call["resume_from_waiting"], False)
 
@@ -140,6 +140,32 @@ class MainAgentTests(unittest.TestCase):
         self.assertEqual(call2["run_id"], "main_agent_aaaabbbb")
         self.assertEqual(call1["resume_from_waiting"], False)
         self.assertEqual(call2["resume_from_waiting"], True)
+
+    def test_start_new_task_rotates_task_id_and_resets_waiting_state(self):
+        with (
+            patch("app.agent.agent.AgentRuntime", _FakeRuntime),
+            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+        ):
+            agent = BaseAgent(
+                name="main_agent",
+                description="test agent",
+                instructions="hello",
+                tools=[_dummy_tool],
+                load_default_tools=False,
+                load_memory_knowledge=False,
+                enable_llm_judge=False,
+            )
+
+        old_task_id = agent._task_id
+        agent._awaiting_user_input = True
+        agent._active_run_id = "main_agent_deadbeef"
+        new_task_id = agent.start_new_task("notion research")
+
+        self.assertNotEqual(old_task_id, new_task_id)
+        self.assertTrue(new_task_id.startswith("main_agent_task_"))
+        self.assertIn("notion_research", new_task_id)
+        self.assertFalse(agent._awaiting_user_input)
+        self.assertIsNone(agent._active_run_id)
 
     def test_load_memory_knowledge_switch_controls_system_prompt(self):
         with (

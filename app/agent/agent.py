@@ -1,5 +1,7 @@
 import os
+import re
 import uuid
+from datetime import datetime
 from typing import Any, Iterable, Optional
 
 from dotenv import load_dotenv
@@ -97,6 +99,7 @@ class BaseAgent:
         )
         self._active_run_id: Optional[str] = None
         self._awaiting_user_input = False
+        self._task_id = self._generate_task_id()
 
     def _build_registry(self) -> ToolRegistry:
         registry = build_default_registry() if self.load_default_tools else ToolRegistry()
@@ -107,7 +110,7 @@ class BaseAgent:
         return registry
 
     def chat(self, message: str) -> str:
-        task_id = f"{self.name}_task"
+        task_id = self._task_id
         resume_from_waiting = self._awaiting_user_input and bool(self._active_run_id)
         run_id = self._active_run_id or f"{self.name}_{uuid.uuid4().hex[:8]}"
         answer = self.runtime.run(
@@ -125,6 +128,25 @@ class BaseAgent:
             self._active_run_id = None
         print(answer)
         return answer
+
+    def _generate_task_id(self, label: str = "") -> str:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        suffix = ""
+        if label.strip():
+            sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "_", label).strip("_")
+            if sanitized:
+                suffix = f"_{sanitized[:32]}"
+        return f"{self.name}_task_{timestamp}{suffix}"
+
+    def start_new_task(self, label: str = "") -> str:
+        self._task_id = self._generate_task_id(label=label)
+        self._awaiting_user_input = False
+        self._active_run_id = None
+        return self._task_id
+
+    @property
+    def current_task_id(self) -> str:
+        return self._task_id
 
     def _extract_skill_paths(self, skills: Any) -> list[str]:
         if skills is None:

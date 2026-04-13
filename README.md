@@ -108,6 +108,14 @@ InDepth 的设计遵循以下原则：
 3. 启动 CLI
    - `python app/agent/runtime_agent.py`
    - 默认加载 `app/skills/` 下全部技能（当前为 `memory-knowledge-skill`、`ppt-skill`、`skill-creator`）
+4. 常用 CLI 命令
+   - `/help`：查看命令帮助
+   - `/mode chat`：切换到聊天模式
+   - `/mode task [label]`：切换到任务模式，并开启新 `task_id`（默认后缀 `_task`，有 label 则使用 label）
+   - `/task <label>`：在任务模式下结束当前任务并启动下一任务
+   - `/newtask <label>`：`/task` 的别名
+   - `/status`：查看当前模式与 `task_id`
+   - `/exit`：退出
 
 ### 4.2 关键目录
 
