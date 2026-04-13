@@ -1,6 +1,6 @@
 # InDepth 配置参考
 
-更新时间：2026-04-12
+更新时间：2026-04-13
 
 ## 1. 目标
 
@@ -249,7 +249,8 @@ class HttpChatModelProvider:
 | `max_steps` | 100 | 25 |
 | runtime memory DB | `db/runtime_memory_main_agent.db` | `db/runtime_memory_subagent_<role>.db` |
 | `enable_llm_judge` | True | False |
-| 加载 memory-knowledge-skill | ❌ | ✅ |
+| skills 来源 | 调用方传入 `skills`/`skill_paths` | 默认 `app/skills/memory-knowledge-skill` |
+| skills 注入方式 | `<skills_system>` + 技能访问工具（有技能时） | `<skills_system>` + 技能访问工具 |
 
 ### 7.2 SubAgent 按角色差异
 

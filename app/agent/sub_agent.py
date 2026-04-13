@@ -9,7 +9,7 @@ from app.core.memory import SQLiteMemoryStore
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
-from app.core.skills import LocalSkills, SkillLoader, Skills
+from app.core.skills import build_skills_manager
 from app.core.tools.adapters import register_tool_functions
 from app.core.tools.registry import ToolRegistry
 from app.tool.bash_tool import execute_bash_command
@@ -84,10 +84,8 @@ class SubAgent:
             task=self.task,
             extra_instructions=extra,
         )
-        self.skills_manager = Skills(loaders=[LocalSkills("app/skills/memory-knowledge-skill", validate=False)])
-        skill_prompt = self.skills_manager.get_system_prompt_snippet() or SkillLoader().build_skill_prompt(
-            ["app/skills/memory-knowledge-skill"]
-        )
+        self.skills_manager = build_skills_manager(["app/skills/memory-knowledge-skill"], validate=False)
+        skill_prompt = self.skills_manager.get_system_prompt_snippet()
         # Aggregate runtime memory by sub-agent role.
         memory_file = f"db/runtime_memory_subagent_{self.role}.db"
         generation_config = GenerationConfig(

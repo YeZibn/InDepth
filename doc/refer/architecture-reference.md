@@ -1,6 +1,6 @@
 # InDepth 架构参考
 
-更新时间：2026-04-12
+更新时间：2026-04-13
 
 ## 1. 系统架构总览
 
@@ -13,7 +13,7 @@
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         BaseAgent / RuntimeAgent                          │
 │  - 组合系统指令（InDepth.md）                                             │
-│  - 注入技能摘要（SkillLoader）                                            │
+│  - 注入技能系统提示（Skills manager）                                     │
 │  - 组装工具注册表                                                         │
 │  - 启动 Runtime 执行循环                                                   │
 └─────────────────────────────────┬───────────────────────────────────────┘
@@ -151,7 +151,8 @@ app/
 │   │   ├── system_memory_store.py  # 系统记忆
 │   │   └── context_compressor.py   # 压缩逻辑
 │   ├── skills/
-│   │   ├── loader.py               # 技能加载
+│   │   ├── factory.py              # skills manager 构建入口
+│   │   ├── loaders.py              # 本地技能加载器
 │   │   ├── manager.py              # 技能管理
 │   │   └── skill.py                # 技能抽象
 │   ├── bootstrap.py                # 初始化入口

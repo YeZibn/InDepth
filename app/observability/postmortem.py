@@ -24,7 +24,10 @@ def _default_postmortem_dir(task_id: str, run_id: Optional[str] = None) -> str:
     path = os.path.join(base, task_seg)
     if run_id:
         run_seg = _sanitize_segment(run_id, "run")
-        path = os.path.join(path, run_seg)
+        # When run_id equals task_id (common in todo flows), keep outputs at
+        # task root to avoid redundant nested folders.
+        if run_seg != task_seg:
+            path = os.path.join(path, run_seg)
     os.makedirs(path, exist_ok=True)
     return path
 

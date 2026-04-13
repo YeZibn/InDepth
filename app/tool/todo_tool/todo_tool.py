@@ -19,12 +19,14 @@ def _find_project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
 
 
-def _emit_obs(task_id: str, event_type: str, status: str = "ok", payload: Optional[Dict[str, Any]] = None) -> None:
+def _emit_obs(todo_id: str, event_type: str, status: str = "ok", payload: Optional[Dict[str, Any]] = None) -> None:
     """Best-effort observability hook. Never break business flow."""
     try:
+        raw = (todo_id or "").strip()
+        obs_task_id = raw if raw.startswith("todo-id:") else f"todo-id:{raw or 'unknown'}"
         emit_event(
-            task_id=task_id,
-            run_id=task_id,
+            task_id=obs_task_id,
+            run_id=obs_task_id,
             actor="main",
             role="general",
             event_type=event_type,
@@ -43,7 +45,7 @@ def _ensure_todo_dir() -> None:
     os.makedirs(_get_todo_dir(), exist_ok=True)
 
 
-def _generate_task_id(task_name: str) -> str:
+def _generate_todo_id(task_name: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     sanitized_name = re.sub(r"[^\w\s-]", "", task_name.lower())
     sanitized_name = re.sub(r"[\s]+", "_", sanitized_name).strip("_")
@@ -131,13 +133,15 @@ def _list_all_tasks() -> List[Dict[str, Any]]:
     return tasks
 
 
-def _get_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
-    filepath = os.path.join(_get_todo_dir(), f"{task_id}.md")
+def _get_task_by_todo_id(todo_id: str) -> Optional[Dict[str, Any]]:
+    filepath = os.path.join(_get_todo_dir(), f"{todo_id}.md")
     if os.path.exists(filepath):
         return _parse_task_file(filepath)
 
     for task in _list_all_tasks():
-        if task_id in task.get("metadata", {}).get("ID", ""):
+        metadata = task.get("metadata", {})
+        meta_todo_id = metadata.get("Todo ID", "") or metadata.get("ID", "")
+        if todo_id in meta_todo_id:
             return task
     return None
 
@@ -382,19 +386,19 @@ def create_task(task_name: str, context: str, subtasks: List[Dict[str, Any]]) ->
             and may include priority/dependencies.
 
     Returns:
-        Dict with success flag, filepath, task_id, and subtask_count.
+        Dict with success flag, filepath, todo_id, and subtask_count.
     """
     try:
         normalized_subtasks = _normalize_subtasks(subtasks)
         _ensure_todo_dir()
-        task_id = _generate_task_id(task_name)
-        filepath = os.path.join(_get_todo_dir(), f"{task_id}.md")
+        todo_id = _generate_todo_id(task_name)
+        filepath = os.path.join(_get_todo_dir(), f"{todo_id}.md")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         metadata = f"""# Task: {task_name}
 
 ## Metadata
-- **ID**: {task_id}
+- **Todo ID**: {todo_id}
 - **Status**: pending
 - **Priority**: high
 - **Created**: {now}
@@ -443,24 +447,25 @@ Task created automatically. Update as needed during execution.
             f.write(content)
 
         _emit_obs(
-            task_id=task_id,
+            todo_id=todo_id,
             event_type="task_started",
             payload={
                 "tool": "create_task",
                 "task_name": task_name,
                 "subtask_count": len(normalized_subtasks),
                 "filepath": filepath,
+                "todo_id": todo_id,
             },
         )
         return {
             "success": True,
             "filepath": filepath,
-            "task_id": task_id,
+            "todo_id": todo_id,
             "subtask_count": len(normalized_subtasks),
         }
     except Exception as e:
         _emit_obs(
-            task_id="unknown",
+            todo_id="unknown",
             event_type="tool_failed",
             status="error",
             payload={"tool": "create_task", "task_name": task_name, "error": str(e)},
@@ -475,12 +480,12 @@ Task created automatically. Update as needed during execution.
     requires_confirmation=False,
     cache_results=False,
 )
-def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[str, Any]:
+def update_task_status(todo_id: str, subtask_number: int, status: str) -> Dict[str, Any]:
     """
     Update a subtask status while enforcing dependency constraints.
 
     Args:
-        task_id: Task identifier or unique prefix.
+        todo_id: Todo identifier or unique prefix.
         subtask_number: 1-based subtask number in the task file.
         status: Target status, one of pending/in-progress/completed.
 
@@ -491,9 +496,9 @@ def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[s
     if status not in valid_statuses:
         return {"success": False, "error": f"Invalid status '{status}'. Valid: {', '.join(valid_statuses)}"}
 
-    task_data = _get_task_by_id(task_id)
+    task_data = _get_task_by_todo_id(todo_id)
     if not task_data:
-        return {"success": False, "error": f"Task not found: {task_id}"}
+        return {"success": False, "error": f"Todo not found: {todo_id}"}
 
     ok, error = _update_task_status(task_data["filepath"], str(subtask_number), status)
     if not ok:
@@ -502,10 +507,11 @@ def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[s
     updated_task = _parse_task_file(task_data["filepath"])
     completed, total, percentage = _calculate_progress(updated_task.get("subtasks", []))
     _emit_obs(
-        task_id=task_id,
+        todo_id=todo_id,
         event_type="status_updated",
         payload={
             "tool": "update_task_status",
+            "todo_id": todo_id,
             "subtask_number": subtask_number,
             "status": status,
             "progress": f"{completed}/{total} ({percentage}%)",
@@ -513,9 +519,9 @@ def update_task_status(task_id: str, subtask_number: int, status: str) -> Dict[s
     )
     if total > 0 and completed == total:
         _emit_obs(
-            task_id=task_id,
+            todo_id=todo_id,
             event_type="task_finished",
-            payload={"tool": "update_task_status", "progress": f"{completed}/{total} ({percentage}%)"},
+            payload={"tool": "update_task_status", "todo_id": todo_id, "progress": f"{completed}/{total} ({percentage}%)"},
         )
     return {
         "success": True,
@@ -545,7 +551,7 @@ def list_tasks() -> Dict[str, Any]:
             meta = task.get("metadata", {})
             summaries.append(
                 {
-                    "id": meta.get("ID", "N/A"),
+                    "todo_id": meta.get("Todo ID", meta.get("ID", "N/A")),
                     "status": meta.get("Status", "N/A"),
                     "priority": meta.get("Priority", "N/A"),
                     "progress": meta.get("Progress", "N/A"),
@@ -564,19 +570,19 @@ def list_tasks() -> Dict[str, Any]:
     requires_confirmation=False,
     cache_results=False,
 )
-def get_next_task_item(task_id: str) -> Dict[str, Any]:
+def get_next_task_item(todo_id: str) -> Dict[str, Any]:
     """
     Get the next executable pending subtask based on dependency satisfaction.
 
     Args:
-        task_id: Task identifier or unique prefix.
+        todo_id: Todo identifier or unique prefix.
 
     Returns:
         Dict with status=ready/all_completed/blocked and related payload.
     """
-    task_data = _get_task_by_id(task_id)
+    task_data = _get_task_by_todo_id(todo_id)
     if not task_data:
-        return {"success": False, "status": "not_found", "error": f"Task not found: {task_id}"}
+        return {"success": False, "status": "not_found", "error": f"Todo not found: {todo_id}"}
 
     next_task = _get_next_task(task_data.get("subtasks", []))
     if next_task:
@@ -605,25 +611,27 @@ def get_next_task_item(task_id: str) -> Dict[str, Any]:
     requires_confirmation=False,
     cache_results=False,
 )
-def get_task_progress(task_id: str) -> Dict[str, Any]:
+def get_task_progress(todo_id: str) -> Dict[str, Any]:
     """
     Get progress summary including completed, ready, and blocked subtasks.
 
     Args:
-        task_id: Task identifier or unique prefix.
+        todo_id: Todo identifier or unique prefix.
 
     Returns:
         Dict with progress string and task breakdown lists.
     """
-    task_data = _get_task_by_id(task_id)
+    task_data = _get_task_by_todo_id(todo_id)
     if not task_data:
-        return {"success": False, "error": f"Task not found: {task_id}"}
+        return {"success": False, "error": f"Todo not found: {todo_id}"}
 
     completed, total, percentage = _calculate_progress(task_data.get("subtasks", []))
     blocked_status = _calculate_blocked_status(task_data.get("subtasks", []))
+    metadata = task_data.get("metadata", {})
+    resolved_todo_id = metadata.get("Todo ID", metadata.get("ID", todo_id))
     return {
         "success": True,
-        "task_id": task_id,
+        "todo_id": resolved_todo_id,
         "progress": f"{completed}/{total} ({percentage}%)",
         "completed_tasks": [{"number": t["number"], "name": t["name"]} for t in task_data["subtasks"] if t["status"] == "completed"],
         "ready_tasks": [{"number": n, "name": nm} for n, nm in blocked_status["ready"]],
@@ -638,19 +646,19 @@ def get_task_progress(task_id: str) -> Dict[str, Any]:
     requires_confirmation=False,
     cache_results=False,
 )
-def generate_task_report(task_id: str) -> Dict[str, Any]:
+def generate_task_report(todo_id: str) -> Dict[str, Any]:
     """
     Generate a formatted plain-text progress report for a task.
 
     Args:
-        task_id: Task identifier or unique prefix.
+        todo_id: Todo identifier or unique prefix.
 
     Returns:
         Dict with success flag and rendered report content.
     """
-    task_data = _get_task_by_id(task_id)
+    task_data = _get_task_by_todo_id(todo_id)
     if not task_data:
-        return {"success": False, "error": f"Task not found: {task_id}"}
+        return {"success": False, "error": f"Todo not found: {todo_id}"}
 
     metadata = task_data.get("metadata", {})
     subtasks = task_data.get("subtasks", [])
@@ -661,7 +669,7 @@ def generate_task_report(task_id: str) -> Dict[str, Any]:
         "=" * 44,
         "TASK PROGRESS REPORT",
         "=" * 44,
-        f"Task ID: {metadata.get('ID', 'N/A')}",
+        f"Todo ID: {metadata.get('Todo ID', metadata.get('ID', 'N/A'))}",
         f"Status: {metadata.get('Status', 'N/A')}",
         f"Priority: {metadata.get('Priority', 'N/A')}",
         f"Created: {metadata.get('Created', 'N/A')}",

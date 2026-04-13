@@ -380,20 +380,25 @@ create_task(
 
 # 更新状态
 update_task_status(
-    task_name: str,
+    todo_id: str,
+    subtask_number: int,
     status: str  # pending/in-progress/completed
 ) -> Dict
 
 # 查询任务
-list_tasks(status: Optional[str] = None) -> List[Dict]
-get_next_task_item(task_name: str) -> Dict
-get_task_progress(task_name: str) -> Dict
+list_tasks() -> List[Dict]
+get_next_task_item(todo_id: str) -> Dict
+get_task_progress(todo_id: str) -> Dict
 
 # 生成报告
-generate_task_report(task_name: str) -> str
+generate_task_report(todo_id: str) -> str
 ```
 
 **文件结构**：`todo/<timestamp>_<sanitized_name>.md`
+**标识规范**：
+- Todo 领域统一使用 `todo_id`
+- `create_task` 返回 `todo_id`
+- `list_tasks` 返回项包含 `todo_id`
 
 **状态机**：
 ```

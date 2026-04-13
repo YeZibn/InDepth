@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -172,6 +174,32 @@ class MainAgentTests(unittest.TestCase):
         self.assertEqual(agent_str.skill_paths, ["app/skills/memory-knowledge-skill"])
         self.assertEqual(agent_list.skill_paths, ["a", "b"])
 
+    def test_main_agent_with_skills_uses_system_prompt_and_registers_skill_tools(self):
+        with TemporaryDirectory() as td:
+            skill_dir = Path(td) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: demo-skill\ndescription: demo\n---\n\n# Demo Skill\n\nUse this skill.\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("app.agent.agent.AgentRuntime", _FakeRuntime),
+                patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            ):
+                agent = BaseAgent(
+                    name="s1",
+                    description="x",
+                    instructions="x",
+                    tools=[],
+                    skills=str(skill_dir),
+                    load_memory_knowledge=False,
+                    enable_llm_judge=False,
+                )
+        self.assertIn("<skills_system>", agent.skill_prompt)
+        registry = agent.runtime.kwargs["tool_registry"]
+        self.assertTrue(registry.has("get_skill_instructions"))
+        self.assertTrue(registry.has("get_skill_reference"))
+        self.assertTrue(registry.has("get_skill_script"))
 
 if __name__ == "__main__":
     unittest.main()

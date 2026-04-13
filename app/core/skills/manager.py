@@ -59,6 +59,16 @@ class Skills:
         lines.append("</skills_system>")
         return "\n".join(lines)
 
+    def get_summary_prompt_snippet(self) -> str:
+        """Legacy-compatible lightweight summary for skill prompt injection."""
+        if not self._skills:
+            return ""
+        lines = ["已加载技能（执行时可参考）："]
+        for idx, skill in enumerate(self._skills.values(), 1):
+            lines.append(f"{idx}. {self._extract_display_name(skill)}: {self._extract_summary(skill.instructions)}")
+            lines.append(f"   - path: {skill.source_path}")
+        return "\n".join(lines)
+
     def get_tools(self) -> List[ToolFunction]:
         return [
             ToolFunction(
@@ -101,6 +111,21 @@ class Skills:
                 },
             ),
         ]
+
+    @staticmethod
+    def _extract_display_name(skill: Skill) -> str:
+        for line in skill.instructions.splitlines():
+            if line.startswith("# "):
+                return line[2:].strip()
+        return skill.name
+
+    @staticmethod
+    def _extract_summary(instructions: str) -> str:
+        for line in instructions.splitlines():
+            text = line.strip()
+            if text and not text.startswith("#") and not text.startswith("---"):
+                return text[:140]
+        return "Skill loaded."
 
     def _get_skill_instructions(self, skill_name: str) -> str:
         skill = self.get_skill(skill_name)

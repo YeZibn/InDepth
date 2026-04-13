@@ -3,8 +3,8 @@ from app.core.memory import SQLiteMemoryStore
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
-from app.core.skills import SkillLoader
-from app.core.tools.adapters import build_default_registry
+from app.core.skills import build_skills_manager
+from app.core.tools.adapters import build_default_registry, register_tool_functions
 
 
 def create_runtime(
@@ -38,7 +38,10 @@ def create_runtime(
     )
     model_provider = HttpChatModelProvider(default_config=generation_config)
     tool_registry = build_default_registry()
-    skill_prompt = SkillLoader().build_skill_prompt(skill_paths or [])
+    skills_manager = build_skills_manager(skill_paths or [], validate=False)
+    skill_prompt = skills_manager.get_system_prompt_snippet()
+    if skills_manager.get_skill_names():
+        register_tool_functions(tool_registry, skills_manager.get_tools())
     return AgentRuntime(
         model_provider=model_provider,
         tool_registry=tool_registry,

@@ -23,6 +23,10 @@
 - 用 `todo_tool` 做任务拆解
 - 用记忆能力做历史经验检索
 
+Todo 领域命名约束：
+- MUST 使用 `todo_id` 作为 Todo 工具参数与返回标识（禁止在 Todo 语义下继续使用 `task_id`）。
+- 观测层底层字段仍为 `task_id/run_id`，但 Todo 场景值 MUST 映射为 `todo-id:<todo_id>`。
+
 ## 2. 时效任务强约束
 
 凡包含“最新/近期/动态/趋势/新闻”等语义，检索前 MUST 通过四项门禁：
@@ -142,6 +146,7 @@ MUST NOT 使用 `auto` 或隐式路由。
 1. 开始执行：`pending -> in-progress`
 2. 执行完成：`completed`
 3. 出现阻塞：MUST 回写状态并标注阻塞原因
+4. 调用 Todo 工具时，MUST 传 `todo_id`（例如 `update_task_status(todo_id=..., ...)`）。
 
 执行依据：`app/tool/todo_tool/todo_tool.py`
 

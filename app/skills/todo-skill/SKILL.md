@@ -69,7 +69,7 @@ result = create_task.entrypoint(
 
 ## Task File Location and Shape
 
-- Location: `{project-root}/todo/{task-id}.md`
+- Location: `{project-root}/todo/{todo-id}.md`
 - ID pattern: `{YYYYMMDD_HHMMSS}_{sanitized_task_name}`
 - Progress pattern: `X/Y (Z%)`
 

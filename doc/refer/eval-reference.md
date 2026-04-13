@@ -268,7 +268,8 @@ class VerifierAgent:
 ```
 1. expected_artifacts 中指定的路径
 2. observability-evals/<task_id>/<run_id>
-3. 历史 work/ 目录
+3. observability-evals/<task_id>（当 run_id==task_id 或无 run_id）
+4. 历史 work/ 目录
 ```
 
 ### 5.3 输出要求

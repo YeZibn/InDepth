@@ -88,6 +88,8 @@ InDepth 的设计遵循以下原则：
 - Runtime 澄清恢复：`awaiting_user_input` 挂起 + 同一 `run_id` 恢复执行
 - Tool 体系：统一声明、注册、参数校验、调用封装
 - SubAgent 协同：角色化子代理与并行执行
+- Skills 统一接入：`build_skills_manager` + `<skills_system>` + 技能访问工具（按需读取 instructions/references/scripts）
+- Todo 编排：统一 `todo_id` 语义，避免与 Runtime `task_id` 混淆
 - Eval 判定：deterministic verifier + 可选 LLM judge
 - Observability：事件落盘、指标聚合、postmortem
 - Memory 闭环：运行时压缩摘要 + 系统经验卡沉淀
@@ -105,6 +107,7 @@ InDepth 的设计遵循以下原则：
    - `LLM_BASE_URL`
 3. 启动 CLI
    - `python app/agent/runtime_agent.py`
+   - 默认加载 `app/skills/` 下全部技能（当前为 `memory-knowledge-skill`、`ppt-skill`、`skill-creator`、`todo-skill`）
 
 ### 4.2 关键目录
 
@@ -162,9 +165,18 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
    - 主要能力：
      - 基础执行：bash、读写文件、时间工具
      - 检索执行：search guard 门禁下的受控搜索
-     - 任务编排：todo 工具（创建子任务、状态流转、依赖约束）
+     - 任务编排：todo 工具（创建子任务、状态流转、依赖约束，参数统一为 `todo_id`）
      - 并行协同：SubAgent 角色化执行（researcher/builder/reviewer/verifier）
    - 输出：结构化工具结果、子任务状态变化、可追溯执行日志。
+
+### 5.2 Todo ID 约定
+
+为避免与 Runtime 会话任务 `task_id` 混淆，Todo 领域统一使用 `todo_id`：
+
+1. Todo 工具入参统一为 `todo_id`（如 `update_task_status(todo_id=...)`）。
+2. `create_task` 返回 `todo_id`，`list_tasks` 返回 `todo_id` 字段。
+3. Todo 观测事件底层仍使用 `task_id/run_id` 字段，但值统一映射为 `todo-id:<todo_id>`。
+4. 当 `run_id == task_id`（Todo 场景）时，复盘会直接写入任务根目录，避免重复嵌套目录。
 
 4. 验证层（L4）
    - 作用：把“回答像完成”与“任务真完成”分离。
@@ -205,4 +217,3 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 | [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
 | [Agent 协同](doc/refer/agent-collaboration-reference.md) | 主从 Agent 协同与角色路由 |
 | [配置](doc/refer/config-reference.md) | 模型配置、压缩配置、环境变量 |
-

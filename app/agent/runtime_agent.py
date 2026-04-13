@@ -8,7 +8,11 @@ load_dotenv()
 
 
 if __name__ == "__main__":
-    runtime = create_runtime(system_prompt="遵守 InDepth 协议，优先结构化回答。", max_steps=50)
+    runtime = create_runtime(
+        system_prompt="遵守 InDepth 协议，优先结构化回答。",
+        max_steps=50,
+        skill_paths=["app/skills"],
+    )
     session_task_id = f"runtime_cli_task_{uuid.uuid4().hex[:8]}"
     print("欢迎使用 InDepth Runtime（自研内核 MVP）！输入 'exit' 退出。\n")
 

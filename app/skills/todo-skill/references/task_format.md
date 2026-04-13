@@ -11,7 +11,7 @@
 # Task: <Task Name>
 
 ## Metadata
-- **ID**: <task-id>
+- **Todo ID**: <todo-id>
 - **Status**: pending | in-progress | completed
 - **Priority**: high | medium | low
 - **Created**: YYYY-MM-DD HH:MM:SS

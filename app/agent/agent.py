@@ -9,7 +9,7 @@ from app.core.memory import SQLiteMemoryStore
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
-from app.core.skills import SkillLoader
+from app.core.skills import build_skills_manager
 from app.core.tools.adapters import register_tool_functions
 from app.core.tools.registry import ToolRegistry
 
@@ -55,7 +55,8 @@ class BaseAgent:
         self.skills = skills
         self.tools = list(tools) if tools else []
         self.skill_paths = self._extract_skill_paths(skills)
-        self.skill_prompt = SkillLoader().build_skill_prompt(self.skill_paths)
+        self.skills_manager = build_skills_manager(self.skill_paths, validate=False)
+        self.skill_prompt = self.skills_manager.get_system_prompt_snippet()
 
         if load_memory_knowledge:
             self.instructions = load_indepth_content() + "\n\n" + instructions
@@ -97,7 +98,10 @@ class BaseAgent:
 
     def _build_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
-        register_tool_functions(registry, self.tools)
+        all_tools = list(self.tools)
+        if self.skills_manager.get_skill_names():
+            all_tools.extend(self.skills_manager.get_tools())
+        register_tool_functions(registry, all_tools)
         return registry
 
     def chat(self, message: str) -> str:

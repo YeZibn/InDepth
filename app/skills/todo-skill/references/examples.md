@@ -29,11 +29,11 @@ result = create_task.entrypoint(
 ```python
 from app.tool.todo_tool.todo_tool import get_next_task_item, update_task_status
 
-task_id = "20260404_120000_implement_auth_system"
-next_item = get_next_task_item.entrypoint(task_id=task_id)
+todo_id = "20260404_120000_implement_auth_system"
+next_item = get_next_task_item.entrypoint(todo_id=todo_id)
 
 # after execution:
-update_task_status.entrypoint(task_id=task_id, subtask_number=1, status="completed")
+update_task_status.entrypoint(todo_id=todo_id, subtask_number=1, status="completed")
 ```
 
 ## Track Progress
@@ -41,8 +41,8 @@ update_task_status.entrypoint(task_id=task_id, subtask_number=1, status="complet
 ```python
 from app.tool.todo_tool.todo_tool import get_task_progress, generate_task_report
 
-progress = get_task_progress.entrypoint(task_id="20260404_120000_implement_auth_system")
-report = generate_task_report.entrypoint(task_id="20260404_120000_implement_auth_system")
+progress = get_task_progress.entrypoint(todo_id="20260404_120000_implement_auth_system")
+report = generate_task_report.entrypoint(todo_id="20260404_120000_implement_auth_system")
 ```
 
 ## List Tasks

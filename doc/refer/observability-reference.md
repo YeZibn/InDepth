@@ -287,6 +287,7 @@ def build_trace(events: List[EventRecord]) -> List[Dict]:
 默认路径：
 - `observability-evals/<task_id>/<run_id>/postmortem.md`
 - 无 run_id 时：`observability-evals/<task_id>/postmortem.md`
+- 当 `run_id == task_id` 时，采用任务根目录：`observability-evals/<task_id>/postmortem.md`（避免重复嵌套目录）
 
 同目录补充文件：
 - `events.jsonl`（该 run 事件流水）
@@ -296,6 +297,10 @@ def build_trace(events: List[EventRecord]) -> List[Dict]:
 - `task_summary.json`（任务级 run 聚合）
 - `task_judgement.json`（最新一次任务判定快照）
 - `task_judgement_history.jsonl`（全部 task_judged 历史）
+
+Todo 场景约定：
+- 观测 schema 字段仍为 `task_id/run_id`
+- 但值统一映射为 `todo-id:<todo_id>`，用于与 Runtime 主任务 ID 解耦
 
 ### 7.2 内容结构
 
