@@ -169,15 +169,6 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
      - 并行协同：SubAgent 角色化执行（researcher/builder/reviewer/verifier）
    - 输出：结构化工具结果、子任务状态变化、可追溯执行日志。
 
-### 5.2 Todo ID 约定
-
-为避免与 Runtime 会话任务 `task_id` 混淆，Todo 领域统一使用 `todo_id`：
-
-1. Todo 工具入参统一为 `todo_id`（如 `update_task_status(todo_id=...)`）。
-2. `create_task` 返回 `todo_id`，`list_tasks` 返回 `todo_id` 字段。
-3. Todo 观测事件底层仍使用 `task_id/run_id` 字段，但值统一映射为 `todo-id:<todo_id>`。
-4. 当 `run_id == task_id`（Todo 场景）时，复盘会直接写入任务根目录，避免重复嵌套目录。
-
 4. 验证层（L4）
    - 作用：把“回答像完成”与“任务真完成”分离。
    - 关键模块：`app/eval/*`（`EvalOrchestrator`、`verifiers`、`VerifierAgent`）。
