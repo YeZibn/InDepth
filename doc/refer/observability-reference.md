@@ -132,6 +132,7 @@ class EventRecord:
 | | `task_judged` | 任务判定完成 |
 | | `run_resumed` | 同一 run 从等待态恢复 |
 | | `user_clarification_received` | 接收到用户澄清补充 |
+| | `clarification_requested` | 模型请求用户澄清 |
 | **模型** | `model_reasoning` | 模型思考中 |
 | | `model_failed` | 模型调用失败 |
 | | `model_stopped_length` | 超出长度限制 |
