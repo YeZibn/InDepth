@@ -202,6 +202,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 |------|------|
 | [总索引](doc/refer/README.md) | 文档索引与阅读顺序 |
 | [Runtime](doc/refer/runtime-reference.md) | AgentRuntime 主循环、收敛逻辑 |
+| [Skills](doc/refer/skills-reference.md) | 技能加载、`<skills_system>` 注入、技能访问工具 |
 | [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
 | [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
 | [Eval](doc/refer/eval-reference.md) | 判定模型、verifier 链路 |
