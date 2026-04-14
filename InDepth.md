@@ -78,7 +78,7 @@
 - SubAgent：执行已分配子任务
 
 创建决策：
-1. 执行前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
+1. 创建 todo 前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
 2. 强烈建议使用 SubAgent，除非任务很小、拆分成本高、关键工具仅主 Agent 可用、链路时延敏感。
 
 场景分层（优先按 MUST/SHOULD/SHOULD NOT 判定）：

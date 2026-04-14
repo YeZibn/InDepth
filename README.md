@@ -193,7 +193,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
      - 压缩器：`app/core/memory/context_compressor.py`
      - System memory：`app/core/memory/system_memory_store.py`
    - 主要机制：
-     - 运行中压缩历史消息为 `summary_json`（保留关键约束/决策/产物锚点）
+     - 运行中压缩分两路：`token` 触发写入 `summary_json`；`event` 触发将连续工具调用段替换为单条摘要消息（状态工具豁免、保留最近工具单元）
      - 任务结束强制沉淀经验卡（`memory_card`）
      - 记忆事件（triggered/retrieved/decision）进入 observability 链路
    - 输出：结构化历史摘要、系统经验卡、可统计的记忆治理数据。

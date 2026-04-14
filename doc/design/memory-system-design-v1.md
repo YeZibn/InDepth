@@ -3,6 +3,8 @@
 更新时间：2026-04-12
 状态：V1 已落地（可继续迭代）
 
+> 说明：本文件为历史设计归档，具体实现与默认值以 `doc/refer/config-reference.md`、`doc/refer/runtime-reference.md` 为准。
+
 ## 1. 目标
 
 将记忆压缩从“仅 run 结束后触发”升级为“run 内可控触发 + run 后归档”，并保证：
@@ -48,7 +50,7 @@
 - `COMPACTION_STRONG_TOKEN_RATIO=0.82`
 - `COMPACTION_CONTEXT_WINDOW_TOKENS=16000`
 - `COMPACTION_KEEP_RECENT_TURNS=8`
-- `COMPACTION_TOOL_BURST_THRESHOLD=3`
+- `COMPACTION_TOOL_BURST_THRESHOLD=5`
 - `COMPACTION_CONSISTENCY_GUARD=true`
 
 ## 5. 结构化摘要 Schema（V1）
@@ -106,4 +108,3 @@
 1. 将 token 估算器替换为模型相关 tokenizer（减少估算误差）。
 2. 增加压缩质量回归集（成功率/约束违背率/成本）。
 3. 增加不可压缩规则白名单可配置化（而不是仅关键词）。
-

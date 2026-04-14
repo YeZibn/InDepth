@@ -1,6 +1,6 @@
 # InDepth Memory 参考
 
-更新时间：2026-04-13
+更新时间：2026-04-14
 
 ## 1. 模块范围
 
@@ -225,11 +225,8 @@ append_message(conversation_id, role, content, ...)
 │    _maybe_compact_mid_run()?                                         │
 │    ├── YES ──▶ compact_mid_run(trigger, mode)                       │
 │    │            │                                                   │
-│    │            ├── 提取旧消息 + 旧摘要                               │
-│    │            ├── ContextCompressor.merge_summary()               │
-│    │            ├── validate_consistency()                          │
-│    │            ├── UPSERT summaries 表                             │
-│    │            └── DELETE 已裁剪消息                               │
+│    │            ├── trigger=event: 工具链替换压缩（仅改 messages）    │
+│    │            └── trigger=token/finalize: summary 压缩路径         │
 │    │                                                                   │
 │    └── NO ──▶ 仅写入消息                                             │
 └─────────────────────────────────────────────────────────────────────┘
@@ -242,9 +239,8 @@ append_message(conversation_id, role, content, ...)
 | 优先级 | 条件 | trigger | mode | 说明 |
 |-------|------|---------|------|------|
 | 1 | `token_ratio >= strong_token_ratio` | token | strong | 强力压缩 |
-| 2 | `consecutive_tool_calls >= tool_burst_threshold` | event | light | 工具突发 |
-| 3 | `round % round_interval == 0` | round | light | 轮次驱动 |
-| 4 | `token_ratio >= light_token_ratio` | token | light | 容量触发 |
+| 2 | `current_tool_calls_count >= tool_burst_threshold` | event | light | 单次 tool_calls 条目触发 |
+| 3 | `token_ratio >= light_token_ratio` | token | light | 容量触发 |
 
 **默认值**：
 
@@ -252,9 +248,12 @@ append_message(conversation_id, role, content, ...)
 |------|--------|---------|
 | `strong_token_ratio` | 0.82 | `COMPACTION_STRONG_TOKEN_RATIO` |
 | `light_token_ratio` | 0.70 | `COMPACTION_LIGHT_TOKEN_RATIO` |
-| `round_interval` | 4 | `COMPACTION_ROUND_INTERVAL` |
-| `tool_burst_threshold` | 3 | `COMPACTION_TOOL_BURST_THRESHOLD` |
-| `keep_recent_turns` | 8 | `COMPACTION_KEEP_RECENT_TURNS` |
+| `tool_burst_threshold` | 5 | `COMPACTION_TOOL_BURST_THRESHOLD` |
+| `target_keep_ratio_strong` | 0.35 | `COMPACTION_TARGET_KEEP_RATIO_STRONG` |
+| `target_keep_ratio_light` | 0.55 | `COMPACTION_TARGET_KEEP_RATIO_LIGHT` |
+| `target_keep_ratio_finalize` | 0.50 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` |
+| `min_keep_messages` | 6 | `COMPACTION_MIN_KEEP_MESSAGES` |
+| `keep_recent_turns` | 8 | `COMPACTION_KEEP_RECENT_TURNS`（预算不可用兜底） |
 | `context_window_tokens` | 16000 | `COMPACTION_CONTEXT_WINDOW_TOKENS` |
 | `consistency_guard` | True | `COMPACTION_CONSISTENCY_GUARD` |
 
@@ -267,7 +266,7 @@ def _compact_impl(
     self,
     conversation_id: str,
     mode: str,      # light / strong / finalize
-    trigger: str,   # token / event / round / finalize
+    trigger: str,   # token / event / finalize
     force: bool,
     min_total: int,
 ) -> Dict[str, Any]:
@@ -290,12 +289,14 @@ _compact_impl(conversation_id, mode, trigger, force, min_total)
          │
          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ 2. 计算裁剪点（基于轮次，而非消息数）                                    │
+│ 2. 计算裁剪点（基于 token 预算）                                         │
 │                                                                      │
-│    cut_idx = _compute_turn_based_cut_index(all_messages,            │
-│                         keep_recent_turns=keep_recent_turns)        │
+│    target_keep_tokens = context_window_tokens * keep_ratio(mode)    │
+│    cut_idx = _compute_token_budget_cut_index(                        │
+│        all_messages, target_keep_tokens, min_keep_messages          │
+│    )                                                                 │
 │                                                                      │
-│    turn 定义：相邻 user 消息之间为一个 turn                            │
+│    turn 定义：相邻 user 消息之间为一轮（无 user 时按 assistant 分段）    │
 └─────────────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -360,52 +361,65 @@ _compact_impl(conversation_id, mode, trigger, force, min_total)
 返回压缩结果
 ```
 
-### 4.2 轮次裁剪算法
+### 4.2 Token 预算裁剪算法
 
 ```python
-def _compute_turn_based_cut_index(
+def _compute_token_budget_cut_index(
     self,
     rows: List[MessageRow],
-    keep_recent_turns: int,
+    target_keep_tokens: int,
+    min_keep_messages: int,
 ) -> int:
-    """基于 assistant turns 计算裁剪索引。"""
-    if keep_recent_turns <= 0 or not rows:
+    """按最新 turn 向前累计 token，返回需要裁剪的前缀边界。"""
+    if target_keep_tokens <= 0 or not rows:
         return 0
 
-    turns = []
-    current_turn = []
+    turn_ranges = split_turn_ranges(rows)  # [(start_idx, end_idx), ...]
+    keep_from = len(rows)
+    kept_tokens = 0
 
-    for row in rows:
-        role = row.role.strip().lower()
-        if role == "user":
-            if current_turn:
-                turns.append(current_turn)
-            current_turn = [row]
-        else:
-            current_turn.append(row)
+    # 从最新 turn 开始往前累计
+    for start, end in reversed(turn_ranges):
+        turn_tokens = estimate_tokens(rows[start:end])
+        if keep_from == len(rows):
+            keep_from = start
+            kept_tokens = turn_tokens
+            continue
+        if kept_tokens + turn_tokens > target_keep_tokens:
+            break
+        keep_from = start
+        kept_tokens += turn_tokens
 
-    if current_turn:
-        turns.append(current_turn)
-
-    if len(turns) <= keep_recent_turns:
-        return 0
-
-    cut_turn = len(turns) - keep_recent_turns
-    cut_row_idx = 0
-    for i in range(cut_turn):
-        cut_row_idx += len(turns[i])
-    return cut_row_idx
+    # 最小保留条数 + tool pair 保护
+    keep_from = adjust_for_min_keep_and_tool_pair(rows, keep_from, min_keep_messages)
+    return keep_from
 ```
 
-**示例**：
+### 4.3 Event 工具链替换压缩
 
 ```
-messages: [U1, A1, T1, U2, A2, T2, U3, A3, T3, U4, A4]
-turns:    [  [U1,A1,T1],  [U2,A2,T2],  [U3,A3,T3], [U4,A4]  ]
-                          ↑ cut here if keep_recent_turns=2
+compact_mid_run(trigger="event")
+    │
+    ├──▶ 定位最近连续工具调用段
+    │      assistant(tool_calls) + tool + ...
+    │
+    ├──▶ 切分为工具单元（assistant(tool_calls)+其后 tool）
+    │
+    ├──▶ 过滤状态工具单元（默认不压缩）：
+    │      create_task / get_next_task / update_task_status / init_search_guard
+    │
+    ├──▶ 保留最近 N 个工具单元原文（默认 N=1）
+    │
+    ├──▶ 对可压缩连续区段做就地替换：
+    │      UPDATE 锚点消息为 [tool-chain-compact] 摘要
+    │      DELETE 同区段其余消息
+    │
+    ├──▶ 摘要中包含 key_ids（todo_id/task_id/...）且不截断
+    │
+    └──▶ 不写 summaries（summary_json 不变）
 ```
 
-### 4.3 返回字段
+### 4.4 返回字段
 
 成功时返回：
 ```python
@@ -420,6 +434,23 @@ turns:    [  [U1,A1,T1],  [U2,A2,T2],  [U3,A3,T3], [U4,A4]  ]
     "immutable_constraints_count": 5,
     "immutable_constraints_preview": ["c_10", "c_23", ...],
     "immutable_hits_count": 8,
+    "target_keep_tokens": 8800,
+    "actual_kept_tokens_est": 7421,
+    "trim_strategy": "token_budget",
+    "cut_adjustment_reason": "tool_pair_guard",   # 可空
+}
+```
+
+`event` 替换压缩返回（示例）：
+```python
+{
+    "success": True,
+    "applied": True,
+    "trigger": "event",
+    "mode": "light",
+    "trim_strategy": "tool_chain_replace",
+    "replaced_message_count": 6,
+    "tool_chain_span": {"start_message_id": 101, "end_message_id": 106},
 }
 ```
 
@@ -492,7 +523,7 @@ turns:    [  [U1,A1,T1],  [U2,A2,T2],  [U3,A3,T3], [U4,A4]  ]
   ],
   "compression_meta": {
     "mode": "light",
-    "trigger": "round",
+    "trigger": "token",
     "before_messages": 100,
     "after_messages": 30,
     "dropped_messages": 70,
@@ -958,7 +989,8 @@ def emit_event(...):
 | 异常不阻塞 | 记忆链路异常不应中断主执行 |
 | Legacy 兼容 | legacy `summary` 文本仍可读，逐步迁移到 `summary_json` |
 | DB 按类型聚合 | 每个 Agent 类型有独立的 runtime memory 数据库 |
-| 裁剪基于轮次 | `keep_recent_turns` 控制保留的 assistant 轮次，非消息数 |
+| token 预算优先 | `token/finalize` 路径按预算裁剪，`keep_recent_turns` 仅作兜底 |
+| event 就地替换 | `event` 路径删除连续工具段并插入替代消息，不写 `summary_json` |
 
 ## 11. 测试映射
 

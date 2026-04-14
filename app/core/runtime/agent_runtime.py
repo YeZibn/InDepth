@@ -164,7 +164,8 @@ class AgentRuntime:
                 )
 
             if finish_reason == "tool_calls":
-                consecutive_tool_calls += len(tool_calls)
+                # Event compaction trigger is based on current tool_calls batch size.
+                consecutive_tool_calls = len(tool_calls)
                 self._trace(f"[step {step}] execute_tool_calls count={len(tool_calls)}")
                 messages.append(
                     {
@@ -418,9 +419,6 @@ class AgentRuntime:
             mode = "strong"
         elif consecutive_tool_calls >= self.compression_config.tool_burst_threshold:
             trigger = "event"
-            mode = "light"
-        elif (step - 1) % self.compression_config.round_interval == 0:
-            trigger = "round"
             mode = "light"
         elif usage >= self.compression_config.light_token_ratio:
             trigger = "token"

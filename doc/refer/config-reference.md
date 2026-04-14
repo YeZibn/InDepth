@@ -111,13 +111,17 @@ class RuntimeModelConfig:
 | 环境变量 | 字段 | 默认值 | 说明 |
 |----------|------|--------|------|
 | `ENABLE_MID_RUN_COMPACTION` | `enabled_mid_run` | `True` | 是否启用运行时压缩 |
-| `COMPACTION_ROUND_INTERVAL` | `round_interval` | `4` | 每 N 轮压缩一次（最小 1） |
+| `COMPACTION_ROUND_INTERVAL` | `round_interval` | `4` | 兼容保留配置（当前 mid-run 不使用 round 触发） |
 | `COMPACTION_LIGHT_TOKEN_RATIO` | `light_token_ratio` | `0.70` | 轻量压缩阈值（0~1） |
 | `COMPACTION_STRONG_TOKEN_RATIO` | `strong_token_ratio` | `0.82` | 强力压缩阈值（0~1） |
 | `COMPACTION_CONTEXT_WINDOW_TOKENS` | `context_window_tokens` | `16000` | 上下文窗口大小（最小 1024） |
-| `COMPACTION_KEEP_RECENT_TURNS` | `keep_recent_turns` | `8` | 保留最近 N 轮（最小 1） |
-| `COMPACTION_TOOL_BURST_THRESHOLD` | `tool_burst_threshold` | `3` | 连续工具调用阈值（最小 1） |
+| `COMPACTION_KEEP_RECENT_TURNS` | `keep_recent_turns` | `8` | 预算不可用时的轮次兜底（最小 1） |
+| `COMPACTION_TOOL_BURST_THRESHOLD` | `tool_burst_threshold` | `5` | 单次 `tool_calls` 条目阈值（最小 1） |
 | `COMPACTION_CONSISTENCY_GUARD` | `consistency_guard` | `True` | 是否启用一致性守护 |
+| `COMPACTION_TARGET_KEEP_RATIO_LIGHT` | `target_keep_ratio_light` | `0.55` | light 压缩保留比例（0~1） |
+| `COMPACTION_TARGET_KEEP_RATIO_STRONG` | `target_keep_ratio_strong` | `0.35` | strong 压缩保留比例（0~1） |
+| `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `target_keep_ratio_finalize` | `0.50` | finalize 压缩保留比例（0~1） |
+| `COMPACTION_MIN_KEEP_MESSAGES` | `min_keep_messages` | `6` | 最小保留消息数（最小 1） |
 
 ### 4.2 RuntimeCompressionConfig
 
@@ -130,9 +134,22 @@ class RuntimeCompressionConfig:
     strong_token_ratio: float = 0.82
     context_window_tokens: int = 16000
     keep_recent_turns: int = 8
-    tool_burst_threshold: int = 3
+    tool_burst_threshold: int = 5
     consistency_guard: bool = True
+    target_keep_ratio_light: float = 0.55
+    target_keep_ratio_strong: float = 0.35
+    target_keep_ratio_finalize: float = 0.50
+    min_keep_messages: int = 6
 ```
+
+### 4.2.1 Event 替换压缩安全默认值（SQLiteMemoryStore）
+
+以下为 `SQLiteMemoryStore` 内建默认（非环境变量）：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `keep_recent_event_tool_pairs` | `1` | 保留最近 1 个工具单元原文 |
+| `event_stateful_tools` | `create_task,get_next_task,update_task_status,init_search_guard` | 状态工具不参与 event 替换压缩 |
 
 ### 4.3 解析规则
 
@@ -146,8 +163,7 @@ class RuntimeCompressionConfig:
 | 条件 | trigger | mode | 说明 |
 |------|---------|------|------|
 | `token_ratio >= strong_token_ratio` | `token` | `strong` | 强力压缩 |
-| `consecutive_tool_calls >= tool_burst_threshold` | `event` | `light` | 事件触发 |
-| `round % round_interval == 0` | `round` | `light` | 定期压缩 |
+| `current_tool_calls_count >= tool_burst_threshold` | `event` | `light` | 事件触发（工具链替换压缩） |
 | `token_ratio >= light_token_ratio` | `token` | `light` | 容量触发 |
 
 ## 5. GenerationConfig（运行时推理参数）

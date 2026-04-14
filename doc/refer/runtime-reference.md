@@ -201,7 +201,7 @@ def run(
 | `stop_reason` | `str` | 收敛原因 |
 | `runtime_state` | `str` | `running/awaiting_user_input/completed/failed` |
 | `last_tool_failures` | `List[Dict]` | 工具失败记录 |
-| `consecutive_tool_calls` | `int` | 连续工具调用计数 |
+| `consecutive_tool_calls` | `int` | 当前一次 `tool_calls` 响应的条目数 |
 
 ### 4.3 finish_reason 处理
 
@@ -225,13 +225,10 @@ def run(
 1. token_ratio >= strong_token_ratio ──▶ trigger=token, mode=strong
                                             (激进压缩，保留更少历史)
 
-2. consecutive_tool_calls >= tool_burst_threshold ──▶ trigger=event, mode=light
-                                                      (事件驱动，轻量压缩)
+2. current_tool_calls_count >= tool_burst_threshold ──▶ trigger=event, mode=light
+                                                      (事件驱动，工具链替换压缩)
 
-3. round % round_interval == 0 ──▶ trigger=round, mode=light
-                                     (轮次驱动，定期压缩)
-
-4. token_ratio >= light_token_ratio ──▶ trigger=token, mode=light
+3. token_ratio >= light_token_ratio ──▶ trigger=token, mode=light
                                         (容量触发，轻量压缩)
 ```
 
@@ -240,23 +237,19 @@ def run(
 ```
 compact_mid_run(conversation_id, trigger, mode)
     │
-    ├──▶ 检查消息数量是否达到 min_total
+    ├──▶ if trigger == event:
+    │       ├──▶ 定位最近连续工具调用段（assistant(tool_calls)+tool...）
+    │       ├──▶ 过滤状态工具（create_task/get_next_task/update_task_status/init_search_guard）
+    │       ├──▶ 保留最近 1 个工具单元原文
+    │       ├──▶ UPDATE 锚点为 [tool-chain-compact] 摘要 + DELETE 其余消息
+    │       └──▶ 不写 summaries
     │
-    ├──▶ 计算裁剪点: cut = total - keep_recent
-    │
-    ├──▶ 提取旧消息 + 旧摘要
-    │
-    ├──▶ ContextCompressor.merge_summary()
-    │       │
-    │       ├──▶ 提取 goal/constraints/decisions/artifacts
-    │       │
-    │       └──▶ 生成结构化摘要 v1
-    │
-    ├──▶ validate_consistency() ──▶ 一致性守护
-    │
-    ├──▶ UPSERT summaries 表
-    │
-    └──▶ 删除已裁剪消息 (id <= last_anchor_msg_id)
+    └──▶ else (token/finalize):
+            ├──▶ 按 token 预算从最新 turn 向前累计计算保留区间
+            ├──▶ ContextCompressor.merge_summary()
+            ├──▶ validate_consistency()（一致性守护）
+            ├──▶ UPSERT summaries
+            └──▶ 删除被摘要覆盖的前缀消息
 ```
 
 ### 5.3 结构化摘要 v1
@@ -389,13 +382,17 @@ class RuntimeConfig:
 @dataclass
 class RuntimeCompressionConfig:
     enabled_mid_run: bool = True
-    round_interval: int = 4              # 每 N 轮压缩一次
+    round_interval: int = 4              # 兼容保留（当前 mid-run 不再使用 round 触发）
     light_token_ratio: float = 0.70      # 轻量压缩阈值
     strong_token_ratio: float = 0.82      # 强力压缩阈值
     context_window_tokens: int = 16000    # 上下文窗口大小
-    keep_recent_turns: int = 8            # 保留最近 N 轮
-    tool_burst_threshold: int = 3         # 连续工具调用阈值
+    keep_recent_turns: int = 8            # 仅在预算不可用时的兜底策略
+    tool_burst_threshold: int = 5         # 单次 tool_calls 条目阈值
     consistency_guard: bool = True        # 一致性守护
+    target_keep_ratio_light: float = 0.55
+    target_keep_ratio_strong: float = 0.35
+    target_keep_ratio_finalize: float = 0.50
+    min_keep_messages: int = 6
 ```
 
 ## 10. 入口点

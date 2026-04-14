@@ -21,6 +21,10 @@ class RuntimeCompressionConfig:
     keep_recent_turns: int
     tool_burst_threshold: int
     consistency_guard: bool
+    target_keep_ratio_light: float
+    target_keep_ratio_strong: float
+    target_keep_ratio_finalize: float
+    min_keep_messages: int
 
 
 def _first_non_empty(*values: Optional[str]) -> str:
@@ -103,6 +107,10 @@ def load_runtime_compression_config() -> RuntimeCompressionConfig:
         strong_token_ratio=_env_float("COMPACTION_STRONG_TOKEN_RATIO", 0.82),
         context_window_tokens=_env_int("COMPACTION_CONTEXT_WINDOW_TOKENS", 16000, min_value=1024),
         keep_recent_turns=_env_int("COMPACTION_KEEP_RECENT_TURNS", 8, min_value=1),
-        tool_burst_threshold=_env_int("COMPACTION_TOOL_BURST_THRESHOLD", 3, min_value=1),
+        tool_burst_threshold=_env_int("COMPACTION_TOOL_BURST_THRESHOLD", 5, min_value=1),
         consistency_guard=_env_bool("COMPACTION_CONSISTENCY_GUARD", True),
+        target_keep_ratio_light=_env_float("COMPACTION_TARGET_KEEP_RATIO_LIGHT", 0.55),
+        target_keep_ratio_strong=_env_float("COMPACTION_TARGET_KEEP_RATIO_STRONG", 0.35),
+        target_keep_ratio_finalize=_env_float("COMPACTION_TARGET_KEEP_RATIO_FINALIZE", 0.50),
+        min_keep_messages=_env_int("COMPACTION_MIN_KEEP_MESSAGES", 6, min_value=1),
     )

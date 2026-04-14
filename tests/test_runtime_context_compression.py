@@ -99,13 +99,20 @@ class RuntimeContextCompressionTests(unittest.TestCase):
     def test_compact_final_keeps_recent_assistant_turns_together(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "runtime_memory_turns.db")
-            store = SQLiteMemoryStore(db_file=db_path, keep_recent=2, summarize_threshold=3)
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                keep_recent=2,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.35,
+                min_keep_messages=3,
+            )
             task_id = "turn_task"
 
             store.append_message(
                 task_id,
                 "assistant",
-                "",
+                "plan_a " + ("x " * 60),
                 tool_calls=[
                     {
                         "id": "call_a",
@@ -114,11 +121,11 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                     }
                 ],
             )
-            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_a")
+            store.append_message(task_id, "tool", "{\"success\": true, \"data\": \"" + ("x" * 120) + "\"}", tool_call_id="call_a")
             store.append_message(
                 task_id,
                 "assistant",
-                "",
+                "plan_b " + ("y " * 60),
                 tool_calls=[
                     {
                         "id": "call_b",
@@ -127,8 +134,8 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                     }
                 ],
             )
-            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_b")
-            store.append_message(task_id, "assistant", "done")
+            store.append_message(task_id, "tool", "{\"success\": true, \"data\": \"" + ("y" * 120) + "\"}", tool_call_id="call_b")
+            store.append_message(task_id, "assistant", "done " + ("z " * 20))
 
             result = store.compact_final(task_id)
             self.assertTrue(bool(result.get("success")))
@@ -172,7 +179,14 @@ class RuntimeContextCompressionTests(unittest.TestCase):
     def test_sqlite_memory_store_compact_writes_structured_summary(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "runtime_memory.db")
-            store = SQLiteMemoryStore(db_file=db_path, keep_recent=2, summarize_threshold=3)
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                keep_recent=2,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_messages=2,
+            )
             task_id = "compress_task"
 
             store.append_message(task_id, "system", "必须遵守审批流程")
@@ -203,7 +217,144 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             self.assertEqual(recent[0].get("role"), "system")
             self.assertIn("结构化历史摘要", str(recent[0].get("content", "")))
 
-    def test_runtime_triggers_mid_run_compaction_by_round_interval(self):
+    def test_compact_final_uses_latest_turns_for_token_budget(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_turn_budget.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.35,
+                min_keep_messages=2,
+            )
+            task_id = "turn_budget_task"
+
+            store.append_message(task_id, "user", "turn1 " + ("a " * 80))
+            store.append_message(task_id, "assistant", "ack1 " + ("b " * 20))
+            store.append_message(task_id, "user", "turn2 " + ("c " * 80))
+            store.append_message(task_id, "assistant", "ack2 " + ("d " * 20))
+            store.append_message(task_id, "user", "turn3 latest " + ("e " * 80))
+            store.append_message(task_id, "assistant", "ack3 " + ("f " * 20))
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+            self.assertEqual(result.get("trim_strategy"), "token_budget")
+
+            with store._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT role, content FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+            self.assertTrue(rows)
+            self.assertIn("turn3 latest", rows[0][1])
+
+    def test_event_compaction_replaces_tool_chain_without_summary(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_event_replace.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=16000,
+                target_keep_ratio_light=0.55,
+                min_keep_messages=2,
+                keep_recent_event_tool_pairs=0,
+            )
+            task_id = "event_replace_task"
+
+            store.append_message(task_id, "user", "帮我处理这个任务")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": true, \"content\": \"A\"}", tool_call_id="call_1")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "write_file", "arguments": "{\"path\":\"b.txt\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": false, \"error\": \"permission denied\"}", tool_call_id="call_2")
+
+            result = store.compact_mid_run(task_id, trigger="event", mode="light")
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+            self.assertEqual(result.get("trim_strategy"), "tool_chain_replace")
+
+            with store._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT role, content, tool_call_id, tool_calls_json
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+                summary_row = conn.execute(
+                    "SELECT summary_json FROM summaries WHERE conversation_id = ?",
+                    (task_id,),
+                ).fetchone()
+
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0][0], "user")
+            self.assertEqual(rows[1][0], "assistant")
+            self.assertIn("[tool-chain-compact]", str(rows[1][1]))
+            self.assertIsNone(summary_row)
+
+    def test_event_compaction_skips_stateful_tool_units(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_event_stateful.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                keep_recent_event_tool_pairs=0,
+            )
+            task_id = "event_stateful_task"
+            store.append_message(task_id, "user", "创建并推进 todo")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "create_task", "arguments": "{\"task_name\":\"x\"}"},
+                    }
+                ],
+            )
+            store.append_message(
+                task_id,
+                "tool",
+                "{\"success\": true, \"result\": {\"todo_id\": \"todo_123\"}}",
+                tool_call_id="call_1",
+            )
+
+            result = store.compact_mid_run(task_id, trigger="event", mode="light")
+            self.assertTrue(bool(result.get("success")))
+            self.assertFalse(bool(result.get("applied")))
+            self.assertIn(str(result.get("reason")), {"no_eligible_tool_chain", "below_threshold", "nothing_to_cut"})
+
+    def test_runtime_triggers_mid_run_compaction_by_event(self):
         provider = MockModelProvider(
             scripted_outputs=[
                 {
@@ -261,13 +412,17 @@ class RuntimeContextCompressionTests(unittest.TestCase):
         memory_store = _InMemoryStore()
         compression_config = RuntimeCompressionConfig(
             enabled_mid_run=True,
-            round_interval=1,
+            round_interval=4,
             light_token_ratio=0.95,
             strong_token_ratio=0.99,
             context_window_tokens=16000,
             keep_recent_turns=8,
-            tool_burst_threshold=10,
+            tool_burst_threshold=1,
             consistency_guard=True,
+            target_keep_ratio_light=0.55,
+            target_keep_ratio_strong=0.35,
+            target_keep_ratio_finalize=0.50,
+            min_keep_messages=6,
         )
 
         runtime = AgentRuntime(
@@ -293,6 +448,9 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 keep_recent=2,
                 summarize_threshold=3,
                 consistency_guard=True,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_messages=2,
             )
             guarded.append_message(task_id, "system", "必须遵守审批流程")
             guarded.append_message(task_id, "user", "任务A")
@@ -308,6 +466,9 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 keep_recent=2,
                 summarize_threshold=3,
                 consistency_guard=False,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_messages=2,
             )
             unguarded.append_message(task_id, "system", "必须遵守审批流程")
             unguarded.append_message(task_id, "user", "任务A")
