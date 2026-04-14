@@ -25,6 +25,9 @@ RUNTIME_SYSTEM_PROMPT = """你是 InDepth 智能体运行时中的助手。
 
 
 class AgentRuntime:
+    START_RECALL_TOP_K = 5
+    START_RECALL_MIN_SCORE = 0.65
+
     def __init__(
         self,
         model_provider: ModelProvider,
@@ -78,6 +81,12 @@ class AgentRuntime:
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
             {"role": "user", "content": user_input}
         ]
+        messages = self._inject_system_memory_recall(
+            task_id=task_id,
+            run_id=run_id,
+            user_input=user_input,
+            messages=messages,
+        )
         tools = self.tool_registry.list_tool_schemas()
         if resume_from_waiting:
             emit_event(
@@ -582,6 +591,7 @@ class AgentRuntime:
                     "stage": stage,
                     "context_id": run_id,
                     "risk_level": risk_level,
+                    "source": "runtime_forced_finalize",
                     "source_event": "runtime_forced_finalize",
                 },
             )
@@ -598,6 +608,7 @@ class AgentRuntime:
                         "memory_id": mem_id,
                         "score": 1.0,
                         "stage": stage,
+                        "reason": "task_end_finalization",
                         "source": "runtime_finalize_upsert",
                     },
                 )
@@ -617,6 +628,189 @@ class AgentRuntime:
                 )
         except Exception:
             pass
+
+    def _inject_system_memory_recall(
+        self,
+        task_id: str,
+        run_id: str,
+        user_input: str,
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not messages:
+            return messages
+        try:
+            store = self.system_memory_store or SystemMemoryStore()
+        except Exception:
+            return messages
+
+        stage = self._infer_recall_stage(task_id=task_id, user_input=user_input)
+        query = self._build_recall_query(task_id=task_id, user_input=user_input)
+        triggered = emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="memory_triggered",
+            payload={
+                "stage": stage,
+                "context_id": run_id,
+                "risk_level": "P3",
+                "source": "runtime_start_recall",
+                "source_event": "runtime_start_recall",
+                "query": query,
+            },
+        )
+        trigger_event_id = str(triggered.get("event_id", "")).strip()
+
+        try:
+            rows = store.search_cards(
+                stage=stage,
+                query=query,
+                limit=max(self.START_RECALL_TOP_K * 2, self.START_RECALL_TOP_K),
+                only_active=True,
+            )
+        except Exception as e:
+            if trigger_event_id:
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="memory_decision_made",
+                    status="error",
+                    payload={
+                        "trigger_event_id": trigger_event_id,
+                        "decision": "skipped",
+                        "reason": f"recall_failed:{str(e)}",
+                        "stage": stage,
+                    },
+                )
+            return messages
+
+        selected = [
+            card for card in rows
+            if float(card.get("retrieval_score", 0.0) or 0.0) >= self.START_RECALL_MIN_SCORE
+        ][: self.START_RECALL_TOP_K]
+
+        if trigger_event_id:
+            if not selected:
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="memory_decision_made",
+                    payload={
+                        "trigger_event_id": trigger_event_id,
+                        "decision": "skipped",
+                        "reason": "no_high_precision_match",
+                        "stage": stage,
+                    },
+                )
+            else:
+                for card in selected:
+                    emit_event(
+                        task_id=task_id,
+                        run_id=run_id,
+                        actor="main",
+                        role="general",
+                        event_type="memory_retrieved",
+                        payload={
+                            "trigger_event_id": trigger_event_id,
+                            "memory_id": card.get("id", ""),
+                            "score": float(card.get("retrieval_score", 0.0) or 0.0),
+                            "stage": stage,
+                            "source": "runtime_start_recall",
+                        },
+                    )
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="memory_decision_made",
+                    payload={
+                        "trigger_event_id": trigger_event_id,
+                        "decision": "accepted",
+                        "reason": f"recalled_{len(selected)}_high_precision_cards",
+                        "stage": stage,
+                    },
+                )
+
+        if not selected:
+            return messages
+        memory_block = self._render_memory_recall_block(selected)
+        if not memory_block:
+            return messages
+        out = list(messages)
+        first = out[0] if out else {}
+        if isinstance(first, dict) and first.get("role") == "system":
+            base = str(first.get("content", "") or "")
+            first = dict(first)
+            first["content"] = f"{base}\n\n{memory_block}".strip()
+            out[0] = first
+            return out
+        return [{"role": "system", "content": memory_block}] + out
+
+    def _infer_recall_stage(self, task_id: str, user_input: str) -> str:
+        text = f"{task_id} {user_input}".lower()
+        hints = [
+            ("postmortem", ["postmortem", "复盘"]),
+            ("incident_response", ["incident", "故障", "告警", "oncall"]),
+            ("pre_release", ["pre_release", "上线前", "发布前", "release"]),
+            ("pull_request", ["pull request", "pr", "code review", "评审"]),
+            ("design_review", ["设计评审", "design review", "架构"]),
+            ("requirement_review", ["需求评审", "requirement review", "需求"]),
+        ]
+        for stage, words in hints:
+            if any(word in text for word in words):
+                return stage
+        return "development"
+
+    def _build_recall_query(self, task_id: str, user_input: str) -> str:
+        base = f"{task_id} {user_input}".lower()
+        tokens = re.findall(r"[a-z0-9_\-\u4e00-\u9fff]+", base)
+        stop = {
+            "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "with",
+            "请", "帮我", "一下", "麻烦", "需要", "现在", "这个", "那个", "进行", "完成",
+        }
+        out: List[str] = []
+        for token in tokens:
+            val = token.strip()
+            if not val or len(val) <= 1:
+                continue
+            if val in stop:
+                continue
+            if val not in out:
+                out.append(val)
+            if len(out) >= 12:
+                break
+        return " ".join(out)
+
+    def _render_memory_recall_block(self, cards: List[Dict[str, Any]]) -> str:
+        if not cards:
+            return ""
+        lines: List[str] = ["系统记忆召回（精确优先，最多5条）"]
+        for idx, card in enumerate(cards, 1):
+            title = str(card.get("title", "") or "").strip() or str(card.get("id", "") or "").strip() or "untitled"
+            scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
+            trigger_hint = str(scenario.get("trigger_hint", "") or "").strip()
+            solution = card.get("solution", {}) if isinstance(card.get("solution", {}), dict) else {}
+            steps = solution.get("steps", []) if isinstance(solution.get("steps", []), list) else []
+            anti_pattern = card.get("anti_pattern", {}) if isinstance(card.get("anti_pattern", {}), dict) else {}
+            not_applicable = anti_pattern.get("not_applicable_if", []) if isinstance(
+                anti_pattern.get("not_applicable_if", []), list
+            ) else []
+            step_text = "；".join([str(x).strip() for x in steps[:2] if str(x).strip()])
+            guard_text = str(not_applicable[0]).strip() if not_applicable else ""
+            lines.append(f"{idx}. {title}")
+            if trigger_hint:
+                lines.append(f"   - 触发提示：{self._preview(trigger_hint, max_len=120)}")
+            if step_text:
+                lines.append(f"   - 建议动作：{self._preview(step_text, max_len=180)}")
+            if guard_text:
+                lines.append(f"   - 不适用：{self._preview(guard_text, max_len=120)}")
+        return "\n".join(lines).strip()
 
     def _slug(self, value: str) -> str:
         text = (value or "").strip().lower()

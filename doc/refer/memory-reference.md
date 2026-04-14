@@ -869,9 +869,32 @@ def search_cards(self, stage, query, limit, only_active):
     return [self._row_to_card(row) for row in rows]
 ```
 
-## 8. 记忆沉淀策略
+## 8. 记忆生命周期策略
 
-### 8.1 任务结束强制沉淀
+### 8.1 任务开始高精度召回（自动）
+
+`AgentRuntime.run()` 在首次模型请求前执行 system memory 召回注入：
+
+```python
+def _inject_system_memory_recall(self, task_id, run_id, user_input, messages):
+    stage = infer_stage(task_id, user_input)
+    query = build_query(task_id, user_input)
+    emit_event(..., event_type="memory_triggered", payload={"source": "runtime_start_recall"})
+
+    rows = system_memory.search_cards(stage=stage, query=query, only_active=True, limit=10)
+    selected = [x for x in rows if x.get("retrieval_score", 0) >= 0.65][:5]
+
+    # 命中逐条记 retrieval，最后记 decision
+    # 未命中只记 decision=skipped，不阻塞主流程
+    return inject_summary_block(messages, selected)
+```
+
+规则：
+1. 精确率优先，最多注入 5 条。
+2. 未命中不阻塞主流程。
+3. 注入内容摘要化，不拼接整卡原文。
+
+### 8.2 任务结束强制沉淀
 
 `AgentRuntime._finalize_task_memory()` 在每次 `run()` 结束时**总是执行**：
 
@@ -907,7 +930,7 @@ def _finalize_task_memory(self, task_id: str, task_status: str, ...):
     emit_event(task_id, run_id, event_type="memory_decision_made", ...)
 ```
 
-### 8.2 运行中候选捕获
+### 8.3 运行中候选捕获（tool 显式调用）
 
 工具：`capture_runtime_memory_candidate`
 
@@ -920,20 +943,15 @@ def capture_runtime_memory_candidate(
     stage: str = "lifecycle",
     confidence: float = 0.5,
 ) -> Dict[str, Any]:
-    card = {
-        "card_id": f"mem_candidate_{uuid}",
-        "stage": stage,
-        "confidence": confidence,
-        "title": title,
-        "observation": observation,
-        "active": True,
-    }
+    card = {..., "id": f"mem_candidate_{slug(...)}", "lifecycle": {"status": "draft", ...}}
     system_memory.upsert_card(card)
-    # 发射记忆事件
-    return {"success": True, "card_id": card["card_id"]}
+    emit_event(..., event_type="memory_triggered", payload={"source_event": "runtime_memory_harvest_skill"})
+    emit_event(..., event_type="memory_retrieved", ...)
+    emit_event(..., event_type="memory_decision_made", ...)
+    return {"success": True, "id": card["id"]}
 ```
 
-### 8.3 运行中检索
+### 8.4 运行中检索
 
 工具：`search_memory_cards`
 
@@ -961,9 +979,9 @@ def search_memory_cards(
 
 | 表名 | 字段 | 用途 |
 |------|------|------|
-| `memory_trigger_event` | event_id, task_id, run_id, timestamp, query, count | 记忆触发事件 |
-| `memory_retrieval_event` | event_id, task_id, run_id, timestamp, query, count, cards | 记忆检索事件 |
-| `memory_decision_event` | event_id, task_id, run_id, timestamp, decision | 记忆决策事件 |
+| `memory_trigger_event` | event_id, event_time, task_id, run_id, stage, context_id, risk_level, payload_json | 记忆触发事件 |
+| `memory_retrieval_event` | event_id, event_time, task_id, run_id, trigger_event_id, memory_id, score, payload_json | 记忆检索事件 |
+| `memory_decision_event` | event_id, event_time, task_id, run_id, trigger_event_id, memory_id, decision, reason, payload_json | 记忆决策事件 |
 
 ### 9.2 写入规则
 
@@ -985,7 +1003,8 @@ def emit_event(...):
 
 | 约束 | 说明 |
 |------|------|
-| 默认不自动注入 | Runtime 默认不执行"任务开始前系统记忆自动注入" |
+| 启动自动召回 | Runtime 在首次模型请求前执行 system memory 召回（高精度优先，最多 5 条） |
+| capture 显式调用 | 运行中候选记忆 capture 保持 tool 调用，不做 Runtime 隐式自动写卡 |
 | 异常不阻塞 | 记忆链路异常不应中断主执行 |
 | Legacy 兼容 | legacy `summary` 文本仍可读，逐步迁移到 `summary_json` |
 | DB 按类型聚合 | 每个 Agent 类型有独立的 runtime memory 数据库 |
@@ -1000,4 +1019,4 @@ def emit_event(...):
 | `tests/test_runtime_memory_harvest_tool.py` | 候选记忆捕获工具 |
 | `tests/test_system_memory_store.py` | 系统记忆存储 CRUD、检索 |
 | `tests/test_memory_observability_events.py` | 记忆观测事件 SQLite 落盘 |
-| `tests/test_runtime_eval_integration.py` | 任务结束沉淀、默认不注入 |
+| `tests/test_runtime_eval_integration.py` | 启动召回注入、任务结束沉淀 |

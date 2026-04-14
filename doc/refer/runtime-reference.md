@@ -1,6 +1,6 @@
 # InDepth Runtime 参考
 
-更新时间：2026-04-12
+更新时间：2026-04-14
 
 ## 1. 定位
 
@@ -313,9 +313,31 @@ EvalOrchestrator.evaluate(task_spec, run_outcome)
 | 硬检查通过 + soft < 阈值 | `partial` |
 | 硬检查通过 + soft >= 阈值 | `pass` |
 
-## 7. 记忆收尾
+## 7. 记忆生命周期
 
-### 7.1 _finalize_task_memory()
+### 7.1 run_start：系统记忆召回注入
+
+首次模型请求前执行 `_inject_system_memory_recall()`：
+
+```python
+def _inject_system_memory_recall(self, task_id, run_id, user_input, messages):
+    # 1) 触发事件
+    emit_event(..., event_type="memory_triggered", payload={"source": "runtime_start_recall"})
+
+    # 2) 检索 active 且未过期卡
+    rows = system_memory.search_cards(stage=stage, query=query, only_active=True, limit=10)
+    selected = [x for x in rows if x.retrieval_score >= 0.65][:5]
+
+    # 3) 逐条 retrieval + 汇总 decision
+    # 4) 将摘要化记忆块注入 system prompt
+```
+
+关键规则：
+1. 精确率优先，最多 5 条。
+2. 未命中不阻塞主流程。
+3. 仅注入摘要块，不注入整卡全文。
+
+### 7.2 run_end：_finalize_task_memory()
 
 任务结束时强制执行：
 
@@ -324,18 +346,22 @@ def _finalize_task_memory(self, task_id, run_id, task_status):
     # 1. 写入 postmortem 经验卡
     card_id = f"mem_task_{task_slug}_{run_slug}"
     card = {
-        "card_id": card_id,
-        "stage": "postmortem",
-        "risk_level": "P1" if task_status == "error" else "P3",
-        "payload": {...}
+        "id": card_id,
+        "scenario": {"stage": "postmortem"},
+        "problem_pattern": {"risk_level": "P1" if task_status == "error" else "P3"},
+        "...": "..."
     }
     SystemMemoryStore.upsert_card(card)
 
     # 2. 追加记忆事件三连
-    emit_event(task_id=task_id, event_type="memory_triggered")
-    emit_event(task_id=task_id, event_type="memory_retrieved")
-    emit_event(task_id=task_id, event_type="memory_decision_made")
+    emit_event(task_id=task_id, event_type="memory_triggered", payload={"source": "runtime_forced_finalize"})
+    emit_event(task_id=task_id, event_type="memory_retrieved", payload={"reason": "task_end_finalization"})
+    emit_event(task_id=task_id, event_type="memory_decision_made", payload={"decision": "accepted"})
 ```
+
+### 7.3 run_during：候选 capture（tool）
+
+运行中候选经验仍通过 `capture_runtime_memory_candidate` tool 显式调用完成，Runtime 不做隐式自动 capture。
 
 ## 8. 关键事件总表
 
@@ -360,9 +386,9 @@ def _finalize_task_memory(self, task_id, run_id, task_status):
 | `run_resumed` | 同一 run 恢复执行 | - |
 | `task_finished` | 任务结束 | stop_reason, tool_failure_count |
 | `task_judged` | 任务判定 | 完整 judgement |
-| `memory_triggered` | 记忆触发 | card_id |
-| `memory_retrieved` | 记忆检索 | query, count |
-| `memory_decision_made` | 记忆决策 | decision |
+| `memory_triggered` | 记忆触发 | stage, context_id, risk_level, source/source_event |
+| `memory_retrieved` | 记忆检索 | trigger_event_id, memory_id, score, source/reason |
+| `memory_decision_made` | 记忆决策 | trigger_event_id, memory_id, decision, reason |
 
 ## 9. 配置参数
 

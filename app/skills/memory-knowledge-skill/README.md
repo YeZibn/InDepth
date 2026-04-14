@@ -33,6 +33,6 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 ## Notes
 
 - Legacy markdown-based memory workflow has been removed.
-- Runtime does not inject memory at task start.
+- Runtime now performs start-of-run system memory recall injection (high precision, up to 5 cards, summary only).
 - Runtime forces memory finalization at task end.
-- Runtime candidate capture is part of this single skill (`capture_runtime_memory_candidate`).
+- Runtime candidate capture remains an explicit tool path (`capture_runtime_memory_candidate`), not implicit auto-capture.

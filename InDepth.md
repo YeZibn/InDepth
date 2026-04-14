@@ -216,10 +216,11 @@
 4. 录入/查询统一入口：`memory_card_cli.py`（`upsert-json/search/due`）
 
 触发与注入：
-1. 运行中可在 `pull_request/pre_release/postmortem` 阶段调用 `capture_runtime_memory_candidate`
-2. `task_finished` 后，框架 MUST 强制沉淀一次 `postmortem` 记忆
-3. Runtime 当前默认不做模型请求前自动注入
-4. 若启用注入，MUST 保持“未命中不阻塞、内容摘要化”
+1. Runtime 在任务开始时 SHOULD 尝试系统记忆高精度召回（最多 5 条）并摘要化注入 prompt
+2. 启动召回 MUST 遵循“精确率优先、未命中不阻塞”
+3. 运行中可在 `pull_request/pre_release/postmortem` 阶段调用 `capture_runtime_memory_candidate`
+4. `task_finished` 后，框架 MUST 强制沉淀一次 `postmortem` 记忆
+5. 运行中 capture 当前保持 tool 显式调用，不做 Runtime 隐式自动写卡
 
 观测与治理：
 1. 记忆链路 MUST 记录：`memory_triggered`、`memory_retrieved`、`memory_decision_made`

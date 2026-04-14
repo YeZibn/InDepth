@@ -68,7 +68,7 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 
 ## Runtime Integration
 
-- Runtime does not inject memory at task start.
+- Runtime injects high-precision memory recall at task start (summary only, up to 5 cards).
 - Runtime forces task-end memory finalization in framework.
-- This skill captures candidate memories during execution via `capture_runtime_memory_candidate`.
+- This skill captures candidate memories during execution via explicit tool call `capture_runtime_memory_candidate`.
 - Trigger/retrieval/decision events are persisted for KPI tracking.

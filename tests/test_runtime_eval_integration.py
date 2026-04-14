@@ -7,7 +7,7 @@ from app.core.tools.registry import ToolRegistry
 
 
 class RuntimeEvalIntegrationTests(unittest.TestCase):
-    def test_runtime_does_not_inject_system_memory_context_by_default(self):
+    def test_runtime_start_recall_skips_injection_without_high_precision_matches(self):
         provider = MockModelProvider(
             scripted_outputs=[
                 {
@@ -26,6 +26,7 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
 
         with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
             mock_store = mock_store_cls.return_value
+            mock_store.search_cards.return_value = []
             runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
             result = runtime.run("请执行任务", task_id="runtime_mem_task", run_id="runtime_mem_run")
 
@@ -37,7 +38,53 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
             if m.get("role") == "system" and "系统记忆召回" in str(m.get("content", ""))
         ]
         self.assertEqual(len(memory_msgs), 0)
-        self.assertFalse(mock_store.search_cards.called)
+        self.assertTrue(mock_store.search_cards.called)
+
+    def test_runtime_start_recall_injects_memory_block_for_high_precision_matches(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "任务正常完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "任务正常完成"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+
+        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
+            mock_store = mock_store_cls.return_value
+            mock_store.search_cards.return_value = [
+                {
+                    "id": "mem_high_1",
+                    "title": "支付重试幂等检查",
+                    "retrieval_score": 0.88,
+                    "scenario": {"trigger_hint": "涉及重试时触发"},
+                    "solution": {"steps": ["校验幂等键", "使用唯一约束"]},
+                    "anti_pattern": {"not_applicable_if": ["纯查询接口"]},
+                },
+                {
+                    "id": "mem_low_1",
+                    "title": "低相关卡片",
+                    "retrieval_score": 0.4,
+                },
+            ]
+            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
+            result = runtime.run("请执行支付重试逻辑检查", task_id="runtime_mem_task", run_id="runtime_mem_run")
+
+        self.assertEqual(result, "任务正常完成")
+        self.assertTrue(provider.requests)
+        first_messages = provider.requests[0]["messages"]
+        system_blocks = [m.get("content", "") for m in first_messages if m.get("role") == "system"]
+        joined = "\n".join([str(x) for x in system_blocks])
+        self.assertIn("系统记忆召回", joined)
+        self.assertIn("支付重试幂等检查", joined)
+        self.assertNotIn("低相关卡片", joined)
 
     def test_runtime_forces_task_end_memory_finalization(self):
         provider = MockModelProvider(
