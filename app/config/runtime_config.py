@@ -27,6 +27,18 @@ class RuntimeCompressionConfig:
     min_keep_messages: int
 
 
+@dataclass(frozen=True)
+class RuntimeUserPreferenceConfig:
+    enabled: bool
+    file_path: str
+    recall_top_k: int
+    always_include_keys: tuple[str, ...]
+    max_inject_chars: int
+    enable_llm_extract: bool
+    auto_write_min_confidence: float
+    conflict_min_confidence: float
+
+
 def _first_non_empty(*values: Optional[str]) -> str:
     for value in values:
         if value and value.strip():
@@ -113,4 +125,26 @@ def load_runtime_compression_config() -> RuntimeCompressionConfig:
         target_keep_ratio_strong=_env_float("COMPACTION_TARGET_KEEP_RATIO_STRONG", 0.35),
         target_keep_ratio_finalize=_env_float("COMPACTION_TARGET_KEEP_RATIO_FINALIZE", 0.50),
         min_keep_messages=_env_int("COMPACTION_MIN_KEEP_MESSAGES", 6, min_value=1),
+    )
+
+
+def load_runtime_user_preference_config() -> RuntimeUserPreferenceConfig:
+    file_path = _first_non_empty(
+        os.getenv("USER_PREFERENCE_FILE_PATH"),
+        "memory/preferences/user-preferences.md",
+    )
+    keys_raw = _first_non_empty(
+        os.getenv("USER_PREFERENCE_ALWAYS_INCLUDE_KEYS"),
+        "language_preference,response_style",
+    )
+    keys = tuple([x.strip() for x in keys_raw.split(",") if x.strip()])
+    return RuntimeUserPreferenceConfig(
+        enabled=_env_bool("ENABLE_USER_PREFERENCE_MEMORY", True),
+        file_path=file_path,
+        recall_top_k=_env_int("USER_PREFERENCE_RECALL_TOP_K", 5, min_value=1),
+        always_include_keys=keys,
+        max_inject_chars=_env_int("USER_PREFERENCE_MAX_INJECT_CHARS", 240, min_value=40),
+        enable_llm_extract=_env_bool("ENABLE_USER_PREFERENCE_LLM_EXTRACT", True),
+        auto_write_min_confidence=_env_float("USER_PREFERENCE_AUTO_WRITE_MIN_CONFIDENCE", 0.75),
+        conflict_min_confidence=_env_float("USER_PREFERENCE_CONFLICT_MIN_CONFIDENCE", 0.90),
     )
