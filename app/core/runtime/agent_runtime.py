@@ -1,3 +1,4 @@
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import RuntimeCompressionConfig, load_runtime_compression_config, load_runtime_model_config
@@ -56,6 +57,30 @@ RUNTIME_SYSTEM_PROMPT = """你是 InDepth 智能体运行时中的助手。
 注意：必须使用 `in-progress`（连字符），不要使用 `in_progress`（下划线）。
 """
 
+CLARIFICATION_JUDGE_SYSTEM_PROMPT = """你是一个二分类判定器，只负责判断 assistant 文本是否在向用户索取缺失信息。
+
+判定标准：
+1) 若 assistant 明确要求用户补充/确认关键信息（例如范围、目标、时间、验收标准）后才能继续执行，则是澄清请求。
+2) 礼貌问候、一般性反问、结果交付后的可选追问，不算澄清请求。
+3) 只输出 JSON，不要输出 markdown 或额外文本。
+"""
+
+CLARIFICATION_JUDGE_USER_PROMPT_TEMPLATE = """请判定下面 assistant 回复是否为澄清请求。
+
+返回 JSON:
+{{
+  "is_clarification_request": <true|false>,
+  "confidence": <0-1 浮点>,
+  "reason": "<简短原因>"
+}}
+
+用户最新输入：
+{user_input}
+
+assistant 回复：
+{assistant_output}
+"""
+
 
 class AgentRuntime:
     START_RECALL_TOP_K = 5
@@ -78,6 +103,9 @@ class AgentRuntime:
         enable_memory_recall_reranker: Optional[bool] = None,
         enable_memory_card_metadata_llm: Optional[bool] = None,
         enable_verification_handoff_llm: Optional[bool] = None,
+        enable_llm_clarification_judge: Optional[bool] = None,
+        clarification_judge_confidence_threshold: float = 0.60,
+        enable_clarification_heuristic_fallback: bool = True,
         system_memory_store: Optional[SystemMemoryStore] = None,
         compression_config: Optional[RuntimeCompressionConfig] = None,
     ):
@@ -112,6 +140,13 @@ class AgentRuntime:
             self.enable_verification_handoff_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
         else:
             self.enable_verification_handoff_llm = bool(enable_verification_handoff_llm)
+        if enable_llm_clarification_judge is None:
+            # Default on for real providers, off for deterministic test mock provider.
+            self.enable_llm_clarification_judge = self.model_provider.__class__.__name__ != "MockModelProvider"
+        else:
+            self.enable_llm_clarification_judge = bool(enable_llm_clarification_judge)
+        self.clarification_judge_confidence_threshold = clamp_float(clarification_judge_confidence_threshold, 0.6)
+        self.enable_clarification_heuristic_fallback = bool(enable_clarification_heuristic_fallback)
         self.last_runtime_state = "idle"
         self.last_stop_reason = ""
         self.last_run_id = ""
@@ -268,7 +303,14 @@ class AgentRuntime:
                     final_answer_written = True
                 if content:
                     final_answer = content
-                    if self._is_clarification_request(content):
+                    clarification_result = self._judge_clarification_request(
+                        content=content,
+                        user_input=user_input,
+                        task_id=task_id,
+                        run_id=run_id,
+                        step=step,
+                    )
+                    if clarification_result.get("is_clarification_request", False):
                         stop_reason = "awaiting_user_input"
                         runtime_state = "awaiting_user_input"
                         emit_event(
@@ -280,6 +322,9 @@ class AgentRuntime:
                             payload={
                                 "question_preview": self._preview(content, max_len=300),
                                 "missing_info_hints": self._extract_missing_info_hints(content),
+                                "judge_source": clarification_result.get("source", "heuristic"),
+                                "judge_confidence": clarification_result.get("confidence", 0.5),
+                                "judge_reason": clarification_result.get("reason", ""),
                                 "step": step,
                             },
                         )
@@ -897,6 +942,128 @@ class AgentRuntime:
 
     def _is_clarification_request(self, content: str) -> bool:
         return is_clarification_request(content)
+
+    def _build_clarification_judge_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        try:
+            model_cfg = load_runtime_model_config()
+            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
+            if mini_id:
+                options["model"] = mini_id
+        except Exception:
+            pass
+        return GenerationConfig(
+            temperature=0.0,
+            max_tokens=160,
+            provider_options=options,
+        )
+
+    def _judge_clarification_request(
+        self,
+        content: str,
+        user_input: str,
+        task_id: str,
+        run_id: str,
+        step: int,
+    ) -> Dict[str, Any]:
+        default_confidence = 0.5
+        if not self.enable_llm_clarification_judge:
+            return {
+                "is_clarification_request": self._is_clarification_request(content),
+                "confidence": default_confidence,
+                "source": "heuristic",
+                "reason": "llm_judge_disabled",
+            }
+
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="clarification_judge_started",
+            payload={"step": step, "content_preview": self._preview(content, max_len=300)},
+        )
+        started_at = time.perf_counter()
+        fallback_reason = ""
+        try:
+            prompt = CLARIFICATION_JUDGE_USER_PROMPT_TEMPLATE.format(
+                user_input=user_input.strip() or "(empty)",
+                assistant_output=content.strip() or "(empty)",
+            )
+            output = self.model_provider.generate(
+                messages=[
+                    {"role": "system", "content": CLARIFICATION_JUDGE_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                tools=[],
+                config=self._build_clarification_judge_config(),
+            )
+            parsed = self._parse_json_dict(output.content)
+            decision_raw = parsed.get("is_clarification_request")
+            if not isinstance(decision_raw, bool):
+                fallback_reason = "invalid_output_missing_boolean"
+                raise ValueError(fallback_reason)
+            confidence_raw = parsed.get("confidence", default_confidence)
+            try:
+                confidence = clamp_float(float(confidence_raw), default_confidence)
+            except Exception:
+                confidence = default_confidence
+            decision = bool(decision_raw) and confidence >= self.clarification_judge_confidence_threshold
+            reason = str(parsed.get("reason", "") or "")
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="clarification_judge_completed",
+                payload={
+                    "step": step,
+                    "decision": decision,
+                    "decision_raw": bool(decision_raw),
+                    "confidence": confidence,
+                    "threshold": self.clarification_judge_confidence_threshold,
+                    "source": "llm",
+                    "reason": reason,
+                    "latency_ms": int(max((time.perf_counter() - started_at) * 1000, 0)),
+                },
+            )
+            return {
+                "is_clarification_request": decision,
+                "confidence": confidence,
+                "source": "llm",
+                "reason": reason,
+            }
+        except Exception as e:
+            fallback_reason = fallback_reason or str(e) or "llm_judge_exception"
+
+        if self.enable_clarification_heuristic_fallback:
+            fallback_decision = self._is_clarification_request(content)
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="clarification_judge_fallback",
+                payload={
+                    "step": step,
+                    "reason": fallback_reason,
+                    "fallback_decision": fallback_decision,
+                    "source": "heuristic",
+                    "latency_ms": int(max((time.perf_counter() - started_at) * 1000, 0)),
+                },
+            )
+            return {
+                "is_clarification_request": fallback_decision,
+                "confidence": default_confidence,
+                "source": "heuristic_fallback",
+                "reason": fallback_reason,
+            }
+        return {
+            "is_clarification_request": False,
+            "confidence": default_confidence,
+            "source": "llm_no_fallback",
+            "reason": fallback_reason,
+        }
 
     def _extract_missing_info_hints(self, content: str) -> List[str]:
         return extract_missing_info_hints(content)

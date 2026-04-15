@@ -569,6 +569,127 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         judged = [e for e in captured if e.get("event_type") == "task_judged"]
         self.assertEqual(len(judged), 1)
 
+    def test_runtime_uses_llm_for_clarification_judge_when_enabled(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "为了继续执行，请确认输出语言和截止时间。",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "为了继续执行，请确认输出语言和截止时间。"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": '{"is_clarification_request": true, "confidence": 0.93, "reason": "need missing requirements"}',
+                    "raw": {"mock": True},
+                },
+            ]
+        )
+        captured = []
+
+        def _capture_emit_event(*args, **kwargs):
+            captured.append(kwargs)
+            return {}
+
+        with patch("app.core.runtime.agent_runtime.emit_event", side_effect=_capture_emit_event):
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                enable_llm_clarification_judge=True,
+            )
+            result = runtime.run("请直接开始", task_id="runtime_eval_task6", run_id="runtime_eval_run6")
+
+        self.assertIn("请确认", result)
+        self.assertTrue(any(e.get("event_type") == "clarification_judge_started" for e in captured))
+        self.assertTrue(any(e.get("event_type") == "clarification_judge_completed" for e in captured))
+        self.assertTrue(any(e.get("event_type") == "clarification_requested" for e in captured))
+        clarification_events = [e for e in captured if e.get("event_type") == "clarification_requested"]
+        self.assertEqual(clarification_events[0].get("payload", {}).get("judge_source"), "llm")
+        self.assertFalse(any(e.get("event_type") == "task_judged" for e in captured))
+
+    def test_runtime_llm_clarification_judge_low_confidence_does_not_block(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "请确认是否需要我补充图表。",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "请确认是否需要我补充图表。"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": '{"is_clarification_request": true, "confidence": 0.30, "reason": "low confidence"}',
+                    "raw": {"mock": True},
+                },
+            ]
+        )
+        captured = []
+
+        def _capture_emit_event(*args, **kwargs):
+            captured.append(kwargs)
+            return {}
+
+        with patch("app.core.runtime.agent_runtime.emit_event", side_effect=_capture_emit_event):
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                enable_llm_clarification_judge=True,
+            )
+            runtime.run("继续", task_id="runtime_eval_task7", run_id="runtime_eval_run7")
+
+        self.assertFalse(any(e.get("event_type") == "clarification_requested" for e in captured))
+        self.assertTrue(any(e.get("event_type") == "task_judged" for e in captured))
+
+    def test_runtime_llm_clarification_judge_falls_back_to_heuristic(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "请确认需要输出中文还是英文？",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "请确认需要输出中文还是英文？"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "not-json",
+                    "raw": {"mock": True},
+                },
+            ]
+        )
+        captured = []
+
+        def _capture_emit_event(*args, **kwargs):
+            captured.append(kwargs)
+            return {}
+
+        with patch("app.core.runtime.agent_runtime.emit_event", side_effect=_capture_emit_event):
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                enable_llm_clarification_judge=True,
+            )
+            runtime.run("请总结", task_id="runtime_eval_task8", run_id="runtime_eval_run8")
+
+        self.assertTrue(any(e.get("event_type") == "clarification_judge_fallback" for e in captured))
+        clarification_events = [e for e in captured if e.get("event_type") == "clarification_requested"]
+        self.assertEqual(len(clarification_events), 1)
+        self.assertEqual(clarification_events[0].get("payload", {}).get("judge_source"), "heuristic_fallback")
+
     def test_runtime_can_enable_llm_judge(self):
         provider = MockModelProvider(
             scripted_outputs=[

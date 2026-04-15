@@ -1,6 +1,6 @@
 # InDepth 配置参考
 
-更新时间：2026-04-13
+更新时间：2026-04-15
 
 ## 1. 目标
 
@@ -278,7 +278,21 @@ class HttpChatModelProvider:
 | `reviewer` | `db/runtime_memory_subagent_reviewer.db` |
 | `verifier` | `db/runtime_memory_subagent_verifier.db` |
 
-## 8. 调参建议
+## 8. 澄清判定配置（运行时构造参数）
+
+说明：以下参数目前是 `AgentRuntime(...)` 构造参数，不是环境变量。
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `enable_llm_clarification_judge` | real provider: `True`; `MockModelProvider`: `False` | 是否启用 LLM 澄清判定 |
+| `clarification_judge_confidence_threshold` | `0.60` | LLM 判定为澄清的最小置信度阈值 |
+| `enable_clarification_heuristic_fallback` | `True` | LLM 判定失败时是否回退启发式规则 |
+
+判定规则：
+1. `is_clarification_request=true && confidence>=threshold` 才进入 `awaiting_user_input`。
+2. LLM 异常或输出非法时，按 fallback 策略回退到启发式判定。
+
+## 9. 调参建议
 
 ### 8.1 压缩相关
 
@@ -304,7 +318,7 @@ class HttpChatModelProvider:
 | 确定性任务 | `temperature=0.0-0.3` |
 | 平衡场景 | `temperature=0.5-0.7` |
 
-## 9. 配置消费地图
+## 10. 配置消费地图
 
 ```
 RuntimeModelConfig
@@ -321,7 +335,7 @@ GenerationConfig
 └── create_runtime()
 ```
 
-## 10. 测试映射
+## 11. 测试映射
 
 | 测试文件 | 覆盖内容 |
 |---------|---------|

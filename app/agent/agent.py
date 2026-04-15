@@ -131,8 +131,23 @@ class BaseAgent:
         else:
             self._awaiting_user_input = False
             self._active_run_id = None
-        print(answer)
+        print(self._format_cli_answer(answer=answer, runtime_state=runtime_state))
         return answer
+
+    def _format_cli_answer(self, answer: str, runtime_state: str) -> str:
+        text = str(answer or "")
+        if runtime_state != "awaiting_user_input":
+            return text
+        parts = [
+            "[需要澄清]",
+            text,
+            "请直接回复补充信息，我会在当前任务中继续。",
+        ]
+        return "\n".join([p for p in parts if p])
+
+    @property
+    def is_awaiting_user_input(self) -> bool:
+        return bool(self._awaiting_user_input)
 
     def _generate_task_id(self, label: str = "") -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

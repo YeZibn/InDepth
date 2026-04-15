@@ -205,13 +205,28 @@ def run(
 
 | finish_reason | 处理逻辑 | stop_reason |
 |--------------|---------|-------------|
-| `stop` + 澄清意图 | 挂起等待用户输入（同 run 可恢复） | `awaiting_user_input` |
+| `stop` + 澄清意图 | 由 LLM 判定（失败回退启发式），命中后挂起等待用户输入（同 run 可恢复） | `awaiting_user_input` |
 | `stop` + 非澄清 | 正常收敛 | `stop` |
 | `length` | 超出上下文 | `length` |
 | `content_filter` | 内容过滤 | `content_filter` |
 | `tool_calls` | 执行工具（循环） | - |
 | 其他 + 有文本 | fallback 收敛 | `fallback_content` |
 | 其他 + 空 | 标记错误 | `model_failed` |
+
+### 4.4 澄清判定链路
+
+`finish_reason=stop` 且有文本时：
+1. 进入澄清判定子流程 `_judge_clarification_request(...)`。
+2. 优先调用 LLM judge（mini 模型）输出 JSON：
+   - `is_clarification_request: bool`
+   - `confidence: float(0~1)`
+   - `reason: str`
+3. 仅当 `is_clarification_request=true && confidence>=threshold(默认 0.60)` 判为澄清。
+4. 若 judge 调用异常或输出非法，则回退到 `is_clarification_request(...)` 启发式规则。
+5. 命中澄清时：
+   - `runtime_state=awaiting_user_input`
+   - 发 `clarification_requested`
+   - 跳过 verifier（发 `verification_skipped`）。
 
 ## 5. 上下文压缩
 
@@ -389,6 +404,10 @@ def _finalize_task_memory(self, task_id, run_id, task_status):
 | `verification_passed` | 评估通过 | verifier_results |
 | `verification_failed` | 评估失败 | verifier_results |
 | `verification_skipped` | 跳过评估（等待用户输入） | reason, runtime_state |
+| `clarification_requested` | 请求用户补充信息 | question_preview, judge_source, judge_confidence |
+| `clarification_judge_started` | 澄清判定开始 | step, content_preview |
+| `clarification_judge_completed` | 澄清判定完成（LLM） | decision, confidence, threshold, latency_ms |
+| `clarification_judge_fallback` | 澄清判定回退启发式 | reason, fallback_decision, source |
 | `user_clarification_received` | 收到用户补充 | - |
 | `run_resumed` | 同一 run 恢复执行 | - |
 | `task_finished` | 任务结束 | stop_reason, tool_failure_count |
@@ -407,6 +426,9 @@ class RuntimeConfig:
     max_steps: int = 50          # 最大步数
     trace_steps: bool = True     # 是否打印追踪
     enable_llm_judge: bool = False  # 是否启用 LLM 评判
+    enable_llm_clarification_judge: bool = True  # 是否启用 LLM 澄清判定
+    clarification_judge_confidence_threshold: float = 0.60  # 澄清置信度阈值
+    enable_clarification_heuristic_fallback: bool = True  # 判定失败时回退启发式
 ```
 
 ### 9.2 压缩配置
@@ -437,7 +459,19 @@ class RuntimeCompressionConfig:
 | `BaseAgent` | `app/agent/agent.py` | 主 Agent 封装 |
 | `SubAgent` | `app/agent/sub_agent.py` | 子 Agent 封装 |
 
+### 10.1 CLI 澄清交互
+
+当前 CLI 在澄清态（`awaiting_user_input`）增强行为：
+1. 输出样式：
+   - `[需要澄清]`
+   - Agent 原问题
+   - `请直接回复补充信息，我会在当前任务中继续。`
+2. 用户下一次正常输入默认作为澄清补充，沿用同一 `run_id` 恢复执行。
+3. 空输入不会触发模型调用，会提示：`[需要澄清] 请补充信息后继续...`
+4. 支持 `/new [label]` 在当前模式下立即结束旧任务并启动新任务（清空澄清等待态）。
+
 ## 11. 测试
 
 - `tests/test_runtime_context_compression.py`：压缩触发、摘要结构、一致性守护
 - `tests/test_runtime_eval_integration.py`：评估链路、记忆沉淀
+- `tests/test_main_agent.py`：澄清态 run 复用、CLI 输出格式与 `/new` 任务切换

@@ -133,6 +133,9 @@ class EventRecord:
 | | `run_resumed` | 同一 run 从等待态恢复 |
 | | `user_clarification_received` | 接收到用户澄清补充 |
 | | `clarification_requested` | 模型请求用户澄清 |
+| | `clarification_judge_started` | 澄清判定开始 |
+| | `clarification_judge_completed` | 澄清判定完成（LLM） |
+| | `clarification_judge_fallback` | 澄清判定回退启发式 |
 | **模型** | `model_reasoning` | 模型思考中 |
 | | `model_failed` | 模型调用失败 |
 | | `model_stopped_length` | 超出长度限制 |
@@ -367,6 +370,43 @@ verification_skipped
         reason,          # awaiting_user_input
         stop_reason,
         runtime_state
+    }
+
+clarification_requested
+    payload: {
+        question_preview,
+        missing_info_hints,
+        judge_source,        # llm / heuristic_fallback / heuristic
+        judge_confidence,    # 0~1
+        judge_reason,
+        step
+    }
+
+clarification_judge_started
+    payload: {
+        step,
+        content_preview
+    }
+
+clarification_judge_completed
+    payload: {
+        step,
+        decision,
+        decision_raw,
+        confidence,
+        threshold,
+        source,              # llm
+        reason,
+        latency_ms
+    }
+
+clarification_judge_fallback
+    payload: {
+        step,
+        reason,
+        fallback_decision,
+        source,              # heuristic
+        latency_ms
     }
 ```
 

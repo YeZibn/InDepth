@@ -32,6 +32,7 @@ def handle_cli_command(agent: BaseAgent, command: str, mode: str) -> tuple[str, 
                 "/mode task [label] - 切换到任务模式（自动开启新任务并结束旧任务）\n"
                 "/task <label> - 在任务模式下开启新任务并结束旧任务\n"
                 "/newtask <label> - /task 的别名\n"
+                "/new [label] - 在当前模式下结束旧任务并开启新任务\n"
                 "/status - 查看当前模式和 task_id\n"
                 "/exit - 退出"
             ),
@@ -74,6 +75,17 @@ def handle_cli_command(agent: BaseAgent, command: str, mode: str) -> tuple[str, 
             True,
         )
 
+    if text.startswith("/new"):
+        label = text.split(" ", 1)[1].strip() if " " in text else ""
+        old_task_id = agent.current_task_id
+        default_label = "chat" if mode == "chat" else "next_task"
+        new_task_id = agent.start_new_task(label or default_label)
+        return (
+            mode,
+            f"已结束任务: {old_task_id}\n新任务已启动: {new_task_id}",
+            True,
+        )
+
     if text == "/status":
         return mode, f"mode={mode}, task_id={agent.current_task_id}", True
 
@@ -91,11 +103,14 @@ if __name__ == "__main__":
     print("输入 /help 查看命令。\n")
 
     while True:
-        user_input = input("请输入: ").strip()
+        raw_input = input("请输入: ")
+        user_input = raw_input.strip()
         if user_input.lower() in ["exit", "quit", "q"]:
             print("再见！")
             break
         if not user_input:
+            if agent.is_awaiting_user_input:
+                print("\nRuntime: [需要澄清] 请补充信息后继续，我会在当前任务中恢复执行。\n")
             continue
         mode, command_output, handled = handle_cli_command(agent, user_input, mode)
         if user_input == "/exit":

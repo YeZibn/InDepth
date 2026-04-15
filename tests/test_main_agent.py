@@ -1,10 +1,13 @@
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.agent.agent import BaseAgent
+from app.agent.runtime_agent import handle_cli_command
 from app.core.tools import tool
 
 
@@ -140,6 +143,53 @@ class MainAgentTests(unittest.TestCase):
         self.assertEqual(call2["run_id"], "main_agent_aaaabbbb")
         self.assertEqual(call1["resume_from_waiting"], False)
         self.assertEqual(call2["resume_from_waiting"], True)
+
+    def test_chat_prints_clarification_prefix_and_hint_when_waiting(self):
+        with (
+            patch("app.agent.agent.AgentRuntime", _FakeRuntimeClarify),
+            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.agent.agent.uuid.uuid4", return_value=SimpleNamespace(hex="aaaabbbbccccdddd")),
+        ):
+            agent = BaseAgent(
+                name="main_agent",
+                description="test agent",
+                instructions="hello",
+                tools=[_dummy_tool],
+                load_memory_knowledge=False,
+                enable_llm_judge=False,
+            )
+            out = StringIO()
+            with redirect_stdout(out):
+                _ = agent.chat("先做个草稿")
+
+        rendered = out.getvalue()
+        self.assertIn("[需要澄清]", rendered)
+        self.assertIn("请直接回复补充信息", rendered)
+        self.assertTrue(agent.is_awaiting_user_input)
+
+    def test_cli_new_command_starts_new_task_and_resets_waiting_state(self):
+        with (
+            patch("app.agent.agent.AgentRuntime", _FakeRuntime),
+            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+        ):
+            agent = BaseAgent(
+                name="main_agent",
+                description="test agent",
+                instructions="hello",
+                tools=[_dummy_tool],
+                load_memory_knowledge=False,
+                enable_llm_judge=False,
+            )
+
+        old_task_id = agent.current_task_id
+        agent._awaiting_user_input = True
+        agent._active_run_id = "main_agent_deadbeef"
+        mode, msg, handled = handle_cli_command(agent, "/new cli_reset", "chat")
+        self.assertEqual(mode, "chat")
+        self.assertTrue(handled)
+        self.assertIn("已结束任务", msg)
+        self.assertNotEqual(agent.current_task_id, old_task_id)
+        self.assertFalse(agent.is_awaiting_user_input)
 
     def test_start_new_task_rotates_task_id_and_resets_waiting_state(self):
         with (
