@@ -1,6 +1,7 @@
 {
   "id": "mem_payment_idempotency_retry_001",
   "title": "支付重试必须幂等键先行",
+  "recall_hint": "支付重试链路必须先建立幂等键与唯一约束，避免重复扣款；仅适用于有副作用写操作场景。",
   "memory_type": "experience",
   "domain": "payment",
   "tags": ["transaction", "idempotency", "retry"],

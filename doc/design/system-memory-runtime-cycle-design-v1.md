@@ -4,7 +4,7 @@
 状态：Draft（待评审）
 
 当前落地状态（2026-04-14）：
-1. Phase 1 已落地：run 开始高精度召回注入 + run 结束强制沉淀。
+1. Phase 1 已落地：run 开始召回注入 + run 结束强制沉淀。
 2. run 中 capture 继续采用 tool 显式调用（`capture_runtime_memory_candidate`）。
 
 ## 1. 背景与目标
@@ -46,20 +46,15 @@
 触发时机：
 1. `task_started` 后、首次模型请求前。
 
-检索策略（精确率优先）：
-1. 仅检索 `status='active'` 且未过期卡片。
-2. `scenario.stage` 精确匹配优先；不匹配时默认不降级扩搜（可配置）。
-3. query 由 `task_id + user_input + stage` 生成关键词；必须去停用词并去重。
-4. 对候选卡打分后仅保留高置信命中（示例：`score >= recall_min_score`）。
-5. 最多注入 5 条；可为 0 条（允许空召回）。
+检索策略（当前实现）：
+1. 仅检索 `status='active'` 且未过期卡片作为候选池。
+2. 候选池最终由 LLM（mini）基于 `user_input + title` 进行 Top-K 判定。
+3. 规则检索不再承担最终决策职责。
+4. 最多注入 5 条；可为 0 条（允许空召回）。
 
 注入方式：
-1. 生成“系统记忆召回摘要块”（短结构化文本）注入 system prompt 后缀。
-2. 每条卡仅保留：
-   - 标题
-   - 触发提示
-   - 可执行步骤（1-2 条）
-   - 不适用条件（1 条）
+1. 生成“系统记忆召回轻注入块”注入 system prompt 后缀。
+2. 每条卡仅保留：`memory_id + recall_hint`。
 3. 统一 token 预算上限（避免挤压主上下文）。
 
 事件：
@@ -103,10 +98,9 @@
 
 ## 5. 排序与阈值建议（精确率优先）
 
-建议检索排序分：
-1. `stage_exact_match`：0.60
-2. `query_token_match`：0.10 * token_hit_count（封顶 0.30）
-3. `confidence_weight`：A/B/C -> +0.10/+0.05/+0.00
+建议排序策略：
+1. 候选召回：active + 未过期。
+2. 最终排序：LLM 语义打分（`user_input + title`）。
 
 建议门槛：
 1. `recall_top_k = 5`
@@ -124,8 +118,9 @@
 
 保留组件：
 1. `capture_runtime_memory_candidate` tool：作为 run 中 capture 的唯一主路径。
-2. `search_memory_cards` tool：保留为人工检索/调试入口。
-3. `memory_card_cli.py`：保留为离线治理入口。
+2. `search_memory_cards` tool：保留为人工检索/调试入口（title-only 规则检索）。
+3. `get_memory_card_by_id` tool：按 `memory_id` 拉取完整记忆卡。
+4. `memory_card_cli.py`：保留为离线治理入口。
 
 ## 7. 风险与缓解
 
@@ -135,7 +130,7 @@
 3. 事件三连语义不一致导致指标失真。
 
 缓解：
-1. 严格 `min_score` + stage 精确匹配优先。
+1. 严格 `min_score` + LLM title 判定阈值控制。
 2. capture 加去重与限流（每 run 最多 N 条候选）。
 3. 统一事件 reason 枚举并固化 source 字段规范。
 

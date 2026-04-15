@@ -48,7 +48,7 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 
 ```bash
 python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
-  search "retry idempotency" --stage pull_request --limit 5
+  search "retry idempotency" --limit 5
 ```
 
 ### 3) List due-review cards
@@ -68,7 +68,8 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 
 ## Runtime Integration
 
-- Runtime injects high-precision memory recall at task start (summary only, up to 5 cards).
+- Runtime injects memory recall at task start (LLM title-based, up to 5 cards, light inject: `memory_id + recall_hint`).
 - Runtime forces task-end memory finalization in framework.
 - This skill captures candidate memories during execution via explicit tool call `capture_runtime_memory_candidate`.
+- Runtime supports full card retrieval by id via `get_memory_card_by_id`.
 - Trigger/retrieval/decision events are persisted for KPI tracking.

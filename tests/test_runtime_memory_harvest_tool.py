@@ -32,6 +32,29 @@ class RuntimeMemoryHarvestToolTests(unittest.TestCase):
             self.assertEqual(rows[0].get("lifecycle", {}).get("status"), "draft")
             self.assertEqual(rows[0].get("confidence"), "C")
 
+    def test_capture_runtime_memory_candidate_accepts_recall_hint_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "system_memory.db")
+            capture_runtime_memory_candidate.entrypoint(
+                task_id="task_y",
+                run_id="run_y",
+                title="发布前依赖检查",
+                observation="观察文本",
+                proposed_action="建议文本",
+                recall_hint="问题：依赖状态不一致；适用：多服务联动发布；动作：先做依赖健康检查；风险：跳过会触发连锁回滚。",
+                stage="pre_release",
+                tags="release",
+                db_file=db_path,
+            )
+
+            rows = SystemMemoryStore(db_file=db_path).search_cards(
+                query="依赖 检查",
+                limit=5,
+                only_active=False,
+            )
+            self.assertEqual(len(rows), 1)
+            self.assertIn("适用：多服务联动发布", str(rows[0].get("recall_hint", "")))
+
 
 if __name__ == "__main__":
     unittest.main()

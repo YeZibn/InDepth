@@ -38,6 +38,7 @@ def capture_runtime_memory_candidate(
     title: str,
     observation: str,
     proposed_action: str = "",
+    recall_hint: str = "",
     stage: str = "development",
     tags: str = "",
     db_file: str = "db/system_memory.db",
@@ -50,6 +51,7 @@ def capture_runtime_memory_candidate(
     card = {
         "id": mem_id,
         "title": title,
+        "recall_hint": (recall_hint or observation or proposed_action or title)[:200],
         "memory_type": "experience",
         "domain": "runtime",
         "tags": ["candidate", stage] + _parse_tags(tags),

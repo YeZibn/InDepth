@@ -44,6 +44,10 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         provider = MockModelProvider(
             scripted_outputs=[
                 {
+                    "content": '{"selected":[{"id":"mem_high_1","score":0.91,"reason":"payment retry semantic match"}]}',
+                    "raw": {"mock": True},
+                },
+                {
                     "content": "任务正常完成",
                     "raw": {
                         "choices": [
@@ -63,10 +67,8 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                 {
                     "id": "mem_high_1",
                     "title": "支付重试幂等检查",
+                    "recall_hint": "支付重试前先校验幂等键",
                     "retrieval_score": 0.88,
-                    "scenario": {"trigger_hint": "涉及重试时触发"},
-                    "solution": {"steps": ["校验幂等键", "使用唯一约束"]},
-                    "anti_pattern": {"not_applicable_if": ["纯查询接口"]},
                 },
                 {
                     "id": "mem_low_1",
@@ -74,16 +76,27 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                     "retrieval_score": 0.4,
                 },
             ]
-            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                enable_memory_recall_reranker=True,
+            )
             result = runtime.run("请执行支付重试逻辑检查", task_id="runtime_mem_task", run_id="runtime_mem_run")
 
         self.assertEqual(result, "任务正常完成")
         self.assertTrue(provider.requests)
-        first_messages = provider.requests[0]["messages"]
-        system_blocks = [m.get("content", "") for m in first_messages if m.get("role") == "system"]
-        joined = "\n".join([str(x) for x in system_blocks])
+        joined = ""
+        for req in provider.requests:
+            msgs = req.get("messages", [])
+            system_blocks = [m.get("content", "") for m in msgs if m.get("role") == "system"]
+            text = "\n".join([str(x) for x in system_blocks])
+            if "系统记忆召回" in text:
+                joined = text
+                break
         self.assertIn("系统记忆召回", joined)
-        self.assertIn("支付重试幂等检查", joined)
+        self.assertIn("memory_id=mem_high_1", joined)
+        self.assertIn("recall_hint=支付重试前先校验幂等键", joined)
         self.assertNotIn("低相关卡片", joined)
 
     def test_runtime_forces_task_end_memory_finalization(self):
@@ -113,6 +126,76 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         upsert_card = mock_store.upsert_card.call_args.args[0]
         self.assertEqual(upsert_card.get("memory_type"), "experience")
         self.assertEqual(upsert_card.get("scenario", {}).get("stage"), "postmortem")
+
+    def test_runtime_finalize_uses_llm_generated_memory_metadata_when_enabled(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "发布检查已完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "发布检查已完成"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": '{"title":"发布检查失败回滚前先校验依赖状态","recall_hint":"问题：发布前依赖状态不一致导致流程中断；适用：涉及多服务联动发布；动作：先校验依赖健康再执行发布；风险：跳过前置检查会触发连锁回滚。"}',
+                    "raw": {"mock": True},
+                },
+            ]
+        )
+
+        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
+            mock_store = mock_store_cls.return_value
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                enable_memory_card_metadata_llm=True,
+            )
+            runtime.run("请做上线前发布检查", task_id="runtime_pre_release_task", run_id="runtime_pre_release_run")
+
+        upsert_card = mock_store.upsert_card.call_args.args[0]
+        self.assertEqual(upsert_card.get("title"), "发布检查失败回滚前先校验依赖状态")
+        self.assertIn("适用：涉及多服务联动发布", str(upsert_card.get("recall_hint", "")))
+
+    def test_runtime_finalize_falls_back_when_llm_metadata_is_invalid(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "发布检查已完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "发布检查已完成"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "not-json",
+                    "raw": {"mock": True},
+                },
+            ]
+        )
+
+        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
+            mock_store = mock_store_cls.return_value
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                enable_memory_card_metadata_llm=True,
+            )
+            runtime.run("请做上线前发布检查", task_id="runtime_pre_release_task", run_id="runtime_pre_release_run")
+
+        upsert_card = mock_store.upsert_card.call_args.args[0]
+        self.assertIn("复用策略", str(upsert_card.get("title", "")))
+        self.assertIn("任务结束状态", str(upsert_card.get("recall_hint", "")))
 
     def test_runtime_emits_verification_events_and_judgement_payload(self):
         provider = MockModelProvider(

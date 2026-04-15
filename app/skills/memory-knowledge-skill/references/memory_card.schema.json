@@ -8,6 +8,7 @@
   "required": [
     "id",
     "title",
+    "recall_hint",
     "memory_type",
     "domain",
     "scenario",
@@ -30,6 +31,12 @@
       "type": "string",
       "minLength": 5,
       "maxLength": 120
+    },
+    "recall_hint": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 300,
+      "description": "Concise recall hint used for start-of-run lightweight injection."
     },
     "memory_type": {
       "type": "string",

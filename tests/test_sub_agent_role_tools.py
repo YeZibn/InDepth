@@ -36,12 +36,14 @@ class SubAgentRoleToolsTests(unittest.TestCase):
             agent = self._build_agent(role)
             registry = agent.runtime.kwargs["tool_registry"]
             self.assertTrue(registry.has("search_memory_cards"), msg=f"{role} should have search_memory_cards")
+            self.assertTrue(registry.has("get_memory_card_by_id"), msg=f"{role} should have get_memory_card_by_id")
 
     def test_builder_and_general_do_not_have_memory_search_tool(self):
         for role in ["builder", "general"]:
             agent = self._build_agent(role)
             registry = agent.runtime.kwargs["tool_registry"]
             self.assertFalse(registry.has("search_memory_cards"), msg=f"{role} should not have search_memory_cards")
+            self.assertFalse(registry.has("get_memory_card_by_id"), msg=f"{role} should not have get_memory_card_by_id")
 
 
 if __name__ == "__main__":

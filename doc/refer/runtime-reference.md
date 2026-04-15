@@ -324,18 +324,20 @@ def _inject_system_memory_recall(self, task_id, run_id, user_input, messages):
     # 1) 触发事件
     emit_event(..., event_type="memory_triggered", payload={"source": "runtime_start_recall"})
 
-    # 2) 检索 active 且未过期卡
-    rows = system_memory.search_cards(stage=stage, query=query, only_active=True, limit=10)
-    selected = [x for x in rows if x.retrieval_score >= 0.65][:5]
+    # 2) 拉取 active 且未过期候选池
+    rows = system_memory.search_cards(query="", only_active=True, limit=50)
 
-    # 3) 逐条 retrieval + 汇总 decision
-    # 4) 将摘要化记忆块注入 system prompt
+    # 3) LLM 基于 user_input + title 做 Top-K 重排
+    selected = rerank_by_llm(user_input=user_input, titles=rows)[:5]
+
+    # 4) 逐条 retrieval + 汇总 decision
+    # 5) 轻注入（memory_id + recall_hint）到 system prompt
 ```
 
 关键规则：
 1. 精确率优先，最多 5 条。
 2. 未命中不阻塞主流程。
-3. 仅注入摘要块，不注入整卡全文。
+3. 仅注入 `memory_id + recall_hint`，不注入整卡全文。
 
 ### 7.2 run_end：_finalize_task_memory()
 
@@ -386,7 +388,7 @@ def _finalize_task_memory(self, task_id, run_id, task_status):
 | `run_resumed` | 同一 run 恢复执行 | - |
 | `task_finished` | 任务结束 | stop_reason, tool_failure_count |
 | `task_judged` | 任务判定 | 完整 judgement |
-| `memory_triggered` | 记忆触发 | stage, context_id, risk_level, source/source_event |
+| `memory_triggered` | 记忆触发 | context_id, risk_level, source/source_event |
 | `memory_retrieved` | 记忆检索 | trigger_event_id, memory_id, score, source/reason |
 | `memory_decision_made` | 记忆决策 | trigger_event_id, memory_id, decision, reason |
 

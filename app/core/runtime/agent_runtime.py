@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from app.config import RuntimeCompressionConfig, load_runtime_compression_config
+from app.config import RuntimeCompressionConfig, load_runtime_compression_config, load_runtime_model_config
 from app.eval.orchestrator import EvalOrchestrator
 from app.eval.schema import RunOutcome, TaskSpec
 from app.core.model.base import GenerationConfig, ModelProvider
@@ -27,6 +27,7 @@ RUNTIME_SYSTEM_PROMPT = """你是 InDepth 智能体运行时中的助手。
 class AgentRuntime:
     START_RECALL_TOP_K = 5
     START_RECALL_MIN_SCORE = 0.65
+    START_RECALL_CANDIDATE_POOL = 50
 
     def __init__(
         self,
@@ -41,6 +42,8 @@ class AgentRuntime:
         generation_config: Optional[GenerationConfig] = None,
         eval_orchestrator: Optional[EvalOrchestrator] = None,
         enable_llm_judge: bool = False,
+        enable_memory_recall_reranker: Optional[bool] = None,
+        enable_memory_card_metadata_llm: Optional[bool] = None,
         system_memory_store: Optional[SystemMemoryStore] = None,
         compression_config: Optional[RuntimeCompressionConfig] = None,
     ):
@@ -60,6 +63,16 @@ class AgentRuntime:
         )
         self.system_memory_store = system_memory_store
         self.compression_config = compression_config or load_runtime_compression_config()
+        if enable_memory_recall_reranker is None:
+            # Default on for real providers, off for deterministic test mock provider.
+            self.enable_memory_recall_reranker = self.model_provider.__class__.__name__ != "MockModelProvider"
+        else:
+            self.enable_memory_recall_reranker = bool(enable_memory_recall_reranker)
+        if enable_memory_card_metadata_llm is None:
+            # Default on for real providers, off for deterministic test mock provider.
+            self.enable_memory_card_metadata_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
+        else:
+            self.enable_memory_card_metadata_llm = bool(enable_memory_card_metadata_llm)
         self.last_runtime_state = "idle"
         self.last_stop_reason = ""
         self.last_run_id = ""
@@ -519,10 +532,32 @@ class AgentRuntime:
         failure_brief = "; ".join(
             [f"{x.get('tool', 'unknown')}: {x.get('error', '')}" for x in (tool_failures or [])[:3]]
         ).strip()
+        fallback_title = self._build_semantic_memory_title(
+            user_input=user_input,
+            runtime_status=runtime_status,
+            stop_reason=stop_reason,
+        )
+        fallback_recall_hint = self._preview(
+            f"任务结束状态={runtime_status}，优先复用本次成功路径并规避失败工具链：{failure_brief or short_answer}",
+            max_len=200,
+        )
+        generated = self._generate_memory_card_metadata_llm(
+            mode="finalize",
+            user_input=user_input,
+            runtime_status=runtime_status,
+            stop_reason=stop_reason,
+            failure_brief=failure_brief,
+            answer_brief=short_answer,
+            fallback_title=fallback_title,
+            fallback_recall_hint=fallback_recall_hint,
+        )
+        generated_title = str(generated.get("title", "") or "").strip()
+        generated_recall_hint = str(generated.get("recall_hint", "") or "").strip()
 
         card = {
             "id": mem_id,
-            "title": f"Task outcome memory: {task_id}",
+            "title": generated_title or fallback_title,
+            "recall_hint": generated_recall_hint or fallback_recall_hint,
             "memory_type": "experience",
             "domain": "runtime",
             "tags": ["task-finish", runtime_status, stop_reason],
@@ -643,8 +678,7 @@ class AgentRuntime:
         except Exception:
             return messages
 
-        stage = self._infer_recall_stage(task_id=task_id, user_input=user_input)
-        query = self._build_recall_query(task_id=task_id, user_input=user_input)
+        query = self._build_recall_query(user_input=user_input)
         triggered = emit_event(
             task_id=task_id,
             run_id=run_id,
@@ -652,7 +686,6 @@ class AgentRuntime:
             role="general",
             event_type="memory_triggered",
             payload={
-                "stage": stage,
                 "context_id": run_id,
                 "risk_level": "P3",
                 "source": "runtime_start_recall",
@@ -663,12 +696,14 @@ class AgentRuntime:
         trigger_event_id = str(triggered.get("event_id", "")).strip()
 
         try:
+            # Wide candidate pool: no rule query filter, active cards only.
             rows = store.search_cards(
-                stage=stage,
-                query=query,
-                limit=max(self.START_RECALL_TOP_K * 2, self.START_RECALL_TOP_K),
+                query="",
+                limit=max(self.START_RECALL_CANDIDATE_POOL, self.START_RECALL_TOP_K),
                 only_active=True,
             )
+            if not isinstance(rows, list):
+                rows = []
         except Exception as e:
             if trigger_event_id:
                 emit_event(
@@ -682,15 +717,30 @@ class AgentRuntime:
                         "trigger_event_id": trigger_event_id,
                         "decision": "skipped",
                         "reason": f"recall_failed:{str(e)}",
-                        "stage": stage,
                     },
                 )
             return messages
 
-        selected = [
-            card for card in rows
-            if float(card.get("retrieval_score", 0.0) or 0.0) >= self.START_RECALL_MIN_SCORE
-        ][: self.START_RECALL_TOP_K]
+        selected: List[Dict[str, Any]] = []
+        if rows and self.enable_memory_recall_reranker:
+            reranked = self._rerank_memory_candidates_llm(user_input=user_input, candidates=rows)
+            card_map: Dict[str, Dict[str, Any]] = {
+                str(card.get("id", "")).strip(): card
+                for card in rows
+                if str(card.get("id", "")).strip()
+            }
+            for item in reranked:
+                mid = str(item.get("id", "")).strip()
+                score = float(item.get("score", 0.0) or 0.0)
+                if not mid or mid not in card_map:
+                    continue
+                if score < self.START_RECALL_MIN_SCORE:
+                    continue
+                card = dict(card_map[mid])
+                card["retrieval_score"] = score
+                selected.append(card)
+                if len(selected) >= self.START_RECALL_TOP_K:
+                    break
 
         if trigger_event_id:
             if not selected:
@@ -703,8 +753,7 @@ class AgentRuntime:
                     payload={
                         "trigger_event_id": trigger_event_id,
                         "decision": "skipped",
-                        "reason": "no_high_precision_match",
-                        "stage": stage,
+                        "reason": "no_llm_recall_match",
                     },
                 )
             else:
@@ -719,7 +768,6 @@ class AgentRuntime:
                             "trigger_event_id": trigger_event_id,
                             "memory_id": card.get("id", ""),
                             "score": float(card.get("retrieval_score", 0.0) or 0.0),
-                            "stage": stage,
                             "source": "runtime_start_recall",
                         },
                     )
@@ -733,7 +781,6 @@ class AgentRuntime:
                         "trigger_event_id": trigger_event_id,
                         "decision": "accepted",
                         "reason": f"recalled_{len(selected)}_high_precision_cards",
-                        "stage": stage,
                     },
                 )
 
@@ -752,23 +799,8 @@ class AgentRuntime:
             return out
         return [{"role": "system", "content": memory_block}] + out
 
-    def _infer_recall_stage(self, task_id: str, user_input: str) -> str:
-        text = f"{task_id} {user_input}".lower()
-        hints = [
-            ("postmortem", ["postmortem", "复盘"]),
-            ("incident_response", ["incident", "故障", "告警", "oncall"]),
-            ("pre_release", ["pre_release", "上线前", "发布前", "release"]),
-            ("pull_request", ["pull request", "pr", "code review", "评审"]),
-            ("design_review", ["设计评审", "design review", "架构"]),
-            ("requirement_review", ["需求评审", "requirement review", "需求"]),
-        ]
-        for stage, words in hints:
-            if any(word in text for word in words):
-                return stage
-        return "development"
-
-    def _build_recall_query(self, task_id: str, user_input: str) -> str:
-        base = f"{task_id} {user_input}".lower()
+    def _build_recall_query(self, user_input: str) -> str:
+        base = f"{user_input}".lower()
         tokens = re.findall(r"[a-z0-9_\-\u4e00-\u9fff]+", base)
         stop = {
             "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "with",
@@ -790,33 +822,148 @@ class AgentRuntime:
     def _render_memory_recall_block(self, cards: List[Dict[str, Any]]) -> str:
         if not cards:
             return ""
-        lines: List[str] = ["系统记忆召回（精确优先，最多5条）"]
+        lines: List[str] = ["系统记忆召回（轻注入：memory_id + recall_hint，最多5条）"]
         for idx, card in enumerate(cards, 1):
-            title = str(card.get("title", "") or "").strip() or str(card.get("id", "") or "").strip() or "untitled"
-            scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
-            trigger_hint = str(scenario.get("trigger_hint", "") or "").strip()
-            solution = card.get("solution", {}) if isinstance(card.get("solution", {}), dict) else {}
-            steps = solution.get("steps", []) if isinstance(solution.get("steps", []), list) else []
-            anti_pattern = card.get("anti_pattern", {}) if isinstance(card.get("anti_pattern", {}), dict) else {}
-            not_applicable = anti_pattern.get("not_applicable_if", []) if isinstance(
-                anti_pattern.get("not_applicable_if", []), list
-            ) else []
-            step_text = "；".join([str(x).strip() for x in steps[:2] if str(x).strip()])
-            guard_text = str(not_applicable[0]).strip() if not_applicable else ""
-            lines.append(f"{idx}. {title}")
-            if trigger_hint:
-                lines.append(f"   - 触发提示：{self._preview(trigger_hint, max_len=120)}")
-            if step_text:
-                lines.append(f"   - 建议动作：{self._preview(step_text, max_len=180)}")
-            if guard_text:
-                lines.append(f"   - 不适用：{self._preview(guard_text, max_len=120)}")
+            memory_id = str(card.get("id", "") or "").strip()
+            recall_hint = str(card.get("recall_hint", "") or "").strip()
+            if not recall_hint:
+                scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
+                recall_hint = str(scenario.get("trigger_hint", "") or "").strip()
+            if not memory_id:
+                continue
+            lines.append(f"{idx}. memory_id={memory_id}")
+            if recall_hint:
+                lines.append(f"   - recall_hint={self._preview(recall_hint, max_len=200)}")
         return "\n".join(lines).strip()
+
+    def _rerank_memory_candidates_llm(self, user_input: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not candidates:
+            return []
+        # Title-only recall matching: id/title pairs are passed to LLM.
+        entries = []
+        for card in candidates[: self.START_RECALL_CANDIDATE_POOL]:
+            cid = str(card.get("id", "")).strip()
+            title = str(card.get("title", "")).strip()
+            if not cid or not title:
+                continue
+            entries.append({"id": cid, "title": title})
+        if not entries:
+            return []
+
+        prompt = {
+            "task": "memory_recall_rerank",
+            "instruction": (
+                "Given user_input and memory card titles, return the most relevant cards. "
+                "Match by semantic relevance only. Return strict JSON."
+            ),
+            "user_input": user_input,
+            "top_k": self.START_RECALL_TOP_K,
+            "candidates": entries,
+            "output_schema": {
+                "selected": [
+                    {"id": "memory_id", "score": "0~1 float", "reason": "short reason"}
+                ]
+            },
+        }
+        try:
+            output = self.model_provider.generate(
+                messages=[
+                    {"role": "system", "content": "You are a precise memory recall ranker. Output JSON only."},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                tools=[],
+                config=self._build_memory_reranker_config(),
+            )
+        except Exception:
+            return []
+        text = str(getattr(output, "content", "") or "").strip()
+        parsed = self._parse_json_dict(text)
+        if not isinstance(parsed, dict):
+            return []
+        selected = parsed.get("selected", [])
+        if not isinstance(selected, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in selected:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id", "")).strip()
+            if not mid or mid in seen:
+                continue
+            try:
+                score = float(item.get("score", 0.0) or 0.0)
+            except Exception:
+                score = 0.0
+            out.append(
+                {
+                    "id": mid,
+                    "score": max(0.0, min(score, 1.0)),
+                    "reason": str(item.get("reason", "") or "").strip(),
+                }
+            )
+            seen.add(mid)
+            if len(out) >= self.START_RECALL_TOP_K:
+                break
+        out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        return out
+
+    def _build_memory_reranker_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        try:
+            model_cfg = load_runtime_model_config()
+            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
+            if mini_id:
+                options["model"] = mini_id
+        except Exception:
+            pass
+        return GenerationConfig(
+            temperature=0.0,
+            max_tokens=800,
+            provider_options=options,
+        )
+
+    def _parse_json_dict(self, text: str) -> Dict[str, Any]:
+        raw = (text or "").strip()
+        if not raw:
+            return {}
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(r"\s*```$", "", raw)
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if not match:
+            return {}
+        try:
+            data = json.loads(match.group(0))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
     def _slug(self, value: str) -> str:
         text = (value or "").strip().lower()
         text = re.sub(r"[^a-z0-9]+", "-", text)
         text = re.sub(r"-+", "-", text).strip("-")
         return text or "na"
+
+    def _build_semantic_memory_title(self, user_input: str, runtime_status: str, stop_reason: str) -> str:
+        topic = self._extract_title_topic(user_input=user_input)
+        _ = stop_reason
+        suffix = "复用策略" if runtime_status == "ok" else "排查与修复策略"
+        raw = f"{topic}{suffix}"
+        return self._preview(raw, max_len=40)
+
+    def _extract_title_topic(self, user_input: str) -> str:
+        text = (user_input or "").strip()
+        if not text:
+            return "任务执行"
+        compact = re.sub(r"\s+", " ", text)
+        # Keep a short high-level topic phrase for index-style title.
+        return self._preview(compact, max_len=40)
 
     def _extract_finish_reason_and_message(self, raw: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
         if not isinstance(raw, dict):
@@ -859,6 +1006,12 @@ class AgentRuntime:
                     tool_args = {}
             except Exception:
                 tool_args = {}
+            tool_args = self._enrich_capture_memory_tool_args(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                task_id=task_id,
+                run_id=run_id,
+            )
             emit_event(
                 task_id=task_id,
                 run_id=run_id,
@@ -904,6 +1057,133 @@ class AgentRuntime:
                     tool_call_id=call_id,
                 )
         return failures
+
+    def _enrich_capture_memory_tool_args(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        task_id: str,
+        run_id: str,
+    ) -> Dict[str, Any]:
+        if tool_name != "capture_runtime_memory_candidate":
+            return tool_args
+        if not self.enable_memory_card_metadata_llm:
+            return tool_args
+        if not isinstance(tool_args, dict):
+            return {}
+        title = str(tool_args.get("title", "") or "").strip()
+        observation = str(tool_args.get("observation", "") or "").strip()
+        proposed_action = str(tool_args.get("proposed_action", "") or "").strip()
+        if not any([title, observation, proposed_action]):
+            return tool_args
+        fallback_title = title or self._extract_title_topic(observation)
+        fallback_recall_hint = self._preview(
+            observation or proposed_action or title,
+            max_len=200,
+        )
+        generated = self._generate_memory_card_metadata_llm(
+            mode="capture",
+            user_input=observation or title,
+            runtime_status="runtime_capture",
+            stop_reason="tool_capture",
+            failure_brief="",
+            answer_brief=proposed_action,
+            fallback_title=fallback_title,
+            fallback_recall_hint=fallback_recall_hint,
+            task_id=task_id,
+            run_id=run_id,
+        )
+        out = dict(tool_args)
+        new_title = str(generated.get("title", "") or "").strip()
+        new_recall_hint = str(generated.get("recall_hint", "") or "").strip()
+        if new_title:
+            out["title"] = new_title
+        if new_recall_hint:
+            out["recall_hint"] = new_recall_hint
+        return out
+
+    def _generate_memory_card_metadata_llm(
+        self,
+        mode: str,
+        user_input: str,
+        runtime_status: str,
+        stop_reason: str,
+        failure_brief: str,
+        answer_brief: str,
+        fallback_title: str,
+        fallback_recall_hint: str,
+        task_id: str = "",
+        run_id: str = "",
+    ) -> Dict[str, str]:
+        if not self.enable_memory_card_metadata_llm:
+            return {}
+        payload = {
+            "task": "memory_card_metadata_generation",
+            "instruction": (
+                "Generate concise high-signal memory card metadata in Chinese. "
+                "Return strict JSON only with fields: title, recall_hint. "
+                "title should be stable and semantic, follow <问题对象/场景> + <关键动作/原则>, "
+                "and no task_id/run_id/timestamp noise. "
+                "recall_hint should follow: 问题; 适用条件; 建议动作; 风险提示."
+            ),
+            "mode": mode,
+            "task_id": task_id,
+            "run_id": run_id,
+            "user_input": user_input,
+            "runtime_status": runtime_status,
+            "stop_reason": stop_reason,
+            "failure_brief": failure_brief,
+            "answer_brief": answer_brief,
+            "fallback": {
+                "title": fallback_title,
+                "recall_hint": fallback_recall_hint,
+            },
+            "constraints": {
+                "title_max_len": 40,
+                "recall_hint_max_len": 220,
+            },
+            "output_schema": {
+                "title": "string",
+                "recall_hint": "string",
+            },
+        }
+        try:
+            output = self.model_provider.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You generate memory metadata. Output JSON only.",
+                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                tools=[],
+                config=self._build_memory_metadata_config(),
+            )
+        except Exception:
+            return {}
+        parsed = self._parse_json_dict(str(getattr(output, "content", "") or ""))
+        if not isinstance(parsed, dict):
+            return {}
+        title = self._preview(str(parsed.get("title", "") or "").strip(), max_len=40)
+        recall_hint = self._preview(str(parsed.get("recall_hint", "") or "").strip(), max_len=220)
+        if not title and not recall_hint:
+            return {}
+        return {"title": title, "recall_hint": recall_hint}
+
+    def _build_memory_metadata_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        try:
+            model_cfg = load_runtime_model_config()
+            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
+            if mini_id:
+                options["model"] = mini_id
+        except Exception:
+            pass
+        return GenerationConfig(
+            temperature=0.1,
+            max_tokens=400,
+            provider_options=options,
+        )
 
     def _trace(self, msg: str) -> None:
         if self.trace_steps:

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +24,7 @@ class SystemMemoryStore:
                 CREATE TABLE IF NOT EXISTS memory_card (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
+                    recall_hint TEXT NOT NULL DEFAULT '',
                     memory_type TEXT NOT NULL,
                     domain TEXT NOT NULL,
                     tags_json TEXT NOT NULL,
@@ -58,9 +60,15 @@ class SystemMemoryStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memory_card_title_domain ON memory_card(title, domain)"
             )
+            self._ensure_memory_card_columns(conn)
             conn.commit()
         finally:
             conn.close()
+
+    def _ensure_memory_card_columns(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(memory_card)").fetchall()}
+        if "recall_hint" not in cols:
+            conn.execute("ALTER TABLE memory_card ADD COLUMN recall_hint TEXT NOT NULL DEFAULT ''")
 
     def upsert_card(self, card: Dict[str, Any]) -> Dict[str, Any]:
         normalized = self._normalize_card(card)
@@ -69,13 +77,13 @@ class SystemMemoryStore:
             conn.execute(
                 """
                 INSERT INTO memory_card (
-                    id, title, memory_type, domain, tags_json, scenario_stage, trigger_hint,
+                    id, title, recall_hint, memory_type, domain, tags_json, scenario_stage, trigger_hint,
                     problem_pattern_json, solution_json, constraints_json, anti_pattern_json,
                     evidence_json, impact_json, owner_team, owner_primary, owner_reviewers_json,
                     status, version, effective_from, expire_at, last_reviewed_at, confidence,
                     payload_json, created_at, updated_at
                 ) VALUES (
-                    :id, :title, :memory_type, :domain, :tags_json, :scenario_stage, :trigger_hint,
+                    :id, :title, :recall_hint, :memory_type, :domain, :tags_json, :scenario_stage, :trigger_hint,
                     :problem_pattern_json, :solution_json, :constraints_json, :anti_pattern_json,
                     :evidence_json, :impact_json, :owner_team, :owner_primary, :owner_reviewers_json,
                     :status, :version, :effective_from, :expire_at, :last_reviewed_at, :confidence,
@@ -83,6 +91,7 @@ class SystemMemoryStore:
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
+                    recall_hint = excluded.recall_hint,
                     memory_type = excluded.memory_type,
                     domain = excluded.domain,
                     tags_json = excluded.tags_json,
@@ -113,20 +122,25 @@ class SystemMemoryStore:
             conn.close()
         return {"success": True, "id": normalized["id"]}
 
-    def get_card(self, card_id: str) -> Optional[Dict[str, Any]]:
+    def get_card(
+        self,
+        card_id: str,
+        only_active: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         card_id_norm = (card_id or "").strip()
         if not card_id_norm:
             return None
         conn = self._connect()
         try:
-            row = conn.execute(
-                """
-                SELECT id, payload_json, scenario_stage, title, status, expire_at
+            sql = """
+                SELECT id, payload_json, scenario_stage, title, status, expire_at, recall_hint
                 FROM memory_card
                 WHERE id = ?
-                """,
-                (card_id_norm,),
-            ).fetchone()
+            """
+            args: List[Any] = [card_id_norm]
+            if only_active:
+                sql += " AND status = 'active' AND (expire_at IS NULL OR date(expire_at) >= date('now','localtime'))"
+            row = conn.execute(sql, tuple(args)).fetchone()
         finally:
             conn.close()
         if not row:
@@ -140,38 +154,31 @@ class SystemMemoryStore:
         limit: int = 5,
         only_active: bool = True,
     ) -> List[Dict[str, Any]]:
+        # stage is accepted for backward compatibility, but retrieval is title-only.
+        _ = stage
         clauses: List[str] = ["1=1"]
         args: List[Any] = []
-
-        stage_norm = (stage or "").strip()
-        if stage_norm:
-            clauses.append("scenario_stage = ?")
-            args.append(stage_norm)
 
         query_norm = (query or "").strip().lower()
         if query_norm:
             query_tokens = [t for t in query_norm.split() if t]
             for token in query_tokens:
                 like = f"%{token}%"
-                clauses.append(
-                    "(lower(title) LIKE ? OR lower(domain) LIKE ? OR lower(trigger_hint) LIKE ? OR lower(tags_json) LIKE ?)"
-                )
-                args.extend([like, like, like, like])
+                clauses.append("(lower(title) LIKE ?)")
+                args.append(like)
 
         if only_active:
             clauses.append("status = 'active'")
             clauses.append("(expire_at IS NULL OR date(expire_at) >= date('now','localtime'))")
 
         sql = f"""
-            SELECT id, payload_json, scenario_stage, title, status, expire_at
+            SELECT id, payload_json, scenario_stage, title, status, expire_at, recall_hint
             FROM memory_card
             WHERE {' AND '.join(clauses)}
-            ORDER BY
-                CASE WHEN scenario_stage = ? THEN 0 ELSE 1 END,
-                updated_at DESC
+            ORDER BY updated_at DESC
             LIMIT ?
         """
-        args.extend([stage_norm, max(1, int(limit))])
+        args.append(max(1, int(limit)))
 
         conn = self._connect()
         try:
@@ -184,7 +191,7 @@ class SystemMemoryStore:
             card = self._row_to_card(row)
             if not card:
                 continue
-            card["retrieval_score"] = self._score_card(card, stage_norm, query_norm)
+            card["retrieval_score"] = self._score_card(card, query_norm)
             cards.append(card)
         cards.sort(key=lambda x: x.get("retrieval_score", 0.0), reverse=True)
         return cards
@@ -195,7 +202,7 @@ class SystemMemoryStore:
         try:
             rows = conn.execute(
                 """
-                SELECT id, payload_json, scenario_stage, title, status, expire_at
+                SELECT id, payload_json, scenario_stage, title, status, expire_at, recall_hint
                 FROM memory_card
                 WHERE status = 'active'
                   AND expire_at IS NOT NULL
@@ -214,7 +221,8 @@ class SystemMemoryStore:
             raise ValueError("card must be an object")
 
         card_id = self._require_text(card.get("id"), "id")
-        title = self._require_text(card.get("title"), "title")
+        raw_title = self._require_text(card.get("title"), "title")
+        title = self._normalize_title(raw_title, card=card)
         memory_type = self._safe_text(card.get("memory_type"), default="experience")
         domain = self._safe_text(card.get("domain"), default="general")
 
@@ -236,10 +244,22 @@ class SystemMemoryStore:
 
         tags = card.get("tags", []) if isinstance(card.get("tags", []), list) else []
         confidence = self._safe_text(card.get("confidence"), default="C")
+        recall_hint = self._safe_text(card.get("recall_hint"), default="")
+        if not recall_hint:
+            # Backward compatibility: allow legacy summary field as source.
+            recall_hint = self._safe_text(card.get("summary"), default="")
+        if not recall_hint:
+            recall_hint = self._compose_recall_hint(card=card, title=title, trigger_hint=trigger_hint)
+        card_payload = dict(card)
+        card_payload["title"] = title
+        card_payload["recall_hint"] = recall_hint
+        if "summary" in card_payload and not card_payload.get("summary"):
+            card_payload.pop("summary", None)
 
         return {
             "id": card_id,
             "title": title,
+            "recall_hint": recall_hint,
             "memory_type": memory_type,
             "domain": domain,
             "tags_json": json.dumps(tags, ensure_ascii=False),
@@ -260,7 +280,7 @@ class SystemMemoryStore:
             "expire_at": expire_at,
             "last_reviewed_at": last_reviewed_at,
             "confidence": confidence,
-            "payload_json": json.dumps(card, ensure_ascii=False),
+            "payload_json": json.dumps(card_payload, ensure_ascii=False),
         }
 
     def _row_to_card(self, row: Any) -> Optional[Dict[str, Any]]:
@@ -275,6 +295,7 @@ class SystemMemoryStore:
             card = {}
         card.setdefault("id", row[0])
         card.setdefault("title", row[3])
+        card.setdefault("recall_hint", row[6] if len(row) > 6 else "")
         card.setdefault("scenario", {})
         if isinstance(card["scenario"], dict):
             card["scenario"].setdefault("stage", row[2])
@@ -284,27 +305,76 @@ class SystemMemoryStore:
             card["lifecycle"].setdefault("expire_at", row[5])
         return card
 
-    def _score_card(self, card: Dict[str, Any], stage: str, query: str) -> float:
+    def _score_card(self, card: Dict[str, Any], query: str) -> float:
         score = 0.0
-        scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
-        if stage and scenario.get("stage") == stage:
-            score += 0.6
 
         if query:
-            text = " ".join(
-                [
-                    str(card.get("title", "")),
-                    str(card.get("domain", "")),
-                    str(scenario.get("trigger_hint", "")),
-                    " ".join([str(t) for t in card.get("tags", [])])
-                    if isinstance(card.get("tags", []), list)
-                    else "",
-                ]
-            ).lower()
+            text = str(card.get("title", "")).lower()
             for token in [t for t in query.split() if t]:
                 if token in text:
                     score += 0.1
         return round(min(score, 1.0), 4)
+
+    def _compose_recall_hint(self, card: Dict[str, Any], title: str, trigger_hint: str) -> str:
+        solution = card.get("solution", {}) if isinstance(card.get("solution", {}), dict) else {}
+        steps = solution.get("steps", []) if isinstance(solution.get("steps", []), list) else []
+        first_step = ""
+        for step in steps:
+            text = str(step).strip()
+            if text:
+                first_step = text
+                break
+        pieces = [title, trigger_hint, first_step]
+        summary = "；".join([p.strip() for p in pieces if p and str(p).strip()])
+        problem_pattern = card.get("problem_pattern", {}) if isinstance(card.get("problem_pattern", {}), dict) else {}
+        constraints = card.get("constraints", {}) if isinstance(card.get("constraints", {}), dict) else {}
+        anti_pattern = card.get("anti_pattern", {}) if isinstance(card.get("anti_pattern", {}), dict) else {}
+        symptoms = problem_pattern.get("symptoms", []) if isinstance(problem_pattern.get("symptoms", []), list) else []
+        applicable = constraints.get("applicable_if", []) if isinstance(constraints.get("applicable_if", []), list) else []
+        not_applicable = anti_pattern.get("not_applicable_if", []) if isinstance(
+            anti_pattern.get("not_applicable_if", []), list
+        ) else []
+
+        problem_text = str(symptoms[0]).strip() if symptoms else (trigger_hint or title)
+        applicable_text = str(applicable[0]).strip() if applicable else "相似上下文且前置条件满足"
+        action_text = first_step or "先做最小验证再执行主动作"
+        risk_text = str(not_applicable[0]).strip() if not_applicable else "边界不清时先降级并补充验证"
+
+        structured = (
+            f"问题：{problem_text}；"
+            f"适用：{applicable_text}；"
+            f"动作：{action_text}；"
+            f"风险：{risk_text}。"
+        )
+        return self._preview_text(structured, max_len=220)
+
+    def _normalize_title(self, title: str, card: Dict[str, Any]) -> str:
+        text = self._safe_text(title, default="")
+        if not text:
+            return "经验复用策略"
+
+        # Remove pipeline noise tokens while preserving semantic nouns/verbs.
+        noise_patterns = [
+            r"\btask[_\-]?[a-z0-9_\-]{4,}\b",
+            r"\brun[_\-]?[a-z0-9_\-]{4,}\b",
+            r"\b\d{8,14}\b",
+            r"任务总结",
+            r"任务结果",
+            r"task outcome memory",
+        ]
+        for p in noise_patterns:
+            text = re.sub(p, " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"[|｜]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip(" ,;:，；：-")
+
+        if not text:
+            problem_pattern = card.get("problem_pattern", {}) if isinstance(card.get("problem_pattern", {}), dict) else {}
+            symptoms = problem_pattern.get("symptoms", []) if isinstance(problem_pattern.get("symptoms", []), list) else []
+            if symptoms:
+                text = str(symptoms[0]).strip()
+        if not text:
+            text = "经验复用策略"
+        return self._preview_text(text, max_len=120)
 
     def _require_text(self, value: Any, field: str) -> str:
         text = self._safe_text(value, default="")
@@ -323,3 +393,9 @@ class SystemMemoryStore:
             return None
         text = str(value).strip()
         return text or None
+
+    def _preview_text(self, value: str, max_len: int = 200) -> str:
+        text = (value or "").strip()
+        if len(text) <= max_len:
+            return text
+        return text[:max_len].rstrip() + "..."

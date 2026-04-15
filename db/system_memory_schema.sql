@@ -52,6 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_mem_decision_memory_id ON memory_decision_event(m
 CREATE TABLE IF NOT EXISTS memory_card (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
+    recall_hint TEXT NOT NULL DEFAULT '',
     memory_type TEXT NOT NULL,
     domain TEXT NOT NULL,
     tags_json TEXT NOT NULL,

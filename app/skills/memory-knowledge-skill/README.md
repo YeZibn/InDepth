@@ -17,7 +17,7 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 
 # Search memory cards
 python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
-  search "idempotency retry" --stage pull_request --limit 5
+  search "idempotency retry" --limit 5
 
 # List due-review cards
 python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
@@ -33,6 +33,7 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 ## Notes
 
 - Legacy markdown-based memory workflow has been removed.
-- Runtime now performs start-of-run system memory recall injection (high precision, up to 5 cards, summary only).
+- Runtime now performs start-of-run system memory recall injection (LLM title-based, up to 5 cards, light inject: `memory_id + recall_hint`).
 - Runtime forces memory finalization at task end.
 - Runtime candidate capture remains an explicit tool path (`capture_runtime_memory_candidate`), not implicit auto-capture.
+- Runtime can fetch full card by id via tool `get_memory_card_by_id` when a recalled memory becomes critical.

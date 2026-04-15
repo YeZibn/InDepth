@@ -877,22 +877,23 @@ def search_cards(self, stage, query, limit, only_active):
 
 ```python
 def _inject_system_memory_recall(self, task_id, run_id, user_input, messages):
-    stage = infer_stage(task_id, user_input)
-    query = build_query(task_id, user_input)
     emit_event(..., event_type="memory_triggered", payload={"source": "runtime_start_recall"})
 
-    rows = system_memory.search_cards(stage=stage, query=query, only_active=True, limit=10)
-    selected = [x for x in rows if x.get("retrieval_score", 0) >= 0.65][:5]
+    # 候选池（active + 未过期）
+    rows = system_memory.search_cards(query="", only_active=True, limit=50)
+
+    # 最终由 LLM 按 user_input + title 选 Top-K
+    selected = rerank_by_llm(user_input=user_input, titles=rows)[:5]
 
     # 命中逐条记 retrieval，最后记 decision
     # 未命中只记 decision=skipped，不阻塞主流程
-    return inject_summary_block(messages, selected)
+    return inject_light_block(messages, selected)  # memory_id + recall_hint
 ```
 
 规则：
-1. 精确率优先，最多注入 5 条。
+1. Top-K 最多 5 条。
 2. 未命中不阻塞主流程。
-3. 注入内容摘要化，不拼接整卡原文。
+3. 注入内容为 `memory_id + recall_hint`，不拼接整卡原文。
 
 ### 8.2 任务结束强制沉淀
 
@@ -962,7 +963,7 @@ def search_memory_cards(
     limit: int = 5,
 ) -> Dict[str, Any]:
     cards = system_memory.search_cards(
-        stage=stage,
+        stage=stage,  # backward compatibility
         query=query,
         limit=limit,
     )
@@ -971,6 +972,14 @@ def search_memory_cards(
         "count": len(cards),
         "cards": cards,
     }
+```
+
+工具：`get_memory_card_by_id`
+
+```python
+def get_memory_card_by_id(memory_id: str, include_inactive: bool = False, ...) -> Dict[str, Any]:
+    card = system_memory.get_card(memory_id, only_active=not include_inactive)
+    return {"success": True, "found": bool(card), "card": card}
 ```
 
 ## 9. 记忆观测落盘
@@ -1003,8 +1012,10 @@ def emit_event(...):
 
 | 约束 | 说明 |
 |------|------|
-| 启动自动召回 | Runtime 在首次模型请求前执行 system memory 召回（高精度优先，最多 5 条） |
+| 启动自动召回 | Runtime 在首次模型请求前执行 system memory 召回（LLM 基于 title 主判定，最多 5 条） |
 | capture 显式调用 | 运行中候选记忆 capture 保持 tool 调用，不做 Runtime 隐式自动写卡 |
+| 轻注入结构 | 启动注入统一为 `memory_id + recall_hint` |
+| 完整拉取工具 | 运行中可用 `get_memory_card_by_id` 按 id 拉取完整卡片 |
 | 异常不阻塞 | 记忆链路异常不应中断主执行 |
 | Legacy 兼容 | legacy `summary` 文本仍可读，逐步迁移到 `summary_json` |
 | DB 按类型聚合 | 每个 Agent 类型有独立的 runtime memory 数据库 |
