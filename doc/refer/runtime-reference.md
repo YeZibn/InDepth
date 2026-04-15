@@ -1,6 +1,6 @@
 # InDepth Runtime 参考
 
-更新时间：2026-04-14
+更新时间：2026-04-15
 
 ## 1. 定位
 
@@ -168,7 +168,6 @@ Model returns tool_calls ---> ToolRegistry.invoke(name, args)
 class EvalOrchestrator:
     def evaluate(
         self,
-        task_spec: TaskSpec,
         run_outcome: RunOutcome,
     ) -> RunJudgement:
         # 1. 构建 verifier 链
@@ -187,7 +186,6 @@ def run(
     user_input: str,
     task_id: str = "runtime_task",
     run_id: str = "runtime_run",
-    task_spec: Optional[Dict[str, Any]] = None,
     resume_from_waiting: bool = False,
 ) -> str:
 ```
@@ -289,7 +287,7 @@ compact_mid_run(conversation_id, trigger, mode)
 task_finished 事件
         │
         ▼
-EvalOrchestrator.evaluate(task_spec, run_outcome)
+EvalOrchestrator.evaluate(run_outcome)
         │
         ├──▶ build_default_deterministic_verifiers()
         │       │
@@ -302,7 +300,7 @@ EvalOrchestrator.evaluate(task_spec, run_outcome)
         │       └──▶ 任何 hard=true && passed=false ──▶ fail
         │
         └──▶ soft 平均分检查
-                └──▶ avg < threshold ──▶ partial
+                └──▶ avg < run_outcome.verification_handoff.soft_score_threshold ──▶ partial
 ```
 
 ### 6.2 判定结果
@@ -312,6 +310,13 @@ EvalOrchestrator.evaluate(task_spec, run_outcome)
 | 硬检查失败 | `fail` |
 | 硬检查通过 + soft < 阈值 | `partial` |
 | 硬检查通过 + soft >= 阈值 | `pass` |
+
+### 6.3 Verification Handoff 来源观测
+
+- 生成时机：step 内进入终态（非 `awaiting_user_input`）时立即生成；循环外仅保底生成。
+- `verification_started.payload.handoff_source`：`llm` 或 `fallback_rule`
+- `task_judged.payload.verification_handoff_source`：`llm` 或 `fallback_rule`
+- `task_judged.payload.verification_handoff`：结构化交付快照（postmortem 用于渲染“交付内容”）
 
 ## 7. 记忆生命周期
 
@@ -380,14 +385,14 @@ def _finalize_task_memory(self, task_id, run_id, task_status):
 | `context_compression_started` | 开始压缩 | trigger, mode |
 | `context_compression_succeeded` | 压缩成功 | before, after |
 | `context_compression_failed` | 压缩失败 | error |
-| `verification_started` | 开始评估 | - |
+| `verification_started` | 开始评估 | stop_reason, handoff_source |
 | `verification_passed` | 评估通过 | verifier_results |
 | `verification_failed` | 评估失败 | verifier_results |
 | `verification_skipped` | 跳过评估（等待用户输入） | reason, runtime_state |
 | `user_clarification_received` | 收到用户补充 | - |
 | `run_resumed` | 同一 run 恢复执行 | - |
 | `task_finished` | 任务结束 | stop_reason, tool_failure_count |
-| `task_judged` | 任务判定 | 完整 judgement |
+| `task_judged` | 任务判定 | 完整 judgement + verification_handoff_source + verification_handoff |
 | `memory_triggered` | 记忆触发 | context_id, risk_level, source/source_event |
 | `memory_retrieved` | 记忆检索 | trigger_event_id, memory_id, score, source/reason |
 | `memory_decision_made` | 记忆决策 | trigger_event_id, memory_id, decision, reason |

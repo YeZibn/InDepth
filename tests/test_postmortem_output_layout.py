@@ -146,6 +146,51 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
             self.assertTrue((task_root / "run_1" / "events.jsonl").exists())
             self.assertTrue((task_root / "run_1" / "judgement.json").exists())
 
+    def test_generate_postmortem_renders_delivery_section_from_verification_handoff(self):
+        events = [
+            {
+                "timestamp": "2026-04-10T10:00:00+00:00",
+                "event_type": "task_started",
+                "actor": "main",
+                "role": "general",
+                "status": "ok",
+                "run_id": "run_delivery",
+                "payload": {},
+            },
+            {
+                "timestamp": "2026-04-10T10:00:02+00:00",
+                "event_type": "task_judged",
+                "actor": "main",
+                "role": "general",
+                "status": "ok",
+                "run_id": "run_delivery",
+                "payload": {
+                    "final_status": "pass",
+                    "verified_success": True,
+                    "verification_handoff_source": "llm",
+                    "verification_handoff": {
+                        "goal": "交付接口文档与测试",
+                        "claimed_done_items": ["补充接口文档", "补充回归测试"],
+                        "expected_artifacts": [
+                            {"path": "doc/api.md", "must_exist": True, "non_empty": True}
+                        ],
+                        "known_gaps": ["未执行全量回归"],
+                    },
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            with patch("app.observability.postmortem._find_project_root", return_value=td):
+                result = generate_postmortem(task_id="task-delivery", run_id="run_delivery", events=events)
+
+            self.assertTrue(result["success"])
+            content = Path(result["output_path"]).read_text(encoding="utf-8")
+            self.assertIn("## 4. 交付内容", content)
+            self.assertIn("handoff 来源: llm", content)
+            self.assertIn("补充接口文档", content)
+            self.assertIn("path=doc/api.md; must_exist=True; non_empty=True", content)
+            self.assertIn("未执行全量回归", content)
+
 
 if __name__ == "__main__":
     unittest.main()

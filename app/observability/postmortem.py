@@ -128,6 +128,59 @@ def _format_judgement_block(judgement: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _format_delivery_block(judgement: Dict[str, Any]) -> List[str]:
+    if not judgement:
+        return ["- 无可用交付信息（缺少 task_judged 结果）。"]
+    handoff = judgement.get("verification_handoff", {})
+    if not isinstance(handoff, dict):
+        handoff = {}
+    source = str(judgement.get("verification_handoff_source", "") or "").strip() or "unknown"
+    lines = [f"- handoff 来源: {source}"]
+    goal = str(handoff.get("goal", "") or "").strip()
+    if goal:
+        lines.append(f"- 任务目标: {goal}")
+
+    claimed = handoff.get("claimed_done_items", [])
+    if isinstance(claimed, list) and claimed:
+        lines.append("- 交付完成项:")
+        for idx, item in enumerate(claimed[:12], 1):
+            text = str(item or "").strip()
+            if text:
+                lines.append(f"  {idx}. {text}")
+    else:
+        lines.append("- 交付完成项: (none)")
+
+    artifacts = handoff.get("expected_artifacts", [])
+    if isinstance(artifacts, list) and artifacts:
+        lines.append("- 交付产物:")
+        for idx, item in enumerate(artifacts[:20], 1):
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path", "") or "").strip()
+            if not path:
+                continue
+            must_exist = bool(item.get("must_exist", True))
+            non_empty = bool(item.get("non_empty", False))
+            contains = str(item.get("contains", "") or "").strip()
+            desc = f"path={path}; must_exist={must_exist}; non_empty={non_empty}"
+            if contains:
+                desc += f"; contains={contains}"
+            lines.append(f"  {idx}. {desc}")
+    else:
+        lines.append("- 交付产物: (none)")
+
+    gaps = handoff.get("known_gaps", [])
+    if isinstance(gaps, list) and gaps:
+        lines.append("- 已知缺口:")
+        for idx, item in enumerate(gaps[:12], 1):
+            text = str(item or "").strip()
+            if text:
+                lines.append(f"  {idx}. {text}")
+    else:
+        lines.append("- 已知缺口: (none)")
+    return lines
+
+
 def _write_json(path: str, payload: Dict[str, Any]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
@@ -246,10 +299,13 @@ def generate_postmortem(
         "## 3. 评估结论",
         *_format_judgement_block(judgement),
         "",
-        "## 4. 关键时间线",
+        "## 4. 交付内容",
+        *_format_delivery_block(judgement),
+        "",
+        "## 5. 关键时间线",
         _format_trace(trace_rows),
         "",
-        "## 5. 失败与修复线索",
+        "## 6. 失败与修复线索",
     ]
 
     if not top_failures:
@@ -265,7 +321,7 @@ def generate_postmortem(
     lines.extend(
         [
             "",
-            "## 6. 改进建议（Top 3）",
+            "## 7. 改进建议（Top 3）",
             "1. 对失败率最高的 event_type 添加参数自检与自动重试。",
             "2. 将高频失败路径前置门禁（输入校验/依赖检查/预算检查）。",
             "3. 为关键链路增加更细粒度埋点，缩短问题定位时间。",

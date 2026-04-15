@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict, Optional
 
 from app.core.model.base import GenerationConfig, ModelProvider
-from app.eval.schema import RunOutcome, TaskSpec
+from app.eval.schema import RunOutcome
 from app.observability.store import _find_project_root
 
 
@@ -39,11 +39,17 @@ class VerifierAgent:
         sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
         return sanitized or fallback
 
-    def _infer_evidence_roots(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> list[str]:
+    def _infer_evidence_roots(self, run_outcome: RunOutcome) -> list[str]:
         roots: list[str] = []
+        handoff = run_outcome.verification_handoff if isinstance(run_outcome.verification_handoff, dict) else {}
+        expected_artifacts = handoff.get("expected_artifacts", [])
+        if not isinstance(expected_artifacts, list):
+            expected_artifacts = []
 
-        for artifact in task_spec.expected_artifacts:
-            raw_path = (artifact.path or "").strip()
+        for artifact in expected_artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            raw_path = str(artifact.get("path", "") or "").strip()
             if not raw_path:
                 continue
             resolved = self._resolve_under_project(raw_path)
@@ -75,22 +81,48 @@ class VerifierAgent:
 
     def _build_user_prompt(
         self,
-        task_spec: TaskSpec,
         run_outcome: RunOutcome,
         evidence_roots: list[str],
     ) -> str:
-        constraints = "\n".join([f"- {x}" for x in task_spec.constraints]) or "- (none)"
-        rubric = task_spec.llm_judge_rubric or "评估任务完成度、约束满足度、证据充分性。"
+        handoff = run_outcome.verification_handoff if isinstance(run_outcome.verification_handoff, dict) else {}
+        goal = str(handoff.get("goal", "") or "").strip() or run_outcome.user_input
+        constraints_raw = handoff.get("constraints", [])
+        constraints_list = (
+            [str(x).strip() for x in constraints_raw if str(x).strip()]
+            if isinstance(constraints_raw, list)
+            else []
+        )
+        constraints = "\n".join([f"- {x}" for x in constraints_list]) or "- (none)"
+        rubric = str(handoff.get("rubric", "") or "").strip() or "评估任务完成度、约束满足度、证据充分性。"
+        claimed_raw = handoff.get("claimed_done_items", [])
+        claimed_items = (
+            [str(x).strip() for x in claimed_raw if str(x).strip()]
+            if isinstance(claimed_raw, list)
+            else []
+        )
+        claimed_text = "\n".join([f"- {x}" for x in claimed_items]) or "- (none)"
+        known_gaps_raw = handoff.get("known_gaps", [])
+        known_gaps = (
+            [str(x).strip() for x in known_gaps_raw if str(x).strip()]
+            if isinstance(known_gaps_raw, list)
+            else []
+        )
+        gaps_text = "\n".join([f"- {x}" for x in known_gaps]) or "- (none)"
+        tool_results = handoff.get("key_tool_results", [])
+        if not isinstance(tool_results, list):
+            tool_results = []
         roots_text = (
             "\n".join([f"- {os.path.relpath(x, self.project_root)}" for x in evidence_roots])
             if evidence_roots
             else "- (none)"
         )
         return (
-            f"[任务目标]\n{task_spec.goal or '(empty)'}\n\n"
-            f"[任务类型]\n{task_spec.task_type}\n\n"
+            f"[任务目标]\n{goal or '(empty)'}\n\n"
             f"[约束]\n{constraints}\n\n"
             f"[评分标准]\n{rubric}\n\n"
+            f"[主链路交接-完成项]\n{claimed_text}\n\n"
+            f"[主链路交接-工具结果]\n{json.dumps(tool_results[:10], ensure_ascii=False)}\n\n"
+            f"[主链路交接-已知缺口]\n{gaps_text}\n\n"
             f"[证据根目录（由先前任务输出推断）]\n{roots_text}\n\n"
             f"[用户输入]\n{run_outcome.user_input}\n\n"
             f"[最终回答]\n{run_outcome.final_answer}\n\n"
@@ -255,12 +287,12 @@ class VerifierAgent:
                 return {"passed": True, "score": 0.7, "reason": "fallback_positive_parse", "checks": []}
             return {"passed": False, "score": 0.3, "reason": "fallback_negative_parse", "checks": []}
 
-    def evaluate(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> Dict[str, Any]:
-        evidence_roots = self._infer_evidence_roots(task_spec=task_spec, run_outcome=run_outcome)
+    def evaluate(self, run_outcome: RunOutcome) -> Dict[str, Any]:
+        evidence_roots = self._infer_evidence_roots(run_outcome=run_outcome)
         self._active_evidence_roots = evidence_roots
         messages = [
             {"role": "system", "content": VERIFIER_AGENT_SYSTEM_PROMPT},
-            {"role": "user", "content": self._build_user_prompt(task_spec, run_outcome, evidence_roots)},
+            {"role": "user", "content": self._build_user_prompt(run_outcome, evidence_roots)},
         ]
         tools = self._tool_schemas()
 

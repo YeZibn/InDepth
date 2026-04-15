@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
 
-from app.eval.schema import RunOutcome, TaskSpec, VerifierResult
+from app.eval.schema import RunOutcome, VerifierResult
 
 
 class Verifier(ABC):
     name = "base_verifier"
 
     @abstractmethod
-    def verify(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> VerifierResult:
+    def verify(self, run_outcome: RunOutcome) -> VerifierResult:
         raise NotImplementedError

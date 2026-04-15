@@ -1,14 +1,14 @@
 import os
 from typing import Dict
 
-from app.eval.schema import RunOutcome, TaskSpec, VerifierResult
+from app.eval.schema import RunOutcome, VerifierResult
 from app.eval.verifiers.base import Verifier
 
 
 class StopReasonVerifier(Verifier):
     name = "stop_reason_verifier"
 
-    def verify(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> VerifierResult:
+    def verify(self, run_outcome: RunOutcome) -> VerifierResult:
         allowed_stop_reasons = {"stop", "fallback_content", "completed"}
         passed = run_outcome.stop_reason in allowed_stop_reasons and run_outcome.runtime_status == "ok"
         reason = (
@@ -29,7 +29,7 @@ class StopReasonVerifier(Verifier):
 class ToolFailureVerifier(Verifier):
     name = "tool_failure_verifier"
 
-    def verify(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> VerifierResult:
+    def verify(self, run_outcome: RunOutcome) -> VerifierResult:
         passed = len(run_outcome.tool_failures) == 0
         return VerifierResult(
             verifier_name=self.name,
@@ -56,8 +56,12 @@ class ArtifactVerifier(Verifier):
                 return {"passed": "false", "reason": "content_missing"}
         return {"passed": "true", "reason": "ok"}
 
-    def verify(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> VerifierResult:
-        if not task_spec.expected_artifacts:
+    def verify(self, run_outcome: RunOutcome) -> VerifierResult:
+        handoff = run_outcome.verification_handoff if isinstance(run_outcome.verification_handoff, dict) else {}
+        expected_artifacts = handoff.get("expected_artifacts", [])
+        if not isinstance(expected_artifacts, list):
+            expected_artifacts = []
+        if not expected_artifacts:
             return VerifierResult(
                 verifier_name=self.name,
                 passed=True,
@@ -69,18 +73,28 @@ class ArtifactVerifier(Verifier):
 
         checks = []
         all_passed = True
-        for expected in task_spec.expected_artifacts:
-            if not expected.path:
+        for expected in expected_artifacts:
+            if not isinstance(expected, dict):
+                all_passed = False
+                checks.append({"path": "", "passed": False, "reason": "invalid_artifact_schema"})
+                continue
+            path = str(expected.get("path", "") or "").strip()
+            must_exist = bool(expected.get("must_exist", True))
+            non_empty = bool(expected.get("non_empty", False))
+            contains = expected.get("contains")
+            contains_text = str(contains).strip() if contains is not None else None
+
+            if not path:
                 all_passed = False
                 checks.append({"path": "", "passed": False, "reason": "empty_path"})
                 continue
-            if not expected.must_exist:
-                checks.append({"path": expected.path, "passed": True, "reason": "must_exist=false"})
+            if not must_exist:
+                checks.append({"path": path, "passed": True, "reason": "must_exist=false"})
                 continue
-            result = self._check_one(expected.path, expected.non_empty, expected.contains)
+            result = self._check_one(path, non_empty, contains_text)
             passed = result["passed"] == "true"
             all_passed = all_passed and passed
-            checks.append({"path": expected.path, "passed": passed, "reason": result["reason"]})
+            checks.append({"path": path, "passed": passed, "reason": result["reason"]})
 
         return VerifierResult(
             verifier_name=self.name,

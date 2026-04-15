@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from app.core.model.base import GenerationConfig, ModelProvider
-from app.eval.schema import RunJudgement, RunOutcome, TaskSpec, VerifierResult
+from app.eval.schema import RunJudgement, RunOutcome, VerifierResult
 from app.eval.verifiers.base import Verifier
 from app.eval.verifiers.deterministic import build_default_deterministic_verifiers
 from app.eval.verifiers.llm_judge import LLMJudgeVerifier
@@ -49,10 +49,9 @@ class EvalOrchestrator:
         self.llm_judge_provider = llm_judge_provider
         self.llm_judge_config = llm_judge_config
 
-    def _build_verifier_chain(self, task_spec: TaskSpec) -> List[Verifier]:
+    def _build_verifier_chain(self) -> List[Verifier]:
         chain: List[Verifier] = list(self.verifiers)
-        should_enable_llm_judge = self.enable_llm_judge or task_spec.llm_judge_enabled
-        if should_enable_llm_judge and self.llm_judge_provider is not None:
+        if self.enable_llm_judge and self.llm_judge_provider is not None:
             chain.append(
                 LLMJudgeVerifier(
                     model_provider=self.llm_judge_provider,
@@ -61,20 +60,25 @@ class EvalOrchestrator:
             )
         return chain
 
-    def evaluate(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> RunJudgement:
+    def evaluate(self, run_outcome: RunOutcome) -> RunJudgement:
         verifier_results: List[VerifierResult] = []
-        for verifier in self._build_verifier_chain(task_spec):
-            verifier_results.append(verifier.verify(task_spec=task_spec, run_outcome=run_outcome))
+        for verifier in self._build_verifier_chain():
+            verifier_results.append(verifier.verify(run_outcome=run_outcome))
 
         hard_failures = [r for r in verifier_results if r.hard and not r.passed]
         soft_scores = [r.score for r in verifier_results if not r.hard and r.score is not None]
         avg_soft_score = sum(soft_scores) / len(soft_scores) if soft_scores else 1.0
+        handoff = run_outcome.verification_handoff if isinstance(run_outcome.verification_handoff, dict) else {}
+        try:
+            soft_threshold = float(handoff.get("soft_score_threshold", 0.7) or 0.7)
+        except Exception:
+            soft_threshold = 0.7
 
         if hard_failures:
             verified_success = False
             final_status = "fail"
             failure_type = hard_failures[0].verifier_name
-        elif avg_soft_score < task_spec.soft_score_threshold:
+        elif avg_soft_score < soft_threshold:
             verified_success = False
             final_status = "partial"
             failure_type = "soft_score_below_threshold"

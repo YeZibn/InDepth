@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.config import RuntimeCompressionConfig, load_runtime_compression_config, load_runtime_model_config
 from app.eval.orchestrator import EvalOrchestrator
-from app.eval.schema import RunOutcome, TaskSpec
+from app.eval.schema import RunOutcome
 from app.core.model.base import GenerationConfig, ModelProvider
 from app.core.memory.base import MemoryStore
 from app.core.memory.system_memory_store import SystemMemoryStore
@@ -44,6 +44,7 @@ class AgentRuntime:
         enable_llm_judge: bool = False,
         enable_memory_recall_reranker: Optional[bool] = None,
         enable_memory_card_metadata_llm: Optional[bool] = None,
+        enable_verification_handoff_llm: Optional[bool] = None,
         system_memory_store: Optional[SystemMemoryStore] = None,
         compression_config: Optional[RuntimeCompressionConfig] = None,
     ):
@@ -73,6 +74,11 @@ class AgentRuntime:
             self.enable_memory_card_metadata_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
         else:
             self.enable_memory_card_metadata_llm = bool(enable_memory_card_metadata_llm)
+        if enable_verification_handoff_llm is None:
+            # Default on for real providers, off for deterministic test mock provider.
+            self.enable_verification_handoff_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
+        else:
+            self.enable_verification_handoff_llm = bool(enable_verification_handoff_llm)
         self.last_runtime_state = "idle"
         self.last_stop_reason = ""
         self.last_run_id = ""
@@ -83,7 +89,6 @@ class AgentRuntime:
         user_input: str,
         task_id: str = "runtime_task",
         run_id: str = "runtime_run",
-        task_spec: Optional[Dict[str, Any]] = None,
         resume_from_waiting: bool = False,
     ) -> str:
         self.last_run_id = run_id
@@ -135,6 +140,21 @@ class AgentRuntime:
         task_status = "ok"
         stop_reason = "completed"
         runtime_state = "running"
+        verification_handoff: Optional[Dict[str, Any]] = None
+        handoff_source = "fallback_rule"
+
+        def _build_handoff_if_needed() -> None:
+            nonlocal verification_handoff, handoff_source
+            if verification_handoff is not None:
+                return
+            verification_handoff, handoff_source = self._build_verification_handoff(
+                user_input=user_input,
+                final_answer=final_answer or "",
+                stop_reason=stop_reason,
+                runtime_status=task_status,
+                tool_failures=last_tool_failures,
+            )
+
         for step in range(1, self.max_steps + 1):
             messages = self._maybe_compact_mid_run(
                 step=step,
@@ -165,6 +185,7 @@ class AgentRuntime:
                     status="error",
                     payload={"error": str(e)},
                 )
+                _build_handoff_if_needed()
                 break
             content = model_output.content.strip()
             finish_reason, raw_message = self._extract_finish_reason_and_message(model_output.raw)
@@ -248,6 +269,8 @@ class AgentRuntime:
                     task_status = "error"
                     stop_reason = "empty_stop_content"
                     runtime_state = "failed"
+                if runtime_state != "awaiting_user_input":
+                    _build_handoff_if_needed()
                 self._trace(f"[step {step}] completed finish_reason=stop final={self._preview(final_answer)}")
                 break
 
@@ -265,6 +288,7 @@ class AgentRuntime:
                     event_type="model_stopped_length",
                     status="error",
                 )
+                _build_handoff_if_needed()
                 break
 
             if finish_reason == "content_filter":
@@ -281,6 +305,7 @@ class AgentRuntime:
                     event_type="model_stopped_content_filter",
                     status="error",
                 )
+                _build_handoff_if_needed()
                 break
 
             messages.append({"role": "assistant", "content": content})
@@ -292,6 +317,7 @@ class AgentRuntime:
                 final_answer = content
                 stop_reason = "fallback_content"
                 runtime_state = "completed"
+                _build_handoff_if_needed()
                 self._trace(f"[step {step}] completed finish_reason=fallback final={self._preview(final_answer)}")
                 break
 
@@ -301,6 +327,7 @@ class AgentRuntime:
             stop_reason = "max_steps_reached"
             runtime_state = "failed"
             self._trace("[runtime] max_steps_reached")
+            _build_handoff_if_needed()
 
         if runtime_state == "awaiting_user_input":
             self.last_runtime_state = runtime_state
@@ -340,7 +367,14 @@ class AgentRuntime:
         judgement_payload: Dict[str, Any] = {}
         task_finished_status = task_status
         try:
-            spec = TaskSpec.from_dict(task_spec)
+            if verification_handoff is None:
+                verification_handoff, handoff_source = self._build_verification_handoff(
+                    user_input=user_input,
+                    final_answer=final_answer,
+                    stop_reason=stop_reason,
+                    runtime_status=task_status,
+                    tool_failures=last_tool_failures,
+                )
             run_outcome = RunOutcome(
                 task_id=task_id,
                 run_id=run_id,
@@ -349,6 +383,7 @@ class AgentRuntime:
                 stop_reason=stop_reason,
                 tool_failures=last_tool_failures[:],
                 runtime_status=task_status,
+                verification_handoff=verification_handoff,
             )
             emit_event(
                 task_id=task_id,
@@ -356,9 +391,9 @@ class AgentRuntime:
                 actor="main",
                 role="general",
                 event_type="verification_started",
-                payload={"stop_reason": stop_reason},
+                payload={"stop_reason": stop_reason, "handoff_source": handoff_source},
             )
-            judgement = self.eval_orchestrator.evaluate(task_spec=spec, run_outcome=run_outcome)
+            judgement = self.eval_orchestrator.evaluate(run_outcome=run_outcome)
             judgement_payload = judgement.to_dict()
             emit_event(
                 task_id=task_id,
@@ -380,7 +415,11 @@ class AgentRuntime:
                 role="general",
                 event_type="task_judged",
                 status="ok" if judgement.verified_success else "error",
-                payload=judgement_payload,
+                payload={
+                    **judgement_payload,
+                    "verification_handoff_source": handoff_source,
+                    "verification_handoff": verification_handoff,
+                },
             )
             task_finished_status = "ok" if judgement.verified_success else "error"
         except Exception as e:
@@ -506,6 +545,234 @@ class AgentRuntime:
             return messages
         history = self.memory_store.get_recent_messages(task_id, limit=20)
         return [{"role": "system", "content": self._build_system_prompt()}] + history
+
+    def _build_verification_handoff(
+        self,
+        user_input: str,
+        final_answer: str,
+        stop_reason: str,
+        runtime_status: str,
+        tool_failures: List[Dict[str, str]],
+    ) -> tuple[Dict[str, Any], str]:
+        fallback = self._build_rule_verification_handoff(
+            user_input=user_input,
+            final_answer=final_answer,
+            stop_reason=stop_reason,
+            runtime_status=runtime_status,
+            tool_failures=tool_failures,
+        )
+        llm_generated = self._generate_verification_handoff_llm(
+            user_input=user_input,
+            final_answer=final_answer,
+            stop_reason=stop_reason,
+            runtime_status=runtime_status,
+            tool_failures=tool_failures,
+            fallback_handoff=fallback,
+        )
+        if not llm_generated:
+            return fallback, "fallback_rule"
+        return self._normalize_verification_handoff(candidate=llm_generated, fallback=fallback), "llm"
+
+    def _build_rule_verification_handoff(
+        self,
+        user_input: str,
+        final_answer: str,
+        stop_reason: str,
+        runtime_status: str,
+        tool_failures: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        failures = tool_failures[:5] if isinstance(tool_failures, list) else []
+        key_tool_results: List[Dict[str, Any]] = []
+        for item in failures:
+            if not isinstance(item, dict):
+                continue
+            key_tool_results.append(
+                {
+                    "tool": str(item.get("tool", "unknown") or "unknown"),
+                    "status": "error",
+                    "summary": str(item.get("error", "") or "unknown error"),
+                }
+            )
+        known_gaps: List[str] = []
+        if runtime_status != "ok":
+            known_gaps.append(f"runtime_status={runtime_status}")
+        if stop_reason not in {"stop", "fallback_content", "completed"}:
+            known_gaps.append(f"stop_reason={stop_reason}")
+        if failures:
+            known_gaps.append(f"tool_failures={len(failures)}")
+        return {
+            "goal": self._preview(user_input, max_len=280),
+            "constraints": [],
+            "expected_artifacts": [],
+            "claimed_done_items": [self._preview(final_answer, max_len=280)] if (final_answer or "").strip() else [],
+            "key_tool_results": key_tool_results,
+            "known_gaps": known_gaps,
+            "self_confidence": 0.8 if runtime_status == "ok" else 0.3,
+            "soft_score_threshold": 0.7,
+            "rubric": "评估任务完成度、约束满足度、证据充分性。",
+        }
+
+    def _generate_verification_handoff_llm(
+        self,
+        user_input: str,
+        final_answer: str,
+        stop_reason: str,
+        runtime_status: str,
+        tool_failures: List[Dict[str, str]],
+        fallback_handoff: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not self.enable_verification_handoff_llm:
+            return {}
+        payload = {
+            "task": "verification_handoff_generation",
+            "instruction": (
+                "Generate a concise and faithful verification_handoff from runtime facts. "
+                "Return strict JSON only. Do not invent files or success claims."
+            ),
+            "runtime_input": {
+                "user_input": user_input,
+                "final_answer": final_answer,
+                "stop_reason": stop_reason,
+                "runtime_status": runtime_status,
+                "tool_failures": tool_failures[:10] if isinstance(tool_failures, list) else [],
+            },
+            "fallback_handoff": fallback_handoff,
+            "output_schema": {
+                "goal": "string",
+                "constraints": ["string"],
+                "expected_artifacts": [
+                    {
+                        "path": "string",
+                        "must_exist": "boolean",
+                        "non_empty": "boolean",
+                        "contains": "string(optional)",
+                    }
+                ],
+                "claimed_done_items": ["string"],
+                "key_tool_results": [
+                    {
+                        "tool": "string",
+                        "status": "ok|error",
+                        "summary": "string",
+                    }
+                ],
+                "known_gaps": ["string"],
+                "self_confidence": "0~1 float",
+                "soft_score_threshold": "0~1 float",
+                "rubric": "string",
+            },
+        }
+        try:
+            output = self.model_provider.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You generate verification handoff JSON. Output JSON only.",
+                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                tools=[],
+                config=self._build_verification_handoff_config(),
+            )
+        except Exception:
+            return {}
+        return self._parse_json_dict(str(getattr(output, "content", "") or ""))
+
+    def _normalize_verification_handoff(self, candidate: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(candidate, dict):
+            return dict(fallback)
+        out: Dict[str, Any] = dict(fallback)
+        goal = self._preview(str(candidate.get("goal", "") or "").strip(), max_len=280)
+        if goal:
+            out["goal"] = goal
+        constraints = self._normalize_handoff_str_list(candidate.get("constraints", []), max_items=12, max_len=120)
+        if constraints:
+            out["constraints"] = constraints
+        expected_artifacts = self._normalize_expected_artifacts(candidate.get("expected_artifacts", []))
+        if expected_artifacts:
+            out["expected_artifacts"] = expected_artifacts
+        claimed_done = self._normalize_handoff_str_list(candidate.get("claimed_done_items", []), max_items=12, max_len=280)
+        if claimed_done:
+            out["claimed_done_items"] = claimed_done
+        key_tool_results = self._normalize_key_tool_results(candidate.get("key_tool_results", []))
+        if key_tool_results:
+            out["key_tool_results"] = key_tool_results
+        known_gaps = self._normalize_handoff_str_list(candidate.get("known_gaps", []), max_items=12, max_len=120)
+        if known_gaps:
+            out["known_gaps"] = known_gaps
+        out["self_confidence"] = self._clamp_float(
+            candidate.get("self_confidence", fallback.get("self_confidence", 0.8)),
+            default=float(fallback.get("self_confidence", 0.8) or 0.8),
+        )
+        out["soft_score_threshold"] = self._clamp_float(
+            candidate.get("soft_score_threshold", fallback.get("soft_score_threshold", 0.7)),
+            default=float(fallback.get("soft_score_threshold", 0.7) or 0.7),
+        )
+        rubric = self._preview(str(candidate.get("rubric", "") or "").strip(), max_len=120)
+        if rubric:
+            out["rubric"] = rubric
+        return out
+
+    def _normalize_handoff_str_list(self, value: Any, max_items: int, max_len: int) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        out: List[str] = []
+        for item in value:
+            text = self._preview(str(item or "").strip(), max_len=max_len)
+            if not text:
+                continue
+            out.append(text)
+            if len(out) >= max_items:
+                break
+        return out
+
+    def _normalize_expected_artifacts(self, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            path = self._preview(str(item.get("path", "") or "").strip(), max_len=240)
+            if not path:
+                continue
+            artifact: Dict[str, Any] = {
+                "path": path,
+                "must_exist": bool(item.get("must_exist", True)),
+                "non_empty": bool(item.get("non_empty", False)),
+            }
+            contains = self._preview(str(item.get("contains", "") or "").strip(), max_len=120)
+            if contains:
+                artifact["contains"] = contains
+            out.append(artifact)
+            if len(out) >= 20:
+                break
+        return out
+
+    def _normalize_key_tool_results(self, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            tool = self._preview(str(item.get("tool", "") or "").strip(), max_len=80) or "unknown"
+            status_raw = str(item.get("status", "") or "").strip().lower()
+            status = "ok" if status_raw == "ok" else "error"
+            summary = self._preview(str(item.get("summary", "") or "").strip(), max_len=160)
+            if not summary:
+                continue
+            out.append({"tool": tool, "status": status, "summary": summary})
+            if len(out) >= 20:
+                break
+        return out
+
+    def _clamp_float(self, value: Any, default: float) -> float:
+        try:
+            num = float(value)
+        except Exception:
+            return max(0.0, min(default, 1.0))
+        return max(0.0, min(num, 1.0))
 
     def _finalize_task_memory(
         self,
@@ -1182,6 +1449,21 @@ class AgentRuntime:
         return GenerationConfig(
             temperature=0.1,
             max_tokens=400,
+            provider_options=options,
+        )
+
+    def _build_verification_handoff_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        try:
+            model_cfg = load_runtime_model_config()
+            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
+            if mini_id:
+                options["model"] = mini_id
+        except Exception:
+            pass
+        return GenerationConfig(
+            temperature=0.1,
+            max_tokens=900,
             provider_options=options,
         )
 

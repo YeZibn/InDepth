@@ -2,7 +2,7 @@ from typing import Optional
 
 from app.core.model.base import GenerationConfig, ModelProvider
 from app.eval.agent import VerifierAgent
-from app.eval.schema import RunOutcome, TaskSpec, VerifierResult
+from app.eval.schema import RunOutcome, VerifierResult
 from app.eval.verifiers.base import Verifier
 
 
@@ -19,9 +19,9 @@ class LLMJudgeVerifier(Verifier):
             generation_config=generation_config,
         )
 
-    def verify(self, task_spec: TaskSpec, run_outcome: RunOutcome) -> VerifierResult:
+    def verify(self, run_outcome: RunOutcome) -> VerifierResult:
         try:
-            parsed = self.agent.evaluate(task_spec=task_spec, run_outcome=run_outcome)
+            parsed = self.agent.evaluate(run_outcome=run_outcome)
             return VerifierResult(
                 verifier_name=self.name,
                 passed=bool(parsed["passed"]),
