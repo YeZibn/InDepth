@@ -1,9 +1,42 @@
-import json
-import re
-from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import RuntimeCompressionConfig, load_runtime_compression_config, load_runtime_model_config
+from app.core.runtime.runtime_utils import (
+    estimate_context_tokens,
+    estimate_context_usage,
+    extract_finish_reason_and_message,
+    extract_missing_info_hints,
+    is_clarification_request,
+    parse_json_dict,
+    preview,
+    preview_json,
+    slug,
+)
+from app.core.runtime.system_memory_lifecycle import (
+    build_memory_metadata_config,
+    build_memory_reranker_config,
+    build_recall_query,
+    build_semantic_memory_title,
+    extract_title_topic,
+    finalize_task_memory,
+    generate_memory_card_metadata_llm,
+    inject_system_memory_recall,
+    render_memory_recall_block,
+    rerank_memory_candidates_llm,
+)
+from app.core.runtime.tool_execution import (
+    enrich_capture_memory_tool_args,
+    handle_native_tool_calls,
+)
+from app.core.runtime.verification_handoff import (
+    build_rule_verification_handoff,
+    clamp_float,
+    generate_verification_handoff_llm,
+    normalize_expected_artifacts,
+    normalize_handoff_str_list,
+    normalize_key_tool_results,
+    normalize_verification_handoff,
+)
 from app.eval.orchestrator import EvalOrchestrator
 from app.eval.schema import RunOutcome
 from app.core.model.base import GenerationConfig, ModelProvider
@@ -581,36 +614,14 @@ class AgentRuntime:
         runtime_status: str,
         tool_failures: List[Dict[str, str]],
     ) -> Dict[str, Any]:
-        failures = tool_failures[:5] if isinstance(tool_failures, list) else []
-        key_tool_results: List[Dict[str, Any]] = []
-        for item in failures:
-            if not isinstance(item, dict):
-                continue
-            key_tool_results.append(
-                {
-                    "tool": str(item.get("tool", "unknown") or "unknown"),
-                    "status": "error",
-                    "summary": str(item.get("error", "") or "unknown error"),
-                }
-            )
-        known_gaps: List[str] = []
-        if runtime_status != "ok":
-            known_gaps.append(f"runtime_status={runtime_status}")
-        if stop_reason not in {"stop", "fallback_content", "completed"}:
-            known_gaps.append(f"stop_reason={stop_reason}")
-        if failures:
-            known_gaps.append(f"tool_failures={len(failures)}")
-        return {
-            "goal": self._preview(user_input, max_len=280),
-            "constraints": [],
-            "expected_artifacts": [],
-            "claimed_done_items": [self._preview(final_answer, max_len=280)] if (final_answer or "").strip() else [],
-            "key_tool_results": key_tool_results,
-            "known_gaps": known_gaps,
-            "self_confidence": 0.8 if runtime_status == "ok" else 0.3,
-            "soft_score_threshold": 0.7,
-            "rubric": "评估任务完成度、约束满足度、证据充分性。",
-        }
+        return build_rule_verification_handoff(
+            user_input=user_input,
+            final_answer=final_answer,
+            stop_reason=stop_reason,
+            runtime_status=runtime_status,
+            tool_failures=tool_failures,
+            preview=self._preview,
+        )
 
     def _generate_verification_handoff_llm(
         self,
@@ -621,158 +632,48 @@ class AgentRuntime:
         tool_failures: List[Dict[str, str]],
         fallback_handoff: Dict[str, Any],
     ) -> Dict[str, Any]:
-        if not self.enable_verification_handoff_llm:
-            return {}
-        payload = {
-            "task": "verification_handoff_generation",
-            "instruction": (
-                "Generate a concise and faithful verification_handoff from runtime facts. "
-                "Return strict JSON only. Do not invent files or success claims."
-            ),
-            "runtime_input": {
-                "user_input": user_input,
-                "final_answer": final_answer,
-                "stop_reason": stop_reason,
-                "runtime_status": runtime_status,
-                "tool_failures": tool_failures[:10] if isinstance(tool_failures, list) else [],
-            },
-            "fallback_handoff": fallback_handoff,
-            "output_schema": {
-                "goal": "string",
-                "constraints": ["string"],
-                "expected_artifacts": [
-                    {
-                        "path": "string",
-                        "must_exist": "boolean",
-                        "non_empty": "boolean",
-                        "contains": "string(optional)",
-                    }
-                ],
-                "claimed_done_items": ["string"],
-                "key_tool_results": [
-                    {
-                        "tool": "string",
-                        "status": "ok|error",
-                        "summary": "string",
-                    }
-                ],
-                "known_gaps": ["string"],
-                "self_confidence": "0~1 float",
-                "soft_score_threshold": "0~1 float",
-                "rubric": "string",
-            },
-        }
-        try:
-            output = self.model_provider.generate(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You generate verification handoff JSON. Output JSON only.",
-                    },
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                tools=[],
-                config=self._build_verification_handoff_config(),
-            )
-        except Exception:
-            return {}
-        return self._parse_json_dict(str(getattr(output, "content", "") or ""))
+        return generate_verification_handoff_llm(
+            model_provider=self.model_provider,
+            enabled=self.enable_verification_handoff_llm,
+            build_config=self._build_verification_handoff_config,
+            parse_json_dict=self._parse_json_dict,
+            user_input=user_input,
+            final_answer=final_answer,
+            stop_reason=stop_reason,
+            runtime_status=runtime_status,
+            tool_failures=tool_failures,
+            fallback_handoff=fallback_handoff,
+        )
 
     def _normalize_verification_handoff(self, candidate: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(candidate, dict):
-            return dict(fallback)
-        out: Dict[str, Any] = dict(fallback)
-        goal = self._preview(str(candidate.get("goal", "") or "").strip(), max_len=280)
-        if goal:
-            out["goal"] = goal
-        constraints = self._normalize_handoff_str_list(candidate.get("constraints", []), max_items=12, max_len=120)
-        if constraints:
-            out["constraints"] = constraints
-        expected_artifacts = self._normalize_expected_artifacts(candidate.get("expected_artifacts", []))
-        if expected_artifacts:
-            out["expected_artifacts"] = expected_artifacts
-        claimed_done = self._normalize_handoff_str_list(candidate.get("claimed_done_items", []), max_items=12, max_len=280)
-        if claimed_done:
-            out["claimed_done_items"] = claimed_done
-        key_tool_results = self._normalize_key_tool_results(candidate.get("key_tool_results", []))
-        if key_tool_results:
-            out["key_tool_results"] = key_tool_results
-        known_gaps = self._normalize_handoff_str_list(candidate.get("known_gaps", []), max_items=12, max_len=120)
-        if known_gaps:
-            out["known_gaps"] = known_gaps
-        out["self_confidence"] = self._clamp_float(
-            candidate.get("self_confidence", fallback.get("self_confidence", 0.8)),
-            default=float(fallback.get("self_confidence", 0.8) or 0.8),
+        return normalize_verification_handoff(
+            candidate=candidate,
+            fallback=fallback,
+            preview=self._preview,
         )
-        out["soft_score_threshold"] = self._clamp_float(
-            candidate.get("soft_score_threshold", fallback.get("soft_score_threshold", 0.7)),
-            default=float(fallback.get("soft_score_threshold", 0.7) or 0.7),
-        )
-        rubric = self._preview(str(candidate.get("rubric", "") or "").strip(), max_len=120)
-        if rubric:
-            out["rubric"] = rubric
-        return out
 
     def _normalize_handoff_str_list(self, value: Any, max_items: int, max_len: int) -> List[str]:
-        if not isinstance(value, list):
-            return []
-        out: List[str] = []
-        for item in value:
-            text = self._preview(str(item or "").strip(), max_len=max_len)
-            if not text:
-                continue
-            out.append(text)
-            if len(out) >= max_items:
-                break
-        return out
+        return normalize_handoff_str_list(
+            value=value,
+            max_items=max_items,
+            max_len=max_len,
+            preview=self._preview,
+        )
 
     def _normalize_expected_artifacts(self, value: Any) -> List[Dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        out: List[Dict[str, Any]] = []
-        for item in value:
-            if not isinstance(item, dict):
-                continue
-            path = self._preview(str(item.get("path", "") or "").strip(), max_len=240)
-            if not path:
-                continue
-            artifact: Dict[str, Any] = {
-                "path": path,
-                "must_exist": bool(item.get("must_exist", True)),
-                "non_empty": bool(item.get("non_empty", False)),
-            }
-            contains = self._preview(str(item.get("contains", "") or "").strip(), max_len=120)
-            if contains:
-                artifact["contains"] = contains
-            out.append(artifact)
-            if len(out) >= 20:
-                break
-        return out
+        return normalize_expected_artifacts(
+            value=value,
+            preview=self._preview,
+        )
 
     def _normalize_key_tool_results(self, value: Any) -> List[Dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        out: List[Dict[str, Any]] = []
-        for item in value:
-            if not isinstance(item, dict):
-                continue
-            tool = self._preview(str(item.get("tool", "") or "").strip(), max_len=80) or "unknown"
-            status_raw = str(item.get("status", "") or "").strip().lower()
-            status = "ok" if status_raw == "ok" else "error"
-            summary = self._preview(str(item.get("summary", "") or "").strip(), max_len=160)
-            if not summary:
-                continue
-            out.append({"tool": tool, "status": status, "summary": summary})
-            if len(out) >= 20:
-                break
-        return out
+        return normalize_key_tool_results(
+            value=value,
+            preview=self._preview,
+        )
 
     def _clamp_float(self, value: Any, default: float) -> float:
-        try:
-            num = float(value)
-        except Exception:
-            return max(0.0, min(default, 1.0))
-        return max(0.0, min(num, 1.0))
+        return clamp_float(value, default)
 
     def _finalize_task_memory(
         self,
@@ -784,152 +685,27 @@ class AgentRuntime:
         runtime_status: str,
         tool_failures: List[Dict[str, str]],
     ) -> None:
-        try:
-            store = self.system_memory_store or SystemMemoryStore()
-        except Exception:
-            return
-
-        now = datetime.now().astimezone()
-        today = now.date().isoformat()
-        expire_at = (now.date() + timedelta(days=180)).isoformat()
-        mem_id = f"mem_task_{self._slug(task_id)}_{self._slug(run_id)}"
-        stage = "postmortem"
-        risk_level = "P1" if runtime_status == "error" else "P3"
-        short_answer = self._preview(final_answer, max_len=500)
-        failure_brief = "; ".join(
-            [f"{x.get('tool', 'unknown')}: {x.get('error', '')}" for x in (tool_failures or [])[:3]]
-        ).strip()
-        fallback_title = self._build_semantic_memory_title(
+        store = self.system_memory_store
+        if store is None:
+            try:
+                store = SystemMemoryStore()
+            except Exception:
+                store = None
+        finalize_task_memory(
+            task_id=task_id,
+            run_id=run_id,
             user_input=user_input,
-            runtime_status=runtime_status,
+            final_answer=final_answer,
             stop_reason=stop_reason,
-        )
-        fallback_recall_hint = self._preview(
-            f"任务结束状态={runtime_status}，优先复用本次成功路径并规避失败工具链：{failure_brief or short_answer}",
-            max_len=200,
-        )
-        generated = self._generate_memory_card_metadata_llm(
-            mode="finalize",
-            user_input=user_input,
             runtime_status=runtime_status,
-            stop_reason=stop_reason,
-            failure_brief=failure_brief,
-            answer_brief=short_answer,
-            fallback_title=fallback_title,
-            fallback_recall_hint=fallback_recall_hint,
+            tool_failures=tool_failures,
+            system_memory_store=store,
+            preview=self._preview,
+            slug=self._slug,
+            build_semantic_memory_title=self._build_semantic_memory_title,
+            generate_memory_card_metadata_llm=self._generate_memory_card_metadata_llm,
+            emit_event=emit_event,
         )
-        generated_title = str(generated.get("title", "") or "").strip()
-        generated_recall_hint = str(generated.get("recall_hint", "") or "").strip()
-
-        card = {
-            "id": mem_id,
-            "title": generated_title or fallback_title,
-            "recall_hint": generated_recall_hint or fallback_recall_hint,
-            "memory_type": "experience",
-            "domain": "runtime",
-            "tags": ["task-finish", runtime_status, stop_reason],
-            "scenario": {
-                "stage": stage,
-                "trigger_hint": f"Task {task_id} finished with status={runtime_status}",
-                "roles": ["dev", "reviewer", "verifier"],
-            },
-            "problem_pattern": {
-                "symptoms": [self._preview(user_input, max_len=200) or "task request"],
-                "root_cause_hypothesis": failure_brief or "See task output summary",
-                "risk_level": risk_level,
-            },
-            "solution": {
-                "steps": [
-                    "Review final answer and runtime stop reason",
-                    "Reuse successful pattern or avoid failed tool path in similar tasks",
-                ],
-                "expected_outcome": short_answer or "Task finished with no explicit answer.",
-                "rollback": "Fallback to manual troubleshooting when similar failures repeat",
-            },
-            "constraints": {
-                "applicable_if": ["Same or similar runtime task context appears"],
-                "dependencies": [],
-            },
-            "anti_pattern": {
-                "not_applicable_if": ["Task scope differs significantly from this run context"],
-                "danger_signals": [failure_brief] if failure_brief else [],
-            },
-            "evidence": {
-                "source_links": [f"urn:runtime:{task_id}:{run_id}"],
-                "verified_at": now.isoformat(),
-                "verifier": "runtime-framework",
-            },
-            "impact": {},
-            "owner": {"team": "runtime", "primary": "main-agent", "reviewers": []},
-            "lifecycle": {
-                "status": "active",
-                "version": "v1.0",
-                "effective_from": today,
-                "expire_at": expire_at,
-                "last_reviewed_at": today,
-                "change_log": [
-                    {
-                        "version": "v1.0",
-                        "changed_at": now.isoformat(),
-                        "summary": "Auto-finalized by runtime framework at task completion",
-                    }
-                ],
-            },
-            "confidence": "B" if runtime_status == "ok" else "C",
-        }
-        try:
-            store.upsert_card(card)
-        except Exception:
-            return
-
-        try:
-            triggered = emit_event(
-                task_id=task_id,
-                run_id=run_id,
-                actor="main",
-                role="general",
-                event_type="memory_triggered",
-                payload={
-                    "stage": stage,
-                    "context_id": run_id,
-                    "risk_level": risk_level,
-                    "source": "runtime_forced_finalize",
-                    "source_event": "runtime_forced_finalize",
-                },
-            )
-            trigger_event_id = str(triggered.get("event_id", "")).strip()
-            if trigger_event_id:
-                emit_event(
-                    task_id=task_id,
-                    run_id=run_id,
-                    actor="main",
-                    role="general",
-                    event_type="memory_retrieved",
-                    payload={
-                        "trigger_event_id": trigger_event_id,
-                        "memory_id": mem_id,
-                        "score": 1.0,
-                        "stage": stage,
-                        "reason": "task_end_finalization",
-                        "source": "runtime_finalize_upsert",
-                    },
-                )
-                emit_event(
-                    task_id=task_id,
-                    run_id=run_id,
-                    actor="main",
-                    role="general",
-                    event_type="memory_decision_made",
-                    payload={
-                        "trigger_event_id": trigger_event_id,
-                        "memory_id": mem_id,
-                        "decision": "accepted",
-                        "reason": "framework forced finalization",
-                        "stage": stage,
-                    },
-                )
-        except Exception:
-            pass
 
     def _inject_system_memory_recall(
         self,
@@ -938,312 +714,68 @@ class AgentRuntime:
         user_input: str,
         messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        if not messages:
-            return messages
-        try:
-            store = self.system_memory_store or SystemMemoryStore()
-        except Exception:
-            return messages
-
-        query = self._build_recall_query(user_input=user_input)
-        triggered = emit_event(
+        store = self.system_memory_store
+        if store is None:
+            try:
+                store = SystemMemoryStore()
+            except Exception:
+                store = None
+        return inject_system_memory_recall(
             task_id=task_id,
             run_id=run_id,
-            actor="main",
-            role="general",
-            event_type="memory_triggered",
-            payload={
-                "context_id": run_id,
-                "risk_level": "P3",
-                "source": "runtime_start_recall",
-                "source_event": "runtime_start_recall",
-                "query": query,
-            },
+            user_input=user_input,
+            messages=messages,
+            system_memory_store=store,
+            emit_event=emit_event,
+            enable_memory_recall_reranker=self.enable_memory_recall_reranker,
+            rerank_memory_candidates_llm=self._rerank_memory_candidates_llm,
+            render_memory_recall_block=self._render_memory_recall_block,
+            build_recall_query=self._build_recall_query,
+            start_recall_candidate_pool=self.START_RECALL_CANDIDATE_POOL,
+            start_recall_top_k=self.START_RECALL_TOP_K,
+            start_recall_min_score=self.START_RECALL_MIN_SCORE,
         )
-        trigger_event_id = str(triggered.get("event_id", "")).strip()
-
-        try:
-            # Wide candidate pool: no rule query filter, active cards only.
-            rows = store.search_cards(
-                query="",
-                limit=max(self.START_RECALL_CANDIDATE_POOL, self.START_RECALL_TOP_K),
-                only_active=True,
-            )
-            if not isinstance(rows, list):
-                rows = []
-        except Exception as e:
-            if trigger_event_id:
-                emit_event(
-                    task_id=task_id,
-                    run_id=run_id,
-                    actor="main",
-                    role="general",
-                    event_type="memory_decision_made",
-                    status="error",
-                    payload={
-                        "trigger_event_id": trigger_event_id,
-                        "decision": "skipped",
-                        "reason": f"recall_failed:{str(e)}",
-                    },
-                )
-            return messages
-
-        selected: List[Dict[str, Any]] = []
-        if rows and self.enable_memory_recall_reranker:
-            reranked = self._rerank_memory_candidates_llm(user_input=user_input, candidates=rows)
-            card_map: Dict[str, Dict[str, Any]] = {
-                str(card.get("id", "")).strip(): card
-                for card in rows
-                if str(card.get("id", "")).strip()
-            }
-            for item in reranked:
-                mid = str(item.get("id", "")).strip()
-                score = float(item.get("score", 0.0) or 0.0)
-                if not mid or mid not in card_map:
-                    continue
-                if score < self.START_RECALL_MIN_SCORE:
-                    continue
-                card = dict(card_map[mid])
-                card["retrieval_score"] = score
-                selected.append(card)
-                if len(selected) >= self.START_RECALL_TOP_K:
-                    break
-
-        if trigger_event_id:
-            if not selected:
-                emit_event(
-                    task_id=task_id,
-                    run_id=run_id,
-                    actor="main",
-                    role="general",
-                    event_type="memory_decision_made",
-                    payload={
-                        "trigger_event_id": trigger_event_id,
-                        "decision": "skipped",
-                        "reason": "no_llm_recall_match",
-                    },
-                )
-            else:
-                for card in selected:
-                    emit_event(
-                        task_id=task_id,
-                        run_id=run_id,
-                        actor="main",
-                        role="general",
-                        event_type="memory_retrieved",
-                        payload={
-                            "trigger_event_id": trigger_event_id,
-                            "memory_id": card.get("id", ""),
-                            "score": float(card.get("retrieval_score", 0.0) or 0.0),
-                            "source": "runtime_start_recall",
-                        },
-                    )
-                emit_event(
-                    task_id=task_id,
-                    run_id=run_id,
-                    actor="main",
-                    role="general",
-                    event_type="memory_decision_made",
-                    payload={
-                        "trigger_event_id": trigger_event_id,
-                        "decision": "accepted",
-                        "reason": f"recalled_{len(selected)}_high_precision_cards",
-                    },
-                )
-
-        if not selected:
-            return messages
-        memory_block = self._render_memory_recall_block(selected)
-        if not memory_block:
-            return messages
-        out = list(messages)
-        first = out[0] if out else {}
-        if isinstance(first, dict) and first.get("role") == "system":
-            base = str(first.get("content", "") or "")
-            first = dict(first)
-            first["content"] = f"{base}\n\n{memory_block}".strip()
-            out[0] = first
-            return out
-        return [{"role": "system", "content": memory_block}] + out
 
     def _build_recall_query(self, user_input: str) -> str:
-        base = f"{user_input}".lower()
-        tokens = re.findall(r"[a-z0-9_\-\u4e00-\u9fff]+", base)
-        stop = {
-            "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "with",
-            "请", "帮我", "一下", "麻烦", "需要", "现在", "这个", "那个", "进行", "完成",
-        }
-        out: List[str] = []
-        for token in tokens:
-            val = token.strip()
-            if not val or len(val) <= 1:
-                continue
-            if val in stop:
-                continue
-            if val not in out:
-                out.append(val)
-            if len(out) >= 12:
-                break
-        return " ".join(out)
+        return build_recall_query(user_input)
 
     def _render_memory_recall_block(self, cards: List[Dict[str, Any]]) -> str:
-        if not cards:
-            return ""
-        lines: List[str] = ["系统记忆召回（轻注入：memory_id + recall_hint，最多5条）"]
-        for idx, card in enumerate(cards, 1):
-            memory_id = str(card.get("id", "") or "").strip()
-            recall_hint = str(card.get("recall_hint", "") or "").strip()
-            if not recall_hint:
-                scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
-                recall_hint = str(scenario.get("trigger_hint", "") or "").strip()
-            if not memory_id:
-                continue
-            lines.append(f"{idx}. memory_id={memory_id}")
-            if recall_hint:
-                lines.append(f"   - recall_hint={self._preview(recall_hint, max_len=200)}")
-        return "\n".join(lines).strip()
+        return render_memory_recall_block(cards=cards, preview=self._preview)
 
     def _rerank_memory_candidates_llm(self, user_input: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if not candidates:
-            return []
-        # Title-only recall matching: id/title pairs are passed to LLM.
-        entries = []
-        for card in candidates[: self.START_RECALL_CANDIDATE_POOL]:
-            cid = str(card.get("id", "")).strip()
-            title = str(card.get("title", "")).strip()
-            if not cid or not title:
-                continue
-            entries.append({"id": cid, "title": title})
-        if not entries:
-            return []
-
-        prompt = {
-            "task": "memory_recall_rerank",
-            "instruction": (
-                "Given user_input and memory card titles, return the most relevant cards. "
-                "Match by semantic relevance only. Return strict JSON."
-            ),
-            "user_input": user_input,
-            "top_k": self.START_RECALL_TOP_K,
-            "candidates": entries,
-            "output_schema": {
-                "selected": [
-                    {"id": "memory_id", "score": "0~1 float", "reason": "short reason"}
-                ]
-            },
-        }
-        try:
-            output = self.model_provider.generate(
-                messages=[
-                    {"role": "system", "content": "You are a precise memory recall ranker. Output JSON only."},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                tools=[],
-                config=self._build_memory_reranker_config(),
-            )
-        except Exception:
-            return []
-        text = str(getattr(output, "content", "") or "").strip()
-        parsed = self._parse_json_dict(text)
-        if not isinstance(parsed, dict):
-            return []
-        selected = parsed.get("selected", [])
-        if not isinstance(selected, list):
-            return []
-        out: List[Dict[str, Any]] = []
-        seen: set[str] = set()
-        for item in selected:
-            if not isinstance(item, dict):
-                continue
-            mid = str(item.get("id", "")).strip()
-            if not mid or mid in seen:
-                continue
-            try:
-                score = float(item.get("score", 0.0) or 0.0)
-            except Exception:
-                score = 0.0
-            out.append(
-                {
-                    "id": mid,
-                    "score": max(0.0, min(score, 1.0)),
-                    "reason": str(item.get("reason", "") or "").strip(),
-                }
-            )
-            seen.add(mid)
-            if len(out) >= self.START_RECALL_TOP_K:
-                break
-        out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-        return out
-
-    def _build_memory_reranker_config(self) -> GenerationConfig:
-        options: Dict[str, Any] = {}
-        try:
-            model_cfg = load_runtime_model_config()
-            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
-            if mini_id:
-                options["model"] = mini_id
-        except Exception:
-            pass
-        return GenerationConfig(
-            temperature=0.0,
-            max_tokens=800,
-            provider_options=options,
+        return rerank_memory_candidates_llm(
+            model_provider=self.model_provider,
+            user_input=user_input,
+            candidates=candidates,
+            start_recall_candidate_pool=self.START_RECALL_CANDIDATE_POOL,
+            start_recall_top_k=self.START_RECALL_TOP_K,
+            build_memory_reranker_config=self._build_memory_reranker_config,
+            parse_json_dict=self._parse_json_dict,
         )
 
+    def _build_memory_reranker_config(self) -> GenerationConfig:
+        return build_memory_reranker_config()
+
     def _parse_json_dict(self, text: str) -> Dict[str, Any]:
-        raw = (text or "").strip()
-        if not raw:
-            return {}
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
-            raw = re.sub(r"\s*```$", "", raw)
-        try:
-            data = json.loads(raw)
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            pass
-        match = re.search(r"\{[\s\S]*\}", raw)
-        if not match:
-            return {}
-        try:
-            data = json.loads(match.group(0))
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        return parse_json_dict(text)
 
     def _slug(self, value: str) -> str:
-        text = (value or "").strip().lower()
-        text = re.sub(r"[^a-z0-9]+", "-", text)
-        text = re.sub(r"-+", "-", text).strip("-")
-        return text or "na"
+        return slug(value)
 
     def _build_semantic_memory_title(self, user_input: str, runtime_status: str, stop_reason: str) -> str:
-        topic = self._extract_title_topic(user_input=user_input)
-        _ = stop_reason
-        suffix = "复用策略" if runtime_status == "ok" else "排查与修复策略"
-        raw = f"{topic}{suffix}"
-        return self._preview(raw, max_len=40)
+        return build_semantic_memory_title(
+            user_input=user_input,
+            runtime_status=runtime_status,
+            stop_reason=stop_reason,
+            extract_title_topic=self._extract_title_topic,
+            preview=self._preview,
+        )
 
     def _extract_title_topic(self, user_input: str) -> str:
-        text = (user_input or "").strip()
-        if not text:
-            return "任务执行"
-        compact = re.sub(r"\s+", " ", text)
-        # Keep a short high-level topic phrase for index-style title.
-        return self._preview(compact, max_len=40)
+        return extract_title_topic(user_input=user_input, preview=self._preview)
 
     def _extract_finish_reason_and_message(self, raw: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
-        if not isinstance(raw, dict):
-            return "", {}
-        choices = raw.get("choices", [])
-        if not isinstance(choices, list) or not choices:
-            return "", {}
-        choice0 = choices[0] if isinstance(choices[0], dict) else {}
-        finish_reason = str(choice0.get("finish_reason", "") or "").strip()
-        message = choice0.get("message", {})
-        if not isinstance(message, dict):
-            message = {}
-        return finish_reason, message
+        return extract_finish_reason_and_message(raw)
 
     def _build_system_prompt(self) -> str:
         extra = f"\n\n{self.system_prompt}" if self.system_prompt else ""
@@ -1261,69 +793,18 @@ class AgentRuntime:
         task_id: str,
         run_id: str,
     ) -> List[Dict[str, str]]:
-        failures: List[Dict[str, str]] = []
-        for call in tool_calls:
-            call_id = str(call.get("id", ""))
-            fn = call.get("function", {}) if isinstance(call, dict) else {}
-            tool_name = str(fn.get("name", "")).strip()
-            raw_args = fn.get("arguments", "{}")
-            try:
-                tool_args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
-                if not isinstance(tool_args, dict):
-                    tool_args = {}
-            except Exception:
-                tool_args = {}
-            tool_args = self._enrich_capture_memory_tool_args(
-                tool_name=tool_name,
-                tool_args=tool_args,
-                task_id=task_id,
-                run_id=run_id,
-            )
-            emit_event(
-                task_id=task_id,
-                run_id=run_id,
-                actor="main",
-                role="general",
-                event_type="tool_called",
-                payload={"tool": tool_name, "args": tool_args},
-            )
-            result = self.tool_registry.invoke(tool_name, tool_args)
-            self._trace(
-                f"[tool] name={tool_name} args={self._preview_json(tool_args)} "
-                f"success={result.get('success')} result={self._preview_json(result)}"
-            )
-            event_type = "tool_succeeded" if result.get("success") else "tool_failed"
-            if not result.get("success"):
-                failures.append(
-                    {
-                        "tool": tool_name,
-                        "error": str(result.get("error", "")).strip(),
-                    }
-                )
-            emit_event(
-                task_id=task_id,
-                run_id=run_id,
-                actor="main",
-                role="general",
-                event_type=event_type,
-                status="ok" if result.get("success") else "error",
-                payload={"tool": tool_name},
-            )
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": json.dumps(result, ensure_ascii=False),
-                }
-            )
-            if self.memory_store:
-                self.memory_store.append_message(
-                    task_id,
-                    "tool",
-                    json.dumps(result, ensure_ascii=False),
-                    tool_call_id=call_id,
-                )
-        return failures
+        return handle_native_tool_calls(
+            tool_calls=tool_calls,
+            messages=messages,
+            task_id=task_id,
+            run_id=run_id,
+            tool_registry=self.tool_registry,
+            memory_store=self.memory_store,
+            enrich_capture_memory_tool_args=self._enrich_capture_memory_tool_args,
+            emit_event=emit_event,
+            trace=self._trace,
+            preview_json=self._preview_json,
+        )
 
     def _enrich_capture_memory_tool_args(
         self,
@@ -1332,42 +813,16 @@ class AgentRuntime:
         task_id: str,
         run_id: str,
     ) -> Dict[str, Any]:
-        if tool_name != "capture_runtime_memory_candidate":
-            return tool_args
-        if not self.enable_memory_card_metadata_llm:
-            return tool_args
-        if not isinstance(tool_args, dict):
-            return {}
-        title = str(tool_args.get("title", "") or "").strip()
-        observation = str(tool_args.get("observation", "") or "").strip()
-        proposed_action = str(tool_args.get("proposed_action", "") or "").strip()
-        if not any([title, observation, proposed_action]):
-            return tool_args
-        fallback_title = title or self._extract_title_topic(observation)
-        fallback_recall_hint = self._preview(
-            observation or proposed_action or title,
-            max_len=200,
-        )
-        generated = self._generate_memory_card_metadata_llm(
-            mode="capture",
-            user_input=observation or title,
-            runtime_status="runtime_capture",
-            stop_reason="tool_capture",
-            failure_brief="",
-            answer_brief=proposed_action,
-            fallback_title=fallback_title,
-            fallback_recall_hint=fallback_recall_hint,
+        return enrich_capture_memory_tool_args(
+            tool_name=tool_name,
+            tool_args=tool_args,
             task_id=task_id,
             run_id=run_id,
+            enable_memory_card_metadata_llm=self.enable_memory_card_metadata_llm,
+            extract_title_topic=self._extract_title_topic,
+            preview=self._preview,
+            generate_memory_card_metadata_llm=self._generate_memory_card_metadata_llm,
         )
-        out = dict(tool_args)
-        new_title = str(generated.get("title", "") or "").strip()
-        new_recall_hint = str(generated.get("recall_hint", "") or "").strip()
-        if new_title:
-            out["title"] = new_title
-        if new_recall_hint:
-            out["recall_hint"] = new_recall_hint
-        return out
 
     def _generate_memory_card_metadata_llm(
         self,
@@ -1382,75 +837,26 @@ class AgentRuntime:
         task_id: str = "",
         run_id: str = "",
     ) -> Dict[str, str]:
-        if not self.enable_memory_card_metadata_llm:
-            return {}
-        payload = {
-            "task": "memory_card_metadata_generation",
-            "instruction": (
-                "Generate concise high-signal memory card metadata in Chinese. "
-                "Return strict JSON only with fields: title, recall_hint. "
-                "title should be stable and semantic, follow <问题对象/场景> + <关键动作/原则>, "
-                "and no task_id/run_id/timestamp noise. "
-                "recall_hint should follow: 问题; 适用条件; 建议动作; 风险提示."
-            ),
-            "mode": mode,
-            "task_id": task_id,
-            "run_id": run_id,
-            "user_input": user_input,
-            "runtime_status": runtime_status,
-            "stop_reason": stop_reason,
-            "failure_brief": failure_brief,
-            "answer_brief": answer_brief,
-            "fallback": {
-                "title": fallback_title,
-                "recall_hint": fallback_recall_hint,
-            },
-            "constraints": {
-                "title_max_len": 40,
-                "recall_hint_max_len": 220,
-            },
-            "output_schema": {
-                "title": "string",
-                "recall_hint": "string",
-            },
-        }
-        try:
-            output = self.model_provider.generate(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You generate memory metadata. Output JSON only.",
-                    },
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                tools=[],
-                config=self._build_memory_metadata_config(),
-            )
-        except Exception:
-            return {}
-        parsed = self._parse_json_dict(str(getattr(output, "content", "") or ""))
-        if not isinstance(parsed, dict):
-            return {}
-        title = self._preview(str(parsed.get("title", "") or "").strip(), max_len=40)
-        recall_hint = self._preview(str(parsed.get("recall_hint", "") or "").strip(), max_len=220)
-        if not title and not recall_hint:
-            return {}
-        return {"title": title, "recall_hint": recall_hint}
+        return generate_memory_card_metadata_llm(
+            model_provider=self.model_provider,
+            enabled=self.enable_memory_card_metadata_llm,
+            build_memory_metadata_config=self._build_memory_metadata_config,
+            parse_json_dict=self._parse_json_dict,
+            preview=self._preview,
+            mode=mode,
+            user_input=user_input,
+            runtime_status=runtime_status,
+            stop_reason=stop_reason,
+            failure_brief=failure_brief,
+            answer_brief=answer_brief,
+            fallback_title=fallback_title,
+            fallback_recall_hint=fallback_recall_hint,
+            task_id=task_id,
+            run_id=run_id,
+        )
 
     def _build_memory_metadata_config(self) -> GenerationConfig:
-        options: Dict[str, Any] = {}
-        try:
-            model_cfg = load_runtime_model_config()
-            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
-            if mini_id:
-                options["model"] = mini_id
-        except Exception:
-            pass
-        return GenerationConfig(
-            temperature=0.1,
-            max_tokens=400,
-            provider_options=options,
-        )
+        return build_memory_metadata_config()
 
     def _build_verification_handoff_config(self) -> GenerationConfig:
         options: Dict[str, Any] = {}
@@ -1475,79 +881,22 @@ class AgentRuntime:
                 pass
 
     def _preview(self, text: str, max_len: int = 120) -> str:
-        value = (text or "").replace("\n", " ").strip()
-        if len(value) <= max_len:
-            return value
-        return value[:max_len] + "..."
+        return preview(text, max_len=max_len)
 
     def _preview_json(self, obj: Any, max_len: int = 200) -> str:
-        try:
-            text = json.dumps(obj, ensure_ascii=False)
-        except Exception:
-            text = str(obj)
-        return self._preview(text, max_len=max_len)
+        return preview_json(obj, max_len=max_len)
 
     def _estimate_context_tokens(self, messages: List[Dict[str, Any]]) -> int:
-        # Hybrid estimator: CJK chars ~= 1 token, latin words ~= 1 token, plus JSON overhead.
-        tokens = 0
-        for msg in messages:
-            content = str(msg.get("content", "") or "")
-            cjk_count = len(re.findall(r"[\u4e00-\u9fff]", content))
-            latin_words = len(re.findall(r"[A-Za-z0-9_]+", content))
-            punctuation = len(re.findall(r"[^\w\s]", content))
-            tokens += cjk_count + latin_words + max(punctuation // 2, 0) + 8  # per-message envelope
-            if msg.get("tool_calls"):
-                try:
-                    tokens += len(json.dumps(msg.get("tool_calls"), ensure_ascii=False)) // 4
-                except Exception:
-                    tokens += 20
-        return max(tokens, 1)
+        return estimate_context_tokens(messages)
 
     def _estimate_context_usage(self, estimated_tokens: int) -> float:
-        window = max(int(self.compression_config.context_window_tokens), 1024)
-        return min(estimated_tokens / window, 1.0)
+        return estimate_context_usage(
+            estimated_tokens=estimated_tokens,
+            context_window_tokens=self.compression_config.context_window_tokens,
+        )
 
     def _is_clarification_request(self, content: str) -> bool:
-        text = (content or "").strip()
-        if not text:
-            return False
-        lowered = text.lower()
-        clarification_hints = [
-            "请确认",
-            "请补充",
-            "请提供",
-            "请明确",
-            "你是指",
-            "是否",
-            "能否",
-            "which",
-            "what exactly",
-            "can you clarify",
-            "please clarify",
-            "need more details",
-        ]
-        if any(hint in lowered for hint in clarification_hints):
-            return True
-        if "？" in text or "?" in text:
-            complete_hints = ["已完成", "完成了", "done", "completed", "success", "成功"]
-            if not any(hint in lowered for hint in complete_hints):
-                return True
-        return False
+        return is_clarification_request(content)
 
     def _extract_missing_info_hints(self, content: str) -> List[str]:
-        text = (content or "").strip()
-        if not text:
-            return []
-        fields = [
-            ("时间", ["时间", "日期", "截止", "deadline", "when"]),
-            ("范围", ["范围", "边界", "scope"]),
-            ("目标", ["目标", "预期", "goal", "outcome"]),
-            ("环境", ["环境", "分支", "workspace", "repo"]),
-            ("验收标准", ["验收", "标准", "acceptance", "criteria"]),
-        ]
-        lowered = text.lower()
-        hits: List[str] = []
-        for label, hints in fields:
-            if any(h in lowered for h in hints):
-                hits.append(label)
-        return hits
+        return extract_missing_info_hints(content)
