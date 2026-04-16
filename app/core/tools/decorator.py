@@ -17,30 +17,32 @@ class ToolFunction:
 
 
 def _infer_parameters(fn: Callable[..., Any]) -> Dict[str, Any]:
-    def _annotation_to_type(annotation: Any) -> str:
+    def _annotation_to_schema(annotation: Any) -> Dict[str, Any]:
         if annotation is inspect.Parameter.empty:
-            return "string"
+            return {"type": "string"}
         if annotation in (int, "int"):
-            return "integer"
+            return {"type": "integer"}
         if annotation in (float, "float"):
-            return "number"
+            return {"type": "number"}
         if annotation in (bool, "bool"):
-            return "boolean"
+            return {"type": "boolean"}
         if annotation in (dict, Dict, "dict"):
-            return "object"
+            return {"type": "object"}
         if annotation in (list, List, "list"):
-            return "array"
+            return {"type": "array", "items": {"type": "string"}}
 
         origin = get_origin(annotation)
         if origin in (list, List):
-            return "array"
+            args = get_args(annotation)
+            item_annotation = args[0] if args else str
+            return {"type": "array", "items": _annotation_to_schema(item_annotation)}
         if origin in (dict, Dict):
-            return "object"
+            return {"type": "object"}
         if origin in (Union, types.UnionType):
             nested = [a for a in get_args(annotation) if a is not type(None)]
             if len(nested) == 1:
-                return _annotation_to_type(nested[0])
-        return "string"
+                return _annotation_to_schema(nested[0])
+        return {"type": "string"}
 
     sig = inspect.signature(fn)
     properties: Dict[str, Any] = {}
@@ -48,7 +50,7 @@ def _infer_parameters(fn: Callable[..., Any]) -> Dict[str, Any]:
     for param_name, param in sig.parameters.items():
         if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
-        properties[param_name] = {"type": _annotation_to_type(param.annotation)}
+        properties[param_name] = _annotation_to_schema(param.annotation)
         if param.default is inspect.Parameter.empty:
             required.append(param_name)
     return {
