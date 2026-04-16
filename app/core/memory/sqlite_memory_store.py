@@ -2,6 +2,7 @@ import os
 import json
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,6 +24,14 @@ class _ToolChainUnit:
     end_idx: int
     tool_names: List[str]
     is_stateful: bool
+
+
+class _ManagedSQLiteConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        try:
+            return super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
 
 
 class SQLiteMemoryStore:
@@ -66,10 +75,10 @@ class SQLiteMemoryStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_file)
+        return sqlite3.connect(self.db_file, factory=_ManagedSQLiteConnection)
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -131,7 +140,7 @@ class SQLiteMemoryStore:
             if isinstance(tool_calls, list) and tool_calls
             else None
         )
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute(
                 """
                 INSERT INTO messages (conversation_id, role, content, tool_call_id, tool_calls_json)
@@ -143,7 +152,7 @@ class SQLiteMemoryStore:
 
     def get_recent_messages(self, conversation_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT summary, summary_json FROM summaries WHERE conversation_id = ?",
                 (conversation_id,),
@@ -237,7 +246,7 @@ class SQLiteMemoryStore:
         min_total: int,
         token_budget: Optional[int],
     ) -> Dict[str, Any]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             all_rows = self._load_conversation_rows(conn, conversation_id=conversation_id)
             total = len(all_rows)
             if not force and total < max(min_total, 1):
@@ -540,7 +549,7 @@ class SQLiteMemoryStore:
         return max(tokens, 1)
 
     def _compact_event_tool_chain(self, conversation_id: str, mode: str) -> Dict[str, Any]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             all_rows = self._load_conversation_rows(conn, conversation_id=conversation_id)
             total = len(all_rows)
             if total <= 0:

@@ -60,7 +60,8 @@ InDepth 的主链路 Prompt 由 `BaseAgent -> AgentRuntime` 共同完成：
 因此，偏好不是直接写在 `BaseAgent.instructions` 内，而是运行时动态插入 `messages`。
 
 代码位置：
-- `app/core/runtime/agent_runtime.py`（`run`、`_inject_user_preference_recall`）
+- `app/core/runtime/agent_runtime.py`（`run`）
+- `app/core/runtime/user_preference_lifecycle.py`
 
 ## 4. 用户偏好注入机制
 
@@ -77,6 +78,7 @@ InDepth 的主链路 Prompt 由 `BaseAgent -> AgentRuntime` 共同完成：
 代码位置：
 - `app/config/runtime_config.py`（`load_runtime_user_preference_config`）
 - `app/core/memory/user_preference_store.py`（`render_recall_block`）
+- `app/core/runtime/user_preference_lifecycle.py`
 
 ## 5. 子 Agent Prompt 组装
 
@@ -102,7 +104,8 @@ InDepth 的主链路 Prompt 由 `BaseAgent -> AgentRuntime` 共同完成：
    - `USER_PREFERENCE_EXTRACT_USER_PROMPT_TEMPLATE`
 
 代码位置：
-- `app/core/runtime/agent_runtime.py`
+- `app/core/runtime/clarification_policy.py`
+- `app/core/runtime/user_preference_lifecycle.py`
 
 ## 7. 一页结论
 

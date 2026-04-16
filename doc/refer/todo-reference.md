@@ -17,8 +17,9 @@ Todo 编排层负责把复杂任务拆成可执行、可验证、可审计的最
 - `InDepth.md`
 - `app/tool/todo_tool/todo_tool.py`
 - `app/core/runtime/agent_runtime.py`
+- `app/core/runtime/todo_runtime_lifecycle.py`
 - `app/core/runtime/tool_execution.py`
-- `app/core/runtime/verification_handoff.py`
+- `app/eval/verification_handoff_service.py`
 - `doc/refer/tools-reference.md`
 
 ## 2. 设计定位

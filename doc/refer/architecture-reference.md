@@ -50,7 +50,7 @@
 
 ### 2.1 AgentRuntime (`app/core/runtime/agent_runtime.py`)
 
-**职责**：执行中枢，把对话请求转为可控循环
+**职责**：执行中枢与编排入口，把对话请求转为可控循环，并装配 runtime strategy / capability service
 
 **关键流程**：
 1. 组装消息（system + 历史 + user）
@@ -58,7 +58,7 @@
 3. 处理 finish_reason（stop/length/tool_calls）
 4. 执行工具并回写消息
 5. 任务结束触发评估与观测
-6. 强制记忆沉淀 + 最终压缩
+6. 强制记忆沉淀 + 用户偏好 capture + 最终压缩
 
 **关键状态**：
 - `final_answer` / `task_status` / `stop_reason`
@@ -144,9 +144,15 @@ app/
 │   ├── runtime/
 │   │   ├── agent_runtime.py         # 主循环
 │   │   ├── runtime_utils.py         # 运行时工具
+│   │   ├── runtime_stop_policy.py   # stop reason / runtime state 收敛
+│   │   ├── runtime_finalization.py  # run 收尾编排
+│   │   ├── runtime_compaction_policy.py # 上下文压缩策略
+│   │   ├── clarification_policy.py  # 澄清判定策略
+│   │   ├── todo_runtime_lifecycle.py # todo 生命周期与恢复
+│   │   ├── user_preference_lifecycle.py # 用户偏好生命周期
 │   │   ├── system_memory_lifecycle.py  # 系统记忆生命周期
 │   │   ├── tool_execution.py        # 工具执行
-│   │   └── verification_handoff.py  # 验证交接
+│   │   └── __init__.py
 │   ├── model/
 │   │   ├── base.py                 # ModelProvider 抽象
 │   │   ├── http_chat_provider.py   # HTTP 模型适配
@@ -159,6 +165,8 @@ app/
 │   ├── memory/
 │   │   ├── sqlite_memory_store.py  # 会话记忆
 │   │   ├── system_memory_store.py  # 系统记忆
+│   │   ├── recall_service.py       # 记忆召回能力
+│   │   ├── memory_metadata_service.py # 记忆元数据能力
 │   │   ├── user_preference_store.py # 用户偏好存储（新增）
 │   │   └── context_compressor.py   # 压缩逻辑
 │   ├── skills/
@@ -190,6 +198,7 @@ app/
 ├── eval/                           # 评估体系
 │   ├── schema.py                   # 数据模型
 │   ├── orchestrator.py             # 评估协调器
+│   ├── verification_handoff_service.py # 验证交接能力
 │   ├── verifiers/                 # Verifier 实现
 │   │   ├── deterministic.py        # 确定性验证
 │   │   └── llm_judge.py            # LLM 判官

@@ -9,9 +9,9 @@
 核心职责：
 - 管理多步推理循环（Tool Calling Loop）
 - 处理模型响应与工具执行
-- 控制任务收敛条件
+- 装配 stop policy、todo recovery、clarification、memory lifecycle
 - 触发评估与观测事件
-- 沉淀任务记忆
+- 沉淀任务记忆与用户偏好
 
 ## 2. 架构图
 
@@ -152,7 +152,19 @@ Model returns tool_calls ---> ToolRegistry.invoke(name, args)
 返回 ToolResult {success, result/error}
 ```
 
-### 3.3 MemoryStore
+### 3.3 Runtime Strategy Modules
+
+当前 `AgentRuntime` 已把主要策略拆到独立模块：
+
+1. `runtime_stop_policy.py`
+2. `runtime_finalization.py`
+3. `runtime_compaction_policy.py`
+4. `clarification_policy.py`
+5. `todo_runtime_lifecycle.py`
+6. `user_preference_lifecycle.py`
+7. `system_memory_lifecycle.py`
+
+### 3.4 MemoryStore
 
 **职责**：管理会话历史与上下文压缩
 
@@ -161,7 +173,7 @@ Model returns tool_calls ---> ToolRegistry.invoke(name, args)
 2. `SystemMemoryStore`：系统经验记忆
 3. `UserPreferenceStore`：用户偏好记忆（用于个性化提示词注入）
 
-### 3.4 EvalOrchestrator
+### 3.5 EvalOrchestrator
 
 **职责**：区分"回答完成"与"任务完成"
 

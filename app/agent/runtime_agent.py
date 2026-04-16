@@ -10,7 +10,7 @@ def build_runtime_cli_agent() -> BaseAgent:
     return BaseAgent(
         name="runtime_cli",
         description="Runtime CLI agent powered by BaseAgent",
-        instructions="遵守 InDepth 协议。",
+        instructions="遵守 InDepth 协议，优先结构化回答。",
         tools=[],
         load_default_tools=True,
         skills="app/skills",
