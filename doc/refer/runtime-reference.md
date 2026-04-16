@@ -200,6 +200,8 @@ def run(
 | `stop_reason` | `str` | 收敛原因 |
 | `runtime_state` | `str` | `running/awaiting_user_input/completed/failed` |
 | `last_tool_failures` | `List[Dict]` | 工具失败记录 |
+| `_active_todo_context` | `Dict[str, Any]` | 当前活跃的 `todo_id/subtask_number` |
+| `_latest_todo_recovery` | `Dict[str, Any]` | 最近一次自动恢复链路产物 |
 | `consecutive_tool_calls` | `int` | 当前一次 `tool_calls` 响应的条目数 |
 
 ### 4.3 finish_reason 处理
@@ -258,6 +260,43 @@ AgentRuntime.run(
 - **同一 run_id**：恢复执行使用相同的 `run_id`，保证观测事件连续性
 - **会话记忆保留**：`SQLiteMemoryStore` 中保留完整对话历史
 - **自动检测**：`resume_from_waiting=True` 时自动检测并恢复状态
+
+### 4.5 Todo 恢复自动接入
+
+当前 Runtime 已接入 todo 恢复链路。
+
+#### 4.5.1 活跃 todo 上下文
+
+Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
+- `todo_id`
+- `subtask_number`
+
+主要来源工具：
+- `create_task`
+- `update_task_status`
+- `record_task_fallback`
+- `get_next_task`
+
+#### 4.5.2 自动触发时机
+
+当 Runtime 进入以下未完成出口时，会自动尝试恢复链路：
+- `awaiting_user_input`
+- `tool_failed_before_stop`
+- `max_steps_reached`
+- 其他 `runtime_state=failed` 分支
+
+自动顺序为：
+1. `record_task_fallback`
+2. `plan_task_recovery`
+3. 若 `decision_level=auto && stop_auto_recovery=false`，则 `append_followup_subtasks`
+
+#### 4.5.3 自动恢复结果
+
+Runtime 会把自动恢复结果保存在 `_latest_todo_recovery` 中，随后继续外溢到：
+- `verification_handoff.recovery`
+- `task_judged.payload.verification_handoff`
+- postmortem “交付内容”区块
+- 最终用户回复中的“恢复摘要”
 - **空输入处理**：空输入不会触发模型调用，提示用户补充信息
 
 ## 5. 上下文压缩

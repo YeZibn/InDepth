@@ -145,19 +145,92 @@
 2. 开始执行：`pending -> in-progress`
 3. 执行完成：`in-progress -> completed`
 4. 出现阻塞：`in-progress -> blocked`，并记录阻塞原因、影响范围、下一次重试条件
-5. 阻塞解除：`blocked -> in-progress`，并记录解除依据
-6. 明确取消：`pending/in-progress/blocked -> cancelled`，并记录取消原因
+5. 部分完成但未闭环：`in-progress -> partial`，并记录已保留产物与剩余缺口
+6. 等待用户或外部输入：`in-progress -> awaiting_input`，并记录所缺输入
+7. 超出预算或步数：`in-progress -> timed_out`，并记录预算耗尽原因
+8. 执行失败：`in-progress -> failed`，并记录失败原因与证据
+9. 阻塞解除：`blocked/partial/awaiting_input/timed_out/failed -> in-progress`，并记录解除依据
+10. 明确取消：`pending/in-progress/blocked/partial/awaiting_input/timed_out/failed -> abandoned`，并记录取消原因
 
 状态写回要求：
 1. 状态变化后 SHOULD 立即回写，不得在多个关键动作后批量补写。
 2. 任何 `completed` 子任务 MUST 具备可核验证据（产物路径、命令结果、关键结论之一）。
-3. 若执行结果与预期不一致，MUST 回写为 `blocked` 或 `in-progress`，MUST NOT 直接标记 `completed`。
+3. 若执行结果与预期不一致，MUST 回写为 `blocked`、`failed`、`partial`、`awaiting_input`、`timed_out` 之一，MUST NOT 直接标记 `completed`。
 4. 调用 Todo 工具时，MUST 传 `todo_id`（例如 `update_task_status(todo_id=..., ...)`）。
 
 收尾一致性：
-1. 交付前 MUST 扫描全部子任务状态，确认不存在“已完成交付但仍有关键子任务非 `completed/cancelled`”的冲突。
-2. 对 `cancelled` 子任务，MUST 在最终说明中标注“取消原因 + 对结果影响”。
-3. 对长期 `blocked` 子任务，MUST 输出移交信息：阻塞点、所需输入、建议下一步。
+1. 交付前 MUST 扫描全部子任务状态，确认不存在“已完成交付但仍有关键子任务非 `completed/abandoned`”的冲突。
+2. 对 `abandoned` 子任务，MUST 在最终说明中标注“取消原因 + 对结果影响”。
+3. 对长期 `blocked/failed/partial/awaiting_input/timed_out` 子任务，MUST 输出移交信息：阻塞点、所需输入、建议下一步。
+
+### 2.5 未完成任务兜底模块
+
+目标：
+1. 任务未完成时 MUST 先保留现场，再决定恢复动作。
+2. 默认采用“偏主动恢复”策略：低风险恢复先自动推进，高风险恢复再升级决策层。
+3. 恢复目标 SHOULD 优先保留已有有效产出，而不是机械追求形式上的“全完成”。
+
+未完成分类：
+1. `blocked`：依赖未满足或当前无法继续
+2. `failed`：已执行但结果失败或工具报错
+3. `partial`：已有部分有效产出但未完整闭环
+4. `awaiting_input`：等待用户或外部输入
+5. `timed_out`：达到预算上限、重试上限或步数上限
+6. `abandoned`：明确止损并不再继续投入
+
+失败后的强制顺序：
+1. MUST 先记录结构化失败信息：`record_task_fallback`
+2. MUST 再生成恢复决策：`plan_task_recovery`
+3. 若恢复决策为低风险且 `decision_level=auto`，SHOULD 将恢复动作落成新的 follow-up subtasks：`append_followup_subtasks`
+4. MUST NOT 在未记录 fallback 的情况下直接跳过失败点继续宣称完成
+
+`record_task_fallback` 最小要求：
+1. MUST 记录 `state`
+2. MUST 记录 `reason_code`
+3. MUST 记录 `reason_detail`
+4. SHOULD 记录 `impact_scope`
+5. SHOULD 记录 `required_input`
+6. SHOULD 记录 `evidence`
+7. SHOULD 记录 `suggested_next_action`
+
+恢复动作集：
+1. `retry`：原路径小范围重试
+2. `retry_with_fix`：先修正参数/上下文/依赖，再重试
+3. `split`：拆出更小的诊断/修复动作
+4. `execution_handoff`：换执行者，目标不变
+5. `decision_handoff`：把下一步判断权上交给主 Agent 或用户
+6. `pause`：等待依赖或输入
+7. `degrade`：接受部分交付
+8. `abandon`：明确放弃
+
+恢复决策分级：
+1. `auto`：低风险、局部、可逆恢复，可自动执行
+2. `agent_decide`：涉及策略取舍，由主 Agent 判断
+3. `user_confirm`：涉及目标、范围、成本、质量承诺或放弃时，MUST 由用户确认
+
+主动恢复硬边界：
+1. MUST NOT 擅自改变用户目标
+2. MUST NOT 显著扩大工作范围
+3. MUST NOT 覆盖已有有效产物
+4. MUST NOT 无限重试
+5. `degrade/abandon` MUST NOT 默认自动执行
+
+恢复动作与子任务关系：
+1. 除 `pause` 与预算内一次 `retry` 外，多数恢复动作 SHOULD 落成新的 subtask
+2. 失败原因不明时，SHOULD 先拆出 `diagnose` 子任务，再进入 `repair/retry/verify`
+3. 恢复后的新子任务 MUST 写清 owner、依赖、验收口径
+
+交付要求：
+1. 若存在未完成子任务，最终说明 MUST 包含：
+   - 未完成类型
+   - 影响范围
+   - 已保留产出
+   - 推荐下一步
+2. 用户可见输出 SHOULD 提供简短恢复摘要，至少说明：
+   - todo/subtask
+   - failure
+   - next action
+3. 评估与 postmortem SHOULD 携带恢复信息，便于后续复盘与接续。
 
 执行依据：`app/tool/todo_tool/todo_tool.py`
 

@@ -4,29 +4,32 @@
 
 ## 1. 目标
 
-Todo 编排层负责把复杂任务拆成可执行、可验证、可审计的最小动作单元，并为主 Agent / SubAgent 协作提供统一状态面。
+Todo 编排层负责把复杂任务拆成可执行、可验证、可审计的最小动作单元，并为主 Agent / SubAgent 协作、失败恢复、以及最终交付提供统一状态面。
 
-这份文档重点回答四个问题：
+这份文档重点回答五个问题：
 - 什么情况下必须创建 todo？
 - subtask 应该如何设计，粒度多大才合适？
-- subtask 没完成、被依赖阻塞、或需要交给 SubAgent 时，当前应该怎么处理？
-- 当前执行协议与代码实现之间有哪些已经明确的差异？
+- 当前 todo 工具真实支持哪些状态和数据结构？
+- 任务未完成时，fallback 与 recovery 现在是如何实现的？
+- Runtime 如何自动接入这条恢复链路？
 
 相关代码：
 - `InDepth.md`
 - `app/tool/todo_tool/todo_tool.py`
-- `app/tool/sub_agent_tool/sub_agent_tool.py`
-- `doc/refer/agent-collaboration-reference.md`
+- `app/core/runtime/agent_runtime.py`
+- `app/core/runtime/tool_execution.py`
+- `app/core/runtime/verification_handoff.py`
 - `doc/refer/tools-reference.md`
 
 ## 2. 设计定位
 
 Todo 不是简单的待办清单，而是运行时编排层的事实源。
 
-它承担三类职责：
+它承担四类职责：
 - 规划职责：把复杂目标拆成有依赖关系的 subtask。
 - 执行职责：给主 Agent 一个明确的“当前正在做什么”。
-- 审计职责：把状态变化、依赖阻塞、完成进度沉淀为可回放记录。
+- 恢复职责：在任务未完成时记录失败现场并生成下一步动作。
+- 审计职责：把状态变化、依赖阻塞、恢复决策和进度沉淀为可回放记录。
 
 在 InDepth 协议里，主 Agent 不能绕开 todo 直接做清单外动作；执行必须围绕 subtask 展开。
 
@@ -44,13 +47,13 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 - `split_reason`：为什么需要拆分。
 - `subtasks`：结构化子任务数组。
 
-返回值中的 `todo_id` 是 todo 域唯一标识，后续状态更新、查询和报告生成都必须复用它。
+返回值中的 `todo_id` 是 todo 域唯一标识，后续状态更新、失败记录、恢复规划和报告生成都必须复用它。
 
-## 4. Todo 数据模型
+## 4. 当前 Todo 数据模型
 
 ### 4.1 顶层结构
 
-当前 `create_task` 会生成 `todo/<timestamp>_<sanitized_name>.md` 文件，主体结构包含：
+`create_task` 会生成 `todo/<timestamp>_<sanitized_name>.md` 文件，主体结构包含：
 - `Metadata`
 - `Context`
 - `Subtasks`
@@ -72,15 +75,23 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 - `Status`
 - `Priority`
 - `Dependencies`
+- `Kind`（可选）
+- `Owner`（可选）
 - `Split Rationale`
+- `Acceptance Criteria`（可选）
+- `Fallback Record`（可选）
 - 复选描述项
 
-`create_task` 支持的 subtask 输入字段：
-- `name` 或 `title`
+`create_task` / `append_followup_subtasks` 支持的核心字段包括：
+- `name` / `title`
 - `description`
 - `priority`
 - `dependencies`
-- `split_rationale` / `split_reason` / `rationale` / `reason`
+- `split_rationale`
+- `kind`
+- `owner`
+- `acceptance_criteria`
+- `fallback_record`
 
 ### 4.3 依赖派生信息
 
@@ -89,7 +100,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 - `Ready subtasks`
 - `Blocking subtasks`
 
-这段内容不是独立输入，而是由 subtask 的完成状态和依赖列表推导出来的。
+这段内容不是独立输入，而是由 subtask 的状态和依赖列表推导出来的。
 
 ## 5. Subtask 设计准则
 
@@ -99,262 +110,277 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 - 单一动作：只做一件可描述、可验收的事。
 - 单一责任：不要把“实现 + 测试 + 汇总”混成一步。
 - 可验证：完成后能用产物、命令结果或结构化结论证明。
-- 可流转：能够自然进入 `pending -> in-progress -> completed`。
+- 可流转：能够自然进入状态流转，而不是长期停留在模糊的“处理中”。
 
 推荐粒度是 5 到 30 分钟可完成。
-
-粒度过大时，常见问题是：
-- 状态长期卡在 `in-progress`，无法反映真实进展。
-- 阻塞原因只能写在自然语言里，无法拆出新的可执行动作。
-- 无法判断该不该交给 SubAgent。
-
-粒度过小时，常见问题是：
-- 拆分和维护成本过高。
-- 产生大量机械状态更新，干扰主流程推进。
 
 ### 5.2 推荐写法
 
 推荐使用“动词 + 对象 + 产出”：
-- 收集 `doc/refer` 中 todo 与 SubAgent 约束并形成差异清单
-- 新增 `todo-reference.md` 并写入 subtask 生命周期说明
-- 更新索引文档并补充阅读顺序
-
-不推荐写法：
-- 处理一下 todo
-- 做文档
-- 完善逻辑
+- 读取错误日志并定位构建失败根因
+- 基于诊断结果修复验证失败的实现
+- 重新分派 researcher 并产出缩小范围后的证据摘要
 
 ### 5.3 完成判据
 
 每个 subtask 至少应绑定一种完成判据：
-- 产物路径：例如某个文档、代码文件、配置文件。
-- 命令结果：例如测试通过、lint 通过、构建成功。
-- 结构化结论：例如调研结论、风险列表、差异说明。
+- 产物路径
+- 命令结果
+- 结构化结论
 
 如果完成后无法明确回答“什么算做完”，这个 subtask 往往拆得还不够好。
 
-## 6. Subtask 状态机
+## 6. 当前代码实现状态机
 
-## 6.1 协议层状态机
+### 6.1 Subtask 状态
 
-`InDepth.md` 中的目标状态机是：
-
-```text
-pending -> in-progress -> completed
-          \-> blocked -> in-progress
-pending/in-progress/blocked -> cancelled
-```
-
-协议层额外要求：
-- 出现阻塞时，必须记录阻塞原因、影响范围、重试条件。
-- 阻塞解除后，必须记录解除依据。
-- 若结果与预期不一致，不能直接标记 `completed`。
-- 交付前要检查关键 subtask 不得处于未收口状态。
-
-## 6.2 当前代码实现状态机
-
-当前 `todo_tool` 真正接受的状态只有三种：
+当前 `todo_tool` 已真实支持以下状态：
 - `pending`
 - `in-progress`
 - `completed`
+- `blocked`
+- `failed`
+- `partial`
+- `awaiting_input`
+- `timed_out`
+- `abandoned`
+
+与旧版本不同，当前实现已经不再是三态。
+
+### 6.2 状态含义
+
+1. `pending`
+   尚未开始，且没有被显式标记为未完成态。
+
+2. `in-progress`
+   当前正在执行。
+
+3. `completed`
+   满足完成判据。
+
+4. `blocked`
+   当前不能继续执行，通常是依赖未满足或外部条件不满足。
+
+5. `failed`
+   已执行，但结果失败、工具失败或输出不符合要求。
+
+6. `partial`
+   已有部分有效产出，但尚未完整闭环。
+
+7. `awaiting_input`
+   等待用户或外部系统补充输入。
+
+8. `timed_out`
+   达到预算上限、重试上限或步数上限。
+
+9. `abandoned`
+   明确止损，不再继续投入。
+
+### 6.3 依赖推进规则
+
+当前工具仍然会对 `in-progress`、`completed`、`partial` 做依赖检查：
+- 若依赖未满足，不允许直接推进。
+
+`get_next_task_item()` 只会返回依赖满足的 `pending` 任务作为下一个 ready subtask。
+
+## 7. Fallback 记录
+
+### 7.1 作用
+
+任务未完成时，当前实现不会只停留在自然语言说明，而是支持将失败事实结构化写入 `Fallback Record`。
+
+对应工具：
+- `record_task_fallback(todo_id, subtask_number, ...)`
+
+### 7.2 最小字段
+
+当前实现支持的核心字段包括：
+- `state`
+- `reason_code`
+- `reason_detail`
+- `impact_scope`
+- `retryable`
+- `required_input`
+- `suggested_next_action`
+- `evidence`
+- `owner`
+- `retry_count`
+- `retry_budget_remaining`
+
+### 7.3 典型 `reason_code`
+
+当前设计与实现对齐的原因码包括：
+- `dependency_unmet`
+- `tool_error`
+- `validation_failed`
+- `missing_context`
+- `waiting_user_input`
+- `budget_exhausted`
+- `subagent_empty_result`
+- `subagent_execution_error`
+- `output_not_verifiable`
+
+## 8. Recovery 决策
+
+### 8.1 恢复决策器
+
+当前已落地一个规则版恢复决策器：
+- `plan_task_recovery(todo_id, subtask_number, ...)`
+
+它会基于当前 subtask 的 `fallback_record` 生成 `recovery_decision`。
+
+### 8.2 输出结构
+
+当前恢复决策输出包含：
+- `primary_action`
+- `recommended_actions`
+- `decision_level`
+- `rationale`
+- `preserve_artifacts`
+- `next_subtasks`
+- `resume_condition`
+- `escalation_reason`
+- `stop_auto_recovery`
+- `suggested_owner`
+
+### 8.3 当前动作集
+
+规则版恢复决策器当前使用的动作包括：
+- `retry`
+- `retry_with_fix`
+- `split`
+- `fallback_path`
+- `execution_handoff`
+- `decision_handoff`
+- `pause`
+- `degrade`
+- `abandon`
+
+### 8.4 当前分级
+
+恢复动作会被标记为：
+- `auto`
+- `agent_decide`
+- `user_confirm`
+
+当前 runtime 只会自动推进：
+- `decision_level=auto`
+- 且 `stop_auto_recovery=false`
+的恢复决策。
+
+## 9. Follow-up Subtasks
+
+### 9.1 作用
+
+当前实现支持把恢复动作进一步落成新的 subtask，而不是只停留在建议层。
+
+对应工具：
+- `append_followup_subtasks(todo_id, follow_up_subtasks)`
+
+### 9.2 当前支持的 kind
+
+follow-up subtask 的 `kind` 当前支持：
+- `diagnose`
+- `repair`
+- `retry`
+- `verify`
+- `handoff`
+- `resume`
+- `report`
+
+### 9.3 推荐模板
+
+当前规则版恢复链路最常见的 follow-up 模式是：
+
+1. `diagnose`
+   先定位根因。
+
+2. `repair` / `retry`
+   再执行修复或重试。
+
+3. `verify`
+   最后做聚焦验证。
+
+## 10. Runtime 自动接入
+
+这是当前实现与早期设计最大的变化之一。
+
+### 10.1 当前 runtime 做了什么
+
+`AgentRuntime` 现在会跟踪活跃的 todo 上下文：
+- `todo_id`
+- `subtask_number`
+
+上下文来源于工具执行结果，例如：
+- `create_task`
+- `update_task_status`
+- `record_task_fallback`
+- `get_next_task`
+
+### 10.2 自动触发点
+
+当 runtime 进入以下未完成出口时，会自动触发恢复链路：
+- `failed`
+- `awaiting_user_input`
+- `max_steps_reached`
+- `tool_failed_before_stop`
+- 其他运行失败分支
+
+### 10.3 自动恢复顺序
+
+当前自动顺序为：
+
+1. `record_task_fallback`
+2. `plan_task_recovery`
+3. 若恢复决策为低风险自动动作，则 `append_followup_subtasks`
 
 这意味着：
-- 工具层还不支持把 subtask 显式写成 `blocked` 或 `cancelled`。
-- “blocked” 在当前实现里是派生视图，不是可持久化状态。
-- 一个 subtask 是否“被阻塞”，由其状态仍是 `pending` 且依赖未满足来推断。
+- 失败记录不再只靠 agent 自觉
+- 即便 agent 没主动做恢复登记，runtime 也会在失败出口补上
 
-因此，当前实践上需要区分两层语义：
-- 协议语义：允许把“阻塞”和“取消”作为一等状态来思考和汇报。
-- 工具语义：真正写回文件时，只能落 `pending/in-progress/completed`。
+## 11. 恢复信息如何外溢
 
-## 6.3 当前可执行处理办法
+当前恢复信息会进一步进入以下位置：
 
-在当前实现下，subtask 没完成时应按下面的方式处理：
+1. `verification_handoff.recovery`
+   包含：
+   - `todo_id`
+   - `subtask_number`
+   - `fallback_record`
+   - `recovery_decision`
 
-1. 依赖未满足
-保持目标 subtask 为 `pending`，并通过依赖关系让它出现在 `blocked_tasks` 中。
+2. `task_judged.payload.verification_handoff`
 
-2. 正在处理中但未完成
-保持为 `in-progress`，不要提前写成 `completed`。
+3. postmortem 的“交付内容”区块
 
-3. 遇到外部阻塞但工具无法写 `blocked`
-继续把 subtask 保持在 `in-progress` 或回退为 `pending`，同时必须在上下文、交付说明、或后续新增 subtask 中明确写出阻塞原因和下一步。
+4. 最终用户回复中的简短“恢复摘要”
 
-4. 决定不再执行
-协议上应视为 `cancelled`，但当前工具无法持久化该状态，只能通过新增说明或最终交付备注显式标注。
+这意味着恢复信息已经不是 todo 内部私有信息，而是贯穿了：
+- 编排
+- 评估
+- 观测
+- 用户可见输出
 
-换句话说，当前 todo 工具可以表达“未开始、进行中、已完成”，但对“阻塞/取消”的表达仍然依赖上层执行纪律和最终报告。
+## 12. 当前实现与设计稿关系
 
-## 7. Subtask 的标准处理流程
+### 12.1 已实现部分
 
-一个 subtask 的推荐执行流是：
+当前已经实现：
+- richer subtask states
+- `fallback_record`
+- 规则版 `recovery_decision`
+- follow-up subtask 追加
+- runtime 自动接入恢复链路
+- recovery 信息进入 handoff / postmortem / user-facing summary
 
-1. 创建时写清名称、描述、依赖、拆分理由。
-2. 真正开始执行前，把状态从 `pending` 更新为 `in-progress`。
-3. 执行中如果发现动作不属于现有 subtask，先补一个新 subtask，再继续。
-4. 结束后只有在结果可核验时才能更新为 `completed`。
-5. 如果无法完成，不要伪装成完成；应保留未完成状态，并把原因写进输出。
+### 12.2 仍未完全收口的部分
 
-最小闭环示意：
-
-```text
-create_task
-  -> update_task_status(todo_id, n, "in-progress")
-  -> 执行动作
-  -> 验证结果
-  -> update_task_status(todo_id, n, "completed")
-```
-
-## 8. Subtask 与依赖
-
-### 8.1 依赖的含义
-
-依赖表示“当前 subtask 的开始条件”，不是“相关就算依赖”。
-
-应该写依赖的场景：
-- 后一步必须使用前一步产物。
-- 后一步的验收依赖前一步完成。
-- 前一步失败时，后一步没有执行意义。
-
-不应该滥写依赖的场景：
-- 只是主题相关，但可以独立推进。
-- 只是共享背景，不影响执行顺序。
-
-### 8.2 `get_next_task_item` 的作用
-
-当前工具会根据已完成的依赖，返回下一个可执行的 `pending` subtask：
-- 有可执行任务时：`status=ready`
-- 全部完成时：`status=all_completed`
-- 没有可执行项时：`status=blocked`
-
-这里的 `blocked` 是全局编排视角，含义是“当前没有任何满足依赖条件的 pending 任务”，并不等于某个运行中的 subtask 显式进入了 `blocked` 状态。
-
-## 9. Subtask 与 SubAgent 的关系
-
-### 9.1 主原则
-
-SubAgent 不应该直接替代 todo；SubAgent 是执行者，subtask 才是编排单元。
-
-所以正确关系是：
-- 先有 subtask 设计。
-- 再决定哪些 subtask 交给 SubAgent。
-- 主 Agent 负责状态同步、依赖管理和最终汇总。
-
-### 9.2 何时适合把 subtask 交给 SubAgent
-
-适合交给 SubAgent 的 subtask 往往满足：
-- 边界清晰，输入输出可以写清楚。
-- 能独立推进，不需要频繁来回同步上下文。
-- 耗时较长，适合并行。
-- 角色能力明确，例如 researcher、builder、reviewer、verifier。
-
-不适合交给 SubAgent 的 subtask：
-- 只需几分钟的小改动。
-- 需要主 Agent 持续持有全局上下文。
-- 与其他步骤强耦合，拆分后沟通成本大于收益。
-
-### 9.3 Todo 中如何登记 SubAgent 动作
-
-根据 `InDepth.md`，与 SubAgent 相关的动作应显式写成 subtask，而不是在暗处执行。
-
-建议至少拆成：
-- 创建/配置某个 SubAgent
-- 启动该 SubAgent 执行
-- 主 Agent 汇总其结果
-
-典型模板：
-- `#1` 定义 researcher 子代理的检索范围与验收口径
-- `#2` 启动 researcher 产出证据摘要
-- `#3` 定义 builder 子代理的修改范围
-- `#4` 启动 builder 实现并提交产物
-- `#5` 主 Agent 汇总结果并完成最终验收
-
-这样做的价值是：
-- 可以精确知道卡在“创建”、“执行”还是“汇总”。
-- 并行流不会共享一个模糊状态位。
-- 后续复盘能看清拆分是否合理。
-
-## 10. Subtask 未完成时的推荐处理策略
-
-这一节是 todo 场景里最容易出错的部分。
-
-### 10.1 非关键路径未完成
-
-如果某个 subtask 尚未完成，但主流程还有其他不依赖它的动作：
-- 不要原地等待。
-- 先推进其他 ready subtask。
-- 让未完成 subtask 保持原状态，并在汇总时说明影响范围。
-
-这对应“编排优先于阻塞等待”的原则。
-
-### 10.2 关键路径被卡住
-
-如果后续动作都依赖该 subtask：
-- 先判断是依赖问题、信息缺口、执行失败，还是拆分粒度不合理。
-- 若只是任务过大，优先把它再拆细，而不是长期挂在一个大 subtask 上。
-- 若确实是外部信息缺失，当前工具层只能保留未完成状态，并通过备注或新增 subtask 记录“等待什么”。
-
-### 10.3 SubAgent 子任务未完成
-
-如果某个交给 SubAgent 的 subtask 没完成，推荐做法是：
-
-1. 主流程先继续做不依赖该结果的工作。
-2. 只有在关键路径真正被它卡住时，才把主流程收束到等待该结果。
-3. 不要立刻自己重复做同一个 subtask；先判断是不是任务定义不清、范围太大、或上下文不够。
-4. 优先把问题转化成新的 todo 动作，例如“补充上下文”“缩小子任务范围”“重试验证”。
-5. 如果最终决定放弃该子流，在交付说明里明确未完成项和后续建议。
-
-### 10.4 什么时候要新增 subtask
-
-出现以下情况时，应新增 subtask，而不是把原 subtask 描述无限膨胀：
-- 发现新的独立动作。
-- 需要补一次验证或回归。
-- 需要单独做汇总、对账、清理、重试。
-- 原步骤内部已经出现两个不同责任。
-
-判断标准很简单：
-- 如果这个动作完成后可以独立验收，就值得成为新的 subtask。
-
-## 11. 当前实现与协议差异
-
-这是实际使用时必须知道的边界。
-
-### 11.1 已实现能力
-
-当前 `todo_tool` 已实现：
-- 创建带 `split_reason` 与 `split_rationale` 的 markdown todo。
-- 子任务依赖校验。
-- `pending/in-progress/completed` 三态流转。
-- 进度百分比自动更新。
-- ready / blocked / blocking 派生摘要。
-- `get_task_progress` 和 `generate_task_report` 报告输出。
-- 观测事件中的 `todo-id:` 前缀归一化。
-
-### 11.2 未完全对齐项
-
-当前仍未完全对齐 `InDepth.md` 的点：
-- `blocked` 和 `cancelled` 还不是工具层可写状态。
-- `update_task_status` 的公开文档仍是三态，没有阻塞原因、影响范围、解除依据等字段。
-- todo 文件的 `Acceptance Criteria` 目前只是固定占位文本，并未强制结构化落盘。
-- “与 SubAgent 有关的配置/启动/回收必须单独登记”属于执行协议要求，不是工具层硬校验。
-
-### 11.3 使用建议
-
-在工具能力升级前，推荐实践是：
-- 用依赖系统表达“等待前置结果”的阻塞。
-- 用 `in-progress` 表达正在做但尚未收敛。
-- 用新增 subtask 表达重试、补充信息、回归验证等补充动作。
-- 用最终交付说明补齐“阻塞原因、未完成项、影响范围、建议下一步”。
-
-## 12. 推荐阅读顺序
-
-如果要完整理解 todo 与 subtask：
-
-1. `InDepth.md`：执行协议与强约束。
-2. `doc/refer/tools-reference.md`：todo 工具签名与调用方式。
-3. `doc/refer/agent-collaboration-reference.md`：SubAgent 生命周期与角色路由。
-4. `app/tool/todo_tool/todo_tool.py`：真实可用状态机与 markdown 结构。
+当前仍然是“最小规则版恢复系统”，还没有：
+- 更高级的策略评分器
+- 严格的关键路径推断
+- 强制所有复杂任务必须先建 todo 的 runtime gate
+- 恢复效果 metrics（成功率、升级率、止损率）
 
 ## 13. 一句话结论
 
-Todo 的核心不是“列任务”，而是把复杂执行过程压缩成一组可验证的 subtask；而当前关于 subtask 的关键实践，是在协议上清楚表达阻塞与协作，在工具上诚实维护 `pending/in-progress/completed` 三态，并用新增 subtask 和最终报告把未完成部分说清楚。
+当前 Todo 的核心已经不只是“列任务”，而是把复杂执行过程压缩成一组可验证、可恢复、可继续推进的 subtask；而 runtime 已经开始在失败出口自动补齐 fallback 与 recovery 链路，保证恢复机制不再只靠 agent 自觉遵守。

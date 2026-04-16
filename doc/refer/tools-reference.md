@@ -383,7 +383,41 @@ create_task(
 update_task_status(
     todo_id: str,
     subtask_number: int,
-    status: str  # pending/in-progress/completed
+    status: str  # pending/in-progress/completed/blocked/failed/partial/awaiting_input/timed_out/abandoned
+) -> Dict
+
+# 记录失败/未完成信息
+record_task_fallback(
+    todo_id: str,
+    subtask_number: int,
+    state: str,
+    reason_code: str,
+    reason_detail: str = "",
+    impact_scope: str = "",
+    retryable: bool = True,
+    required_input: Optional[List[str]] = None,
+    suggested_next_action: str = "",
+    evidence: Optional[List[str]] = None,
+    owner: str = "",
+    retry_count: int = 0,
+    retry_budget_remaining: int = 2,
+) -> Dict
+
+# 规划恢复动作
+plan_task_recovery(
+    todo_id: str,
+    subtask_number: int,
+    retry_budget_remaining: int = 2,
+    time_budget_remaining: str = "",
+    available_roles: Optional[List[str]] = None,
+    allowed_degraded_delivery: bool = False,
+    is_on_critical_path: bool = False,
+) -> Dict
+
+# 追加恢复子任务
+append_followup_subtasks(
+    todo_id: str,
+    follow_up_subtasks: List[Dict[str, Any]],
 ) -> Dict
 
 # 查询任务
@@ -404,9 +438,35 @@ generate_task_report(todo_id: str) -> str
 **状态机**：
 ```
 pending ──▶ in-progress ──▶ completed
-    │            │
-    │<───────────┘ (依赖未满足时禁止推进)
+    │            ├──▶ blocked
+    │            ├──▶ failed
+    │            ├──▶ partial
+    │            ├──▶ awaiting_input
+    │            ├──▶ timed_out
+    └────────────┴──▶ abandoned
 ```
+
+**恢复链路**：
+```
+record_task_fallback()
+    ├──▶ 持久化 fallback_record + 更新未完成状态
+    ├──▶ plan_task_recovery()
+    │       └──▶ 生成 recovery_decision
+    └──▶ append_followup_subtasks()
+            └──▶ 低风险恢复动作落成新的 follow-up subtasks
+```
+
+**运行时接入**：
+1. Runtime 会跟踪当前活跃的 `todo_id/subtask_number`
+2. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
+   - 调 `record_task_fallback`
+   - 调 `plan_task_recovery`
+   - 对 `decision_level=auto` 的恢复决策追加 follow-up subtasks
+3. 恢复信息会进一步进入：
+   - `verification_handoff.recovery`
+   - `task_judged.payload.verification_handoff`
+   - postmortem “交付内容”区块
+   - 最终用户回复中的简短恢复摘要
 
 ### 6.6 Memory 工具组
 
