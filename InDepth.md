@@ -79,7 +79,7 @@
 
 创建决策：
 1. 创建 todo 前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
-2. 强烈建议使用 SubAgent，除非任务很小、拆分成本高、关键工具仅主 Agent 可用、链路时延敏感。
+2. 是否使用 SubAgent SHOULD 按下述 MUST/SHOULD/SHOULD NOT 条件判断，不应机械默认开启。
 
 场景分层（优先按 MUST/SHOULD/SHOULD NOT 判定）：
 1. MUST 使用 SubAgent：
@@ -119,26 +119,22 @@
 2. 不创建 SubAgent 时 MUST 记录原因并回写 todo。
 3. 并行执行时，MUST 为每条并行流绑定独立子任务编号，MUST NOT 多个执行流共享同一子任务状态位。
 
-协作示范（最小模板）：
-1. 创建 todo 主任务并获得 `todo_id`，子任务先登记为：
-   - `#1` 创建 `researcher` 子代理并定义检索范围（`pending`）
-   - `#2` 启动 `researcher` 执行并产出证据摘要（`pending`）
-   - `#3` 创建 `builder` 子代理并定义实现范围（`pending`）
-   - `#4` 启动 `builder` 实现并提交产物（`pending`）
-   - `#5` 主 Agent 汇总验收并交付（`pending`）
-2. 执行时按流转更新：
-   - 启动 `researcher` 前：`#1 -> in-progress -> completed`，随后 `#2 -> in-progress`
-   - `researcher` 完成后：`#2 -> completed`，再激活 `#3/#4`
-   - `builder` 实现中遇阻：`#4 -> blocked`，写明阻塞原因与所需输入；解除后 `blocked -> in-progress -> completed`
-   - 最后 `#5 -> in-progress -> completed`，并在交付说明附上关键证据与未完成项
-3. 若中途新增动作（如补一次回归测试），MUST 先新增子任务（如 `#6`）再执行，MUST NOT 直接做未登记动作。
+协作最小要求：
+1. 若创建 SubAgent，SHOULD 将“创建/启动/回收”拆成可追踪的独立子任务。
+2. 每条并行流 SHOULD 绑定独立子任务编号，并独立回写状态。
+3. 若中途新增动作（如补一次回归测试），MUST 先新增子任务再执行，MUST NOT 直接做未登记动作。
 
 ### 2.4 状态确认模块
 
 执行前后对齐：
 1. 每一步执行前，MUST 明确“当前正在执行的 todo 子任务”。
 2. 若发现当前动作不属于任何已登记子任务，MUST 先补充子任务，再执行动作。
-3. 执行过程中切换子任务时，MUST 先回写原子任务状态，再激活新子任务。
+3. 执行过程中切换子任务时，MUST 先回写原子状态变更，再激活新子任务。
+
+Runtime 绑定现实：
+1. Runtime 当前会维护 `todo_id`、`active_subtask_number`、`execution_phase`、`binding_required`。
+2. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
+3. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
 
 状态机约束：
 1. 初始状态：`pending`
@@ -183,6 +179,7 @@
 2. MUST 再生成恢复决策：`plan_task_recovery`
 3. 若恢复决策为低风险且 `decision_level=auto`，SHOULD 将恢复动作落成新的 follow-up subtasks：`append_followup_subtasks`
 4. MUST NOT 在未记录 fallback 的情况下直接跳过失败点继续宣称完成
+5. 若已存在 `todo_id` 但当前失败无法归属到具体 subtask，MUST 将其视为编排缺口；SHOULD 进入 `decision_handoff`，并先补齐 active subtask 绑定再继续执行
 
 `record_task_fallback` 最小要求：
 1. MUST 记录 `state`
@@ -227,7 +224,8 @@
    - 已保留产出
    - 推荐下一步
 2. 用户可见输出 SHOULD 提供简短恢复摘要，至少说明：
-   - todo/subtask
+   - todo
+   - subtask（若已绑定）
    - failure
    - next action
 3. 评估与 postmortem SHOULD 携带恢复信息，便于后续复盘与接续。
@@ -249,7 +247,7 @@
 ### 3.1 预算与止损
 
 1. 检索前 MUST 先写问题清单，禁止无目标泛搜。
-2. 检索前 MUST 设预算。默认上限：单子任务最多 3 轮或 10 分钟（先到即止）。
+2. 检索前 MUST 设预算。默认预算 SHOULD 由运行时配置或检索门禁策略统一控制。
 3. 每轮 MUST 优先核心来源，再补充次级来源。
 4. 每个结论点 SHOULD 控制在 2-3 个高质量来源。
 5. 每轮结束 MUST 去重与裁剪，只保留与问题直接相关的信息。
@@ -283,9 +281,7 @@
 存储与入口：
 1. 统一载体：`memory_card`
 2. 存储：`db/system_memory.db`（主表 `memory_card`）
-3. 运行时会话记忆 MUST 按 Agent 类型聚合落盘：
-   - 主 Agent：`db/runtime_memory_main_agent.db`
-   - SubAgent：`db/runtime_memory_subagent_<role>.db`
+3. 运行时会话记忆 MUST 按 Agent 类型聚合落盘，并与系统经验记忆分离管理。
 4. 录入/查询统一入口：`memory_card_cli.py`（`upsert-json/search/due`）
 
 触发与注入：
