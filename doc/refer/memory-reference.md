@@ -6,17 +6,54 @@
 
 当前记忆体系由**三条链路**组成：
 
-| 链路 | 用途 | 存储 |
-|------|------|------|
-| Runtime 会话记忆 | 多轮对话上下文管理 | `db/runtime_memory_*.db` (SQLite) |
-| 系统经验记忆 | 跨任务经验沉淀与检索 | `db/system_memory.db` (SQLite) |
-| **用户偏好记忆** | **用户个人偏好持久化** | **`memory/preferences/user-preferences.md`** |
+| 链路 | 用途 | 存储 | 数据特征 |
+|------|------|------|----------|
+| **Runtime 会话记忆** | 多轮对话上下文管理 | `db/runtime_memory_*.db` (SQLite) | 临时性、高频率读写 |
+| **系统经验记忆** | 跨任务经验沉淀与检索 | `db/system_memory.db` (SQLite) | 结构化卡片、跨任务复用 |
+| **用户偏好记忆** | **用户个人偏好持久化** | `memory/preferences/user-preferences.md` | 长期性、置信度追踪、来源可追溯 |
+
+### 1.1 三条链路的关系
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         用户输入层                                       │
+│                    （对话内容、显式偏好声明）                              │
+└─────────────────────────────────┬───────────────────────────────────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              ▼                   ▼                   ▼
+    ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+    │ 用户偏好记忆     │  │ Runtime 会话记忆 │  │ 系统经验记忆     │
+    │                 │  │                 │  │                 │
+    │ • 兴趣、角色     │  │ • 多轮对话历史   │  │ • 任务经验卡片   │
+    │ • 习惯、偏好     │  │ • 上下文压缩     │  │ • 最佳实践      │
+    │ • 置信度追踪     │  │ • 实时读写      │  │ • 跨任务检索    │
+    │                 │  │                 │  │                 │
+    │ Markdown 单文件 │  │ SQLite 按 Agent │  │ SQLite 统一存储 │
+    │ 原子写入        │  │ 类型分库        │  │ 按卡片检索      │
+    └─────────────────┘  └─────────────────┘  └─────────────────┘
+              │                   │                   │
+              └───────────────────┼───────────────────┘
+                                  ▼
+                    ┌─────────────────────────┐
+                    │    个性化提示词注入      │
+                    │  （系统提示词组装阶段）   │
+                    └─────────────────────────┘
+```
+
+### 1.2 为什么需要三条链路？
+
+| 问题 | 解决方案 |
+|------|---------|
+| 上下文爆炸 | **Runtime Memory**：压缩历史，保留关键决策和约束 |
+| 经验复用 | **System Memory**：沉淀任务经验，支持跨任务检索 |
+| 个性化服务 | **User Preference**：记录用户偏好，实现千人千面 |
 
 相关代码：
 - `app/core/memory/sqlite_memory_store.py` - Runtime 记忆存储
 - `app/core/memory/context_compressor.py` - 上下文压缩器
-- `app/core/memory/system_memory_store.py` - 系统记忆存储
-- **`app/core/memory/user_preference_store.py` - 用户偏好存储（新增）**
+- `app/core/memory/system_memory_store.py` - 系统经验存储
+- `app/core/memory/user_preference_store.py` - **用户偏好存储**
 - `app/tool/runtime_memory_harvest_tool.py` - 候选记忆捕获工具
 - `app/tool/memory_query_tool.py` - 记忆检索工具
 - `app/observability/store.py::SystemMemoryEventStore` - 记忆事件落盘

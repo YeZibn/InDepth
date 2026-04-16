@@ -70,7 +70,16 @@ InDepth 的设计遵循以下原则：
 
 - Runtime memory 压缩历史，避免上下文爆炸
 - System memory 沉淀经验卡，供后续任务检索
+- **User preference memory 记录用户偏好，实现个性化服务**
 - 记忆事件（triggered/retrieved/decision）进入观测链路
+
+**三层记忆的分工**：
+
+| 记忆类型 | 解决什么问题 | 典型数据 | 存储方式 |
+|---------|-------------|---------|---------|
+| **Runtime Memory** | 上下文爆炸 | 对话历史、决策、约束 | SQLite（按 Agent 类型分库） |
+| **System Memory** | 经验复用 | 任务经验卡、最佳实践 | SQLite（统一存储） |
+| **User Preference** | 个性化服务 | 用户兴趣、角色、习惯 | Markdown（单文件） |
 
 ### 2.5 子代理角色化（Role-based SubAgent）
 
