@@ -299,6 +299,31 @@ append_message(conversation_id, role, content, ...)
 | `target_keep_ratio_midrun` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN`（兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `target_keep_ratio_finalize` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` |
 | `min_keep_messages` | 6 | `COMPACTION_MIN_KEEP_MESSAGES` |
+| `compressor_kind` | `auto` | `COMPACTION_COMPRESSOR_KIND` |
+| `compressor_llm_max_tokens` | 1200 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` |
+
+### 8.3 压缩器类型
+
+- `rule`
+  - 使用 `ContextCompressor`，按规则提取 `task_state / constraints / decisions / artifacts`
+- `llm`
+  - 使用 `LLMContextCompressor` 生成同结构 `summary_json`
+  - 输出版本号为 `v1_llm`
+  - 若模型报错、非 JSON、或与旧摘要不一致，则自动回退到规则压缩
+- `auto`
+  - 真实 provider 下走 `llm`
+  - `MockModelProvider` 下走 `rule`，保证测试稳定和可复现
+
+### 8.4 压缩器观测字段
+
+`compact_mid_run()` / `compact_final()` 返回结果会额外暴露以下字段：
+
+- `compressor_kind_requested`
+- `compressor_kind_applied`
+- `compressor_fallback_used`
+- `compressor_failure_reason`
+
+`summary_json.compression_meta` 也会同步写入这些字段，便于后续排查“请求 LLM 但最终回退到规则压缩”的情况。
 | `keep_recent_turns` | 8 | `COMPACTION_KEEP_RECENT_TURNS`（预算不可用兜底） |
 | `context_window_tokens` | 16000 | `COMPACTION_CONTEXT_WINDOW_TOKENS` |
 | `consistency_guard` | True | `COMPACTION_CONSISTENCY_GUARD` |

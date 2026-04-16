@@ -590,7 +590,15 @@ class RuntimeCompressionConfig:
     target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
     min_keep_messages: int = 6
+    compressor_kind: str = "auto"
+    compressor_llm_max_tokens: int = 1200
 ```
+
+压缩器策略说明：
+- `auto`：真实模型走 LLM 压缩，`MockModelProvider` 自动使用规则压缩
+- `rule`：全程规则压缩
+- `llm`：优先走 LLM 压缩，失败时自动回退规则压缩
+- `event` 模式仍使用工具链替换压缩，不走 LLM 摘要生成
 
 ## 10. 入口点
 

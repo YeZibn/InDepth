@@ -1,5 +1,5 @@
 from app.config import load_runtime_compression_config
-from app.core.memory import SQLiteMemoryStore
+from app.core.memory import SQLiteMemoryStore, build_context_compressor
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
@@ -37,6 +37,11 @@ def create_runtime(
         provider_options=model_options or {},
     )
     model_provider = HttpChatModelProvider(default_config=generation_config)
+    compressor = build_context_compressor(
+        kind=compression_config.compressor_kind,
+        model_provider=model_provider,
+        llm_max_tokens=compression_config.compressor_llm_max_tokens,
+    )
     tool_registry = build_default_registry()
     skills_manager = build_skills_manager(skill_paths or [], validate=False)
     skill_prompt = skills_manager.get_system_prompt_snippet()
@@ -55,6 +60,7 @@ def create_runtime(
             target_keep_ratio_midrun=compression_config.target_keep_ratio_midrun,
             target_keep_ratio_finalize=compression_config.target_keep_ratio_finalize,
             min_keep_messages=compression_config.min_keep_messages,
+            compressor=compressor,
         ),
         skill_prompt=skill_prompt,
         generation_config=generation_config,

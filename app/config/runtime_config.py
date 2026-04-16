@@ -23,6 +23,8 @@ class RuntimeCompressionConfig:
     target_keep_ratio_midrun: float
     target_keep_ratio_finalize: float
     min_keep_messages: int
+    compressor_kind: str
+    compressor_llm_max_tokens: int
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,8 @@ def load_runtime_compression_config() -> RuntimeCompressionConfig:
         ),
         target_keep_ratio_finalize=_env_float("COMPACTION_TARGET_KEEP_RATIO_FINALIZE", 0.40),
         min_keep_messages=_env_int("COMPACTION_MIN_KEEP_MESSAGES", 6, min_value=1),
+        compressor_kind=(os.getenv("COMPACTION_COMPRESSOR_KIND") or "auto").strip().lower() or "auto",
+        compressor_llm_max_tokens=_env_int("COMPACTION_COMPRESSOR_LLM_MAX_TOKENS", 1200, min_value=200),
     )
 
 

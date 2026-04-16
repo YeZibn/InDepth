@@ -47,6 +47,7 @@ class SQLiteMemoryStore:
         min_keep_messages: int = 6,
         keep_recent_event_tool_pairs: int = 1,
         event_stateful_tools: Optional[List[str]] = None,
+        compressor: Optional[ContextCompressor] = None,
     ):
         self.db_file = db_file
         self.keep_recent = keep_recent
@@ -68,7 +69,7 @@ class SQLiteMemoryStore:
             for x in (event_stateful_tools or default_stateful_tools)
             if str(x).strip()
         }
-        self.compressor = ContextCompressor()
+        self.compressor = compressor or ContextCompressor()
         os.makedirs(os.path.dirname(db_file) or ".", exist_ok=True)
         self._init_db()
 
@@ -357,6 +358,18 @@ class SQLiteMemoryStore:
                 "actual_kept_tokens_est": actual_kept_tokens,
                 "trim_strategy": trim_strategy,
                 "cut_adjustment_reason": cut_adjustment_reason,
+                "compressor_kind_requested": str(
+                    ((merged_json.get("compression_meta") or {}).get("compressor_kind_requested") or "rule")
+                ),
+                "compressor_kind_applied": str(
+                    ((merged_json.get("compression_meta") or {}).get("compressor_kind_applied") or "rule")
+                ),
+                "compressor_fallback_used": bool(
+                    ((merged_json.get("compression_meta") or {}).get("compressor_fallback_used") or False)
+                ),
+                "compressor_failure_reason": str(
+                    ((merged_json.get("compression_meta") or {}).get("compressor_failure_reason") or "")
+                ),
             }
 
     def _build_summary(self, rows: List[tuple]) -> str:

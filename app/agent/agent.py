@@ -7,7 +7,7 @@ from typing import Any, Iterable, Optional
 from dotenv import load_dotenv
 
 from app.config import load_runtime_compression_config
-from app.core.memory import SQLiteMemoryStore
+from app.core.memory import SQLiteMemoryStore, build_context_compressor
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
@@ -80,10 +80,16 @@ class BaseAgent:
             provider_options=model_options or {},
         )
         compression_config = load_runtime_compression_config()
+        model_provider = HttpChatModelProvider(default_config=generation_config)
+        compressor = build_context_compressor(
+            kind=compression_config.compressor_kind,
+            model_provider=model_provider,
+            llm_max_tokens=compression_config.compressor_llm_max_tokens,
+        )
         # Aggregate runtime memory by agent type to avoid per-name DB fragmentation.
         memory_file = "db/runtime_memory_main_agent.db"
         self.runtime = AgentRuntime(
-            model_provider=HttpChatModelProvider(default_config=generation_config),
+            model_provider=model_provider,
             tool_registry=self._build_registry(),
             system_prompt=self.instructions,
             max_steps=100,
@@ -95,6 +101,7 @@ class BaseAgent:
                 target_keep_ratio_midrun=compression_config.target_keep_ratio_midrun,
                 target_keep_ratio_finalize=compression_config.target_keep_ratio_finalize,
                 min_keep_messages=compression_config.min_keep_messages,
+                compressor=compressor,
             ),
             skill_prompt=self.skill_prompt,
             generation_config=generation_config,

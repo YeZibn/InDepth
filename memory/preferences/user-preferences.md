@@ -2,17 +2,17 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-16T20:14:02+08:00
+- updated_at: 2026-04-17T00:13:29+08:00
 - enabled: true
 
 ## preferences
 
 ### goal_long_term
-- value: 构建一个更有趣的小项目，在work目录下新建子文件夹并实现一个简单的小项目，附带readme
+- value: 写一个简单的小项目到项目主目录的work文件夹下
 - source: llm_extract_v1
-- confidence: 0.94
-- updated_at: 2026-04-16T20:10:14+08:00
-- note: evidence=我希望你可以构建一个更有趣的小项目在work目录下，你可以新建一个子文件夹，然后实现一个简单的小项目，三四个程序即可，比如说计算器。然后写一个readme
+- confidence: 0.93
+- updated_at: 2026-04-17T00:13:29+08:00
+- note: evidence=帮我写一个简单的小项目到项目主目录的work文件夹下
 
 ### interest_topics
 - value: [编程]
@@ -36,8 +36,8 @@ meta:
 - note: evidence=我希望你将这些整合成一起
 
 ### tooling_stack
-- value: python
+- value: [Python]
 - source: llm_extract_v1
-- confidence: 0.98
-- updated_at: 2026-04-16T19:42:22+08:00
-- note: evidence=写一个简单的python程序
+- confidence: 0.99
+- updated_at: 2026-04-17T00:13:29+08:00
+- note: evidence=我希望写一个简单的python 计算器

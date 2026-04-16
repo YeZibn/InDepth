@@ -120,6 +120,8 @@ class RuntimeModelConfig:
 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN` | `target_keep_ratio_midrun` | `0.40` | midrun 压缩保留比例（0~1，兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `target_keep_ratio_finalize` | `0.40` | finalize 压缩保留比例（0~1） |
 | `COMPACTION_MIN_KEEP_MESSAGES` | `min_keep_messages` | `6` | 最小保留消息数（最小 1） |
+| `COMPACTION_COMPRESSOR_KIND` | `compressor_kind` | `auto` | 压缩器类型：`auto / rule / llm` |
+| `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` | `compressor_llm_max_tokens` | `1200` | LLM 压缩器生成摘要时的 `max_tokens` |
 
 ### 4.2 RuntimeCompressionConfig
 
@@ -136,7 +138,24 @@ class RuntimeCompressionConfig:
     target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
     min_keep_messages: int = 6
+    compressor_kind: str = "auto"
+    compressor_llm_max_tokens: int = 1200
 ```
+
+### 4.2.1 压缩器选择规则
+
+- `compressor_kind=auto`
+  - 真实模型提供者：使用 `LLMContextCompressor`
+  - `MockModelProvider`：自动退回 `ContextCompressor`
+- `compressor_kind=rule`
+  - 始终使用规则压缩
+- `compressor_kind=llm`
+  - 强制优先使用 LLM 压缩，但在模型报错、输出非合法 JSON、或一致性校验失败时回退到规则压缩
+
+### 4.2.2 适用范围
+
+- `midrun` 与 `finalize` 的摘要压缩路径支持 `rule / llm / auto`
+- `event` 触发仍保持工具链替换压缩，不走 LLM 摘要生成
 
 ### 4.2.1 Event 替换压缩安全默认值（SQLiteMemoryStore）
 

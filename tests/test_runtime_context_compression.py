@@ -6,6 +6,9 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
 from app.config.runtime_config import RuntimeCompressionConfig
+from app.core.memory.compressor_factory import build_context_compressor
+from app.core.memory.context_compressor import ContextCompressor
+from app.core.memory.llm_context_compressor import LLMContextCompressor
 from app.core.memory.sqlite_memory_store import SQLiteMemoryStore
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
@@ -70,6 +73,174 @@ class _InMemoryStore:
 
 
 class RuntimeContextCompressionTests(unittest.TestCase):
+    def test_compressor_factory_auto_falls_back_to_rule_for_mock_provider(self):
+        provider = MockModelProvider(scripted_outputs=[])
+        compressor = build_context_compressor(kind="auto", model_provider=provider, llm_max_tokens=800)
+        self.assertIsInstance(compressor, ContextCompressor)
+        self.assertNotIsInstance(compressor, LLMContextCompressor)
+
+    def test_llm_compressor_writes_summary_json_from_model_output(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                json.dumps(
+                    {
+                        "version": "v1_llm",
+                        "task_state": {
+                            "goal": "完成任务A",
+                            "progress": "已读取文件并完成修改",
+                            "next_step": "运行验证",
+                            "completion": 0.8,
+                        },
+                        "decisions": [{"id": "d_1", "what": "先读文件再修改", "why": "降低风险", "turn": 1, "confidence": "high"}],
+                        "constraints": [{"id": "c_1", "rule": "必须遵守审批流程", "source": "system", "immutable": True}],
+                        "artifacts": [{"id": "a_1", "type": "file", "ref": "work/a.py", "summary": "已完成修改", "turn": 1}],
+                        "open_questions": [],
+                        "anchors": [{"msg_id": 1, "turn": 1, "role": "assistant", "reason": "decision"}],
+                    }
+                )
+            ]
+        )
+        compressor = LLMContextCompressor(model_provider=provider, max_tokens=800)
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_llm.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_messages=2,
+                compressor=compressor,
+            )
+            task_id = "llm_compress_task"
+            store.append_message(task_id, "system", "必须遵守审批流程")
+            store.append_message(task_id, "user", "请完成任务A")
+            store.append_message(task_id, "assistant", "先读取文件")
+            store.append_message(task_id, "assistant", "已经修改完成")
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT schema_version, summary_json FROM summaries WHERE conversation_id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "v1_llm")
+            summary = json.loads(row[1])
+            self.assertEqual(summary.get("version"), "v1_llm")
+            self.assertEqual(summary.get("task_state", {}).get("next_step"), "运行验证")
+            self.assertEqual(summary.get("compression_meta", {}).get("compressor_kind_applied"), "llm")
+
+    def test_llm_compressor_falls_back_to_rule_on_invalid_json(self):
+        provider = MockModelProvider(scripted_outputs=["not-json"])
+        compressor = LLMContextCompressor(model_provider=provider, max_tokens=800)
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_llm_fallback.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_messages=2,
+                compressor=compressor,
+            )
+            task_id = "llm_fallback_task"
+            store.append_message(task_id, "system", "必须遵守审批流程")
+            store.append_message(task_id, "user", "请完成任务A")
+            store.append_message(task_id, "assistant", "先读取文件")
+            store.append_message(task_id, "assistant", "已经修改完成")
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT schema_version, summary_json FROM summaries WHERE conversation_id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            summary = json.loads(row[1])
+            self.assertEqual(row[0], "v1")
+            self.assertEqual(summary.get("compression_meta", {}).get("compressor_kind_applied"), "rule")
+            self.assertTrue(bool(summary.get("compression_meta", {}).get("compressor_fallback_used")))
+
+    def test_llm_compressor_falls_back_to_rule_on_consistency_failure(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                json.dumps(
+                    {
+                        "version": "v1_llm",
+                        "task_state": {"goal": "请完成任务A", "progress": "已完成", "next_step": "准备收尾", "completion": 1.0},
+                        "decisions": [],
+                        "constraints": [],
+                        "artifacts": [],
+                        "open_questions": [],
+                        "anchors": [],
+                    }
+                )
+            ]
+        )
+        compressor = LLMContextCompressor(model_provider=provider, max_tokens=800)
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_llm_consistency.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_messages=2,
+                compressor=compressor,
+            )
+            task_id = "llm_consistency_task"
+            store.append_message(task_id, "user", "请完成任务A " + ("a " * 80))
+            store.append_message(task_id, "assistant", "处理中 " + ("b " * 80))
+            store.append_message(task_id, "assistant", "阶段一完成 " + ("c " * 80))
+            store.append_message(task_id, "user", "继续收尾 " + ("d " * 80))
+            store.append_message(task_id, "assistant", "已经修改完成 " + ("e " * 80))
+            store.append_message(task_id, "assistant", "准备收尾 " + ("f " * 80))
+            with store._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO summaries (conversation_id, summary, schema_version, summary_json, last_anchor_msg_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
+                    """,
+                    (
+                        task_id,
+                        "历史摘要",
+                        "v1",
+                        json.dumps(
+                            {
+                                "version": "v1",
+                                "task_state": {"goal": "请完成任务A", "progress": "", "next_step": "", "completion": 0.0},
+                                "decisions": [],
+                                "constraints": [
+                                    {
+                                        "id": "c_1",
+                                        "rule": "必须遵守审批流程",
+                                        "source": "system",
+                                        "immutable": True,
+                                    }
+                                ],
+                                "artifacts": [],
+                                "open_questions": [],
+                                "anchors": [],
+                            },
+                            ensure_ascii=False,
+                        ),
+                        0,
+                    ),
+                )
+                conn.commit()
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+            self.assertEqual(result.get("compressor_kind_applied"), "rule")
+            self.assertTrue(bool(result.get("compressor_fallback_used")))
+
     def test_get_recent_messages_filters_orphan_tool_message(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "runtime_memory_orphan.db")
@@ -420,6 +591,8 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             target_keep_ratio_midrun=0.35,
             target_keep_ratio_finalize=0.50,
             min_keep_messages=6,
+            compressor_kind="auto",
+            compressor_llm_max_tokens=800,
         )
 
         runtime = AgentRuntime(
