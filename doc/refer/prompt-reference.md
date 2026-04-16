@@ -34,14 +34,13 @@ InDepth 的主链路 Prompt 由 `BaseAgent -> AgentRuntime` 共同完成：
 
 ### 2.2 Runtime 侧 system prompt
 
-`AgentRuntime._build_system_prompt()` 的拼接顺序固定为：
+`AgentRuntime._build_system_prompt()` 当前只拼接两部分：
 
-1. `RUNTIME_SYSTEM_PROMPT`（运行时基础约束）
-2. `self.system_prompt`（来自 BaseAgent 的 instructions）
-3. `self.skill_prompt`（技能系统片段）
+1. `self.system_prompt`（来自 BaseAgent 的 instructions）
+2. `self.skill_prompt`（技能系统片段）
 
 代码位置：
-- `app/core/runtime/agent_runtime.py`（`RUNTIME_SYSTEM_PROMPT` 与 `_build_system_prompt`）
+- `app/core/runtime/agent_runtime.py`（`_build_system_prompt`）
 
 ## 3. 运行时消息注入顺序
 

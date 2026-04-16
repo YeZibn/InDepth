@@ -98,7 +98,7 @@ InDepth 的设计遵循以下原则：
 - Tool 体系：统一声明、注册、参数校验、调用封装
 - SubAgent 协同：角色化子代理与并行执行
 - Skills 统一接入：`build_skills_manager` + `<skills_system>` + 技能访问工具（按需读取 instructions/references/scripts）
-- Todo 编排：统一 `todo_id` 语义，避免与 Runtime `task_id` 混淆
+- Todo 编排：统一 `todo_id` 语义，避免与 Runtime `task_id` 混淆，并以 subtask 作为最小执行/协作单元
 - Eval 判定：deterministic verifier + 可选 LLM judge
 - Observability：事件落盘、指标聚合、postmortem
 - Memory 闭环：运行时压缩摘要 + 系统经验卡沉淀
@@ -218,6 +218,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
      - 基础执行：bash、读写文件、时间工具
      - 检索执行：search guard 门禁下的受控搜索
      - 任务编排：todo 工具（创建子任务、状态流转、依赖约束，参数统一为 `todo_id`）
+     - subtask 约束：以“单一可验证动作”为粒度；未完成项不得伪装为 `completed`；阻塞与取消语义当前主要通过依赖、补充子任务与最终报告表达
      - 并行协同：SubAgent 角色化执行（researcher/builder/reviewer/verifier）
    - 输出：结构化工具结果、子任务状态变化、可追溯执行日志。
 
@@ -264,6 +265,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 | [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
 | [**User Preference**](doc/refer/user-preference-reference.md) | **用户偏好记忆存储、API 与使用场景（新增）** |
 | [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
+| [Todo](doc/refer/todo-reference.md) | Todo 编排、subtask 设计、依赖流转、与 SubAgent 协作边界 |
 | [Search Guard](doc/refer/search-guard-reference.md) | 检索门禁、预算与自动扩容策略 |
 | [Eval](doc/refer/eval-reference.md) | 判定模型、verifier 链路 |
 | [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |

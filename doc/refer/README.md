@@ -12,6 +12,7 @@
 - `memory-reference.md`：运行时记忆压缩、结构化摘要、系统记忆卡与事件闭环。
 - **`user-preference-reference.md`：用户偏好记忆存储、API 与使用场景（新增）。**
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
+- `todo-reference.md`：Todo 编排、subtask 设计、依赖流转、与 SubAgent 协作边界。
 - `search-guard-reference.md`：检索门禁会话模型、预算控制、自动扩容与状态诊断。
 - `skills-reference.md`：技能加载、`<skills_system>` 注入、技能访问工具与 Agent 默认差异。
 - `eval-reference.md`：任务评估模型、verifier 链路、判定标准。
@@ -25,14 +26,15 @@
 2. `runtime-reference.md`
 3. `prompt-reference.md`
 4. `tools-reference.md`
-5. `search-guard-reference.md`
-6. `skills-reference.md`
-7. `memory-reference.md`
-8. **`user-preference-reference.md`（新增）**
-9. `eval-reference.md`
-10. `observability-reference.md`
-11. `agent-collaboration-reference.md`
-12. `config-reference.md`
+5. `todo-reference.md`
+6. `search-guard-reference.md`
+7. `skills-reference.md`
+8. `memory-reference.md`
+9. **`user-preference-reference.md`（新增）**
+10. `eval-reference.md`
+11. `observability-reference.md`
+12. `agent-collaboration-reference.md`
+13. `config-reference.md`
 
 ## 3. 代码主映射
 

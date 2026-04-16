@@ -175,6 +175,20 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
                             {"path": "doc/api.md", "must_exist": True, "non_empty": True}
                         ],
                         "known_gaps": ["未执行全量回归"],
+                        "recovery": {
+                            "todo_id": "todo_123",
+                            "subtask_number": 4,
+                            "fallback_record": {
+                                "state": "failed",
+                                "reason_code": "tool_error",
+                                "reason_detail": "bash command failed",
+                            },
+                            "recovery_decision": {
+                                "primary_action": "retry_with_fix",
+                                "decision_level": "auto",
+                                "rationale": "先修正参数再重试",
+                            },
+                        },
                     },
                 },
             },
@@ -190,6 +204,9 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
             self.assertIn("补充接口文档", content)
             self.assertIn("path=doc/api.md; must_exist=True; non_empty=True", content)
             self.assertIn("未执行全量回归", content)
+            self.assertIn("恢复信息", content)
+            self.assertIn("todo_id=todo_123", content)
+            self.assertIn("decision=retry_with_fix / level=auto", content)
 
 
 if __name__ == "__main__":

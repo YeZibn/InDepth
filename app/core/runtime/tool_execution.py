@@ -16,8 +16,9 @@ def handle_native_tool_calls(
     emit_event: Callable[..., Dict[str, Any]],
     trace: Callable[[str], None],
     preview_json: Callable[[Any, int], str],
-) -> List[Dict[str, str]]:
+) -> Dict[str, Any]:
     failures: List[Dict[str, str]] = []
+    executions: List[Dict[str, Any]] = []
     for call in tool_calls:
         call_id = str(call.get("id", ""))
         fn = call.get("function", {}) if isinstance(call, dict) else {}
@@ -44,6 +45,7 @@ def handle_native_tool_calls(
             payload={"tool": tool_name, "args": tool_args},
         )
         result = tool_registry.invoke(tool_name, tool_args)
+        tool_payload = result.get("result") if result.get("success") else result.get("result", {})
         trace(
             f"[tool] name={tool_name} args={preview_json(tool_args, 200)} "
             f"success={result.get('success')} result={preview_json(result, 200)}"
@@ -63,7 +65,7 @@ def handle_native_tool_calls(
             role="general",
             event_type=event_type,
             status="ok" if result.get("success") else "error",
-            payload={"tool": tool_name},
+            payload={"tool": tool_name, "error": str(result.get("error", "")) if not result.get("success") else ""},
         )
         messages.append(
             {
@@ -79,7 +81,16 @@ def handle_native_tool_calls(
                 json.dumps(result, ensure_ascii=False),
                 tool_call_id=call_id,
             )
-    return failures
+        executions.append(
+            {
+                "tool": tool_name,
+                "args": tool_args,
+                "success": bool(result.get("success")),
+                "error": str(result.get("error", "")),
+                "payload": tool_payload if isinstance(tool_payload, dict) else {},
+            }
+        )
+    return {"failures": failures, "executions": executions}
 
 
 def enrich_capture_memory_tool_args(

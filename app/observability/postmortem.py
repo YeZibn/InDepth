@@ -178,6 +178,31 @@ def _format_delivery_block(judgement: Dict[str, Any]) -> List[str]:
                 lines.append(f"  {idx}. {text}")
     else:
         lines.append("- 已知缺口: (none)")
+    recovery = handoff.get("recovery", {})
+    if isinstance(recovery, dict) and recovery:
+        lines.append("- 恢复信息:")
+        todo_id = str(recovery.get("todo_id", "") or "").strip()
+        subtask_number = recovery.get("subtask_number")
+        if todo_id:
+            lines.append(f"  - todo_id={todo_id}")
+        if subtask_number not in (None, ""):
+            lines.append(f"  - subtask_number={subtask_number}")
+        fallback = recovery.get("fallback_record", {})
+        if isinstance(fallback, dict) and fallback:
+            state = str(fallback.get("state", "") or "").strip()
+            reason = str(fallback.get("reason_code", "") or "").strip()
+            detail = str(fallback.get("reason_detail", "") or "").strip()
+            if state or reason or detail:
+                lines.append(f"  - fallback={state or 'unknown'} / {reason or 'n/a'} / {detail or 'n/a'}")
+        decision = recovery.get("recovery_decision", {})
+        if isinstance(decision, dict) and decision:
+            action = str(decision.get("primary_action", "") or "").strip()
+            level = str(decision.get("decision_level", "") or "").strip()
+            rationale = str(decision.get("rationale", "") or "").strip()
+            if action or level:
+                lines.append(f"  - decision={action or 'n/a'} / level={level or 'n/a'}")
+            if rationale:
+                lines.append(f"  - rationale={rationale}")
     return lines
 
 

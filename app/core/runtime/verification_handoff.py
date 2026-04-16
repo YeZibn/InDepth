@@ -10,6 +10,7 @@ def build_rule_verification_handoff(
     stop_reason: str,
     runtime_status: str,
     tool_failures: List[Dict[str, str]],
+    recovery_context: Dict[str, Any],
     preview: Callable[[str, int], str],
 ) -> Dict[str, Any]:
     failures = tool_failures[:5] if isinstance(tool_failures, list) else []
@@ -31,6 +32,29 @@ def build_rule_verification_handoff(
         known_gaps.append(f"stop_reason={stop_reason}")
     if failures:
         known_gaps.append(f"tool_failures={len(failures)}")
+    recovery_context = recovery_context if isinstance(recovery_context, dict) else {}
+    recovery_handoff: Dict[str, Any] = {}
+    todo_id = preview(str(recovery_context.get("todo_id", "") or "").strip(), 120)
+    subtask_number = recovery_context.get("subtask_number")
+    fallback_record = recovery_context.get("fallback_record", {})
+    recovery_decision = recovery_context.get("recovery_decision", {})
+    if todo_id:
+        recovery_handoff["todo_id"] = todo_id
+    if subtask_number not in (None, ""):
+        recovery_handoff["subtask_number"] = subtask_number
+    if isinstance(fallback_record, dict) and fallback_record:
+        recovery_handoff["fallback_record"] = fallback_record
+        reason_code = str(fallback_record.get("reason_code", "") or "").strip()
+        state = str(fallback_record.get("state", "") or "").strip()
+        if reason_code:
+            known_gaps.append(f"recovery_reason={reason_code}")
+        if state:
+            known_gaps.append(f"recovery_state={state}")
+    if isinstance(recovery_decision, dict) and recovery_decision:
+        recovery_handoff["recovery_decision"] = recovery_decision
+        primary_action = str(recovery_decision.get("primary_action", "") or "").strip()
+        if primary_action:
+            known_gaps.append(f"recovery_action={primary_action}")
     return {
         "goal": preview(user_input, 280),
         "constraints": [],
@@ -38,6 +62,7 @@ def build_rule_verification_handoff(
         "claimed_done_items": [preview(final_answer, 280)] if (final_answer or "").strip() else [],
         "key_tool_results": key_tool_results,
         "known_gaps": known_gaps,
+        "recovery": recovery_handoff,
         "self_confidence": 0.8 if runtime_status == "ok" else 0.3,
         "soft_score_threshold": 0.7,
         "rubric": "评估任务完成度、约束满足度、证据充分性。",
@@ -92,6 +117,12 @@ def generate_verification_handoff_llm(
                 }
             ],
             "known_gaps": ["string"],
+            "recovery": {
+                "todo_id": "string",
+                "subtask_number": "integer",
+                "fallback_record": "object",
+                "recovery_decision": "object",
+            },
             "self_confidence": "0~1 float",
             "soft_score_threshold": "0~1 float",
             "rubric": "string",
@@ -142,6 +173,9 @@ def normalize_verification_handoff(
     known_gaps = normalize_handoff_str_list(candidate.get("known_gaps", []), max_items=12, max_len=120, preview=preview)
     if known_gaps:
         out["known_gaps"] = known_gaps
+    recovery = candidate.get("recovery")
+    if isinstance(recovery, dict) and recovery:
+        out["recovery"] = recovery
     out["self_confidence"] = clamp_float(
         candidate.get("self_confidence", fallback.get("self_confidence", 0.8)),
         default=float(fallback.get("self_confidence", 0.8) or 0.8),
