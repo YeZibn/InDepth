@@ -101,8 +101,7 @@
 
 **压缩触发**（`_maybe_compact_mid_run`）：
 1. token 使用比 >= `strong_token_ratio` -> `mode=strong`
-2. 单次 `tool_calls` 条目数 >= `tool_burst_threshold` -> `mode=light`（event）
-3. token 使用比 >= `light_token_ratio` -> `mode=light`
+2. 单次 `tool_calls` 条目数 >= `tool_burst_threshold` -> `mode=event`
 
 **用户偏好存储特性**：
 - Markdown 单文件格式，原子写入
@@ -329,15 +328,13 @@ LLM_BASE_URL         # API 基础 URL
 ```bash
 ENABLE_MID_RUN_COMPACTION=true
 COMPACTION_ROUND_INTERVAL=4
-COMPACTION_LIGHT_TOKEN_RATIO=0.70
 COMPACTION_STRONG_TOKEN_RATIO=0.82
 COMPACTION_CONTEXT_WINDOW_TOKENS=16000
 COMPACTION_KEEP_RECENT_TURNS=8
 COMPACTION_TOOL_BURST_THRESHOLD=5
 COMPACTION_CONSISTENCY_GUARD=true
-COMPACTION_TARGET_KEEP_RATIO_LIGHT=0.55
-COMPACTION_TARGET_KEEP_RATIO_STRONG=0.35
-COMPACTION_TARGET_KEEP_RATIO_FINALIZE=0.50
+COMPACTION_TARGET_KEEP_RATIO_STRONG=0.40
+COMPACTION_TARGET_KEEP_RATIO_FINALIZE=0.40
 COMPACTION_MIN_KEEP_MESSAGES=6
 ```
 

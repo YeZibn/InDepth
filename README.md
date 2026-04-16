@@ -140,11 +140,12 @@ InDepth 的设计遵循以下原则：
 | 环境变量 | 默认值 | 作用 |
 |----------|--------|------|
 | `ENABLE_MID_RUN_COMPACTION` | `True` | 是否启用运行中压缩 |
-| `COMPACTION_LIGHT_TOKEN_RATIO` | `0.70` | 轻量压缩 token 阈值 |
 | `COMPACTION_STRONG_TOKEN_RATIO` | `0.82` | 强力压缩 token 阈值 |
 | `COMPACTION_TOOL_BURST_THRESHOLD` | `5` | 单次 `tool_calls` 条目触发阈值 |
 | `COMPACTION_CONTEXT_WINDOW_TOKENS` | `16000` | 上下文窗口 token 预算 |
 | `COMPACTION_CONSISTENCY_GUARD` | `True` | 一致性守护开关 |
+| `COMPACTION_TARGET_KEEP_RATIO_STRONG` | `0.40` | strong 压缩后目标保留比例 |
+| `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `0.40` | finalize 压缩后目标保留比例 |
 
 ### 4.4 关键目录
 

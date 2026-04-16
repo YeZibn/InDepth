@@ -61,7 +61,7 @@ class _InMemoryStore:
     def compact(self, conversation_id: str) -> None:
         return None
 
-    def compact_mid_run(self, conversation_id: str, trigger: str = "round", mode: str = "light") -> Dict[str, Any]:
+    def compact_mid_run(self, conversation_id: str, trigger: str = "round", mode: str = "") -> Dict[str, Any]:
         self.compact_mid_run_calls += 1
         return {"success": True, "applied": False, "trigger": trigger, "mode": mode}
 
@@ -260,7 +260,6 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 db_file=db_path,
                 summarize_threshold=3,
                 context_window_tokens=16000,
-                target_keep_ratio_light=0.55,
                 min_keep_messages=2,
                 keep_recent_event_tool_pairs=0,
             )
@@ -294,7 +293,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             )
             store.append_message(task_id, "tool", "{\"success\": false, \"error\": \"permission denied\"}", tool_call_id="call_2")
 
-            result = store.compact_mid_run(task_id, trigger="event", mode="light")
+            result = store.compact_mid_run(task_id, trigger="event", mode="event")
             self.assertTrue(bool(result.get("success")))
             self.assertTrue(bool(result.get("applied")))
             self.assertEqual(result.get("trim_strategy"), "tool_chain_replace")
@@ -349,7 +348,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 tool_call_id="call_1",
             )
 
-            result = store.compact_mid_run(task_id, trigger="event", mode="light")
+            result = store.compact_mid_run(task_id, trigger="event", mode="event")
             self.assertTrue(bool(result.get("success")))
             self.assertFalse(bool(result.get("applied")))
             self.assertIn(str(result.get("reason")), {"no_eligible_tool_chain", "below_threshold", "nothing_to_cut"})
@@ -413,13 +412,11 @@ class RuntimeContextCompressionTests(unittest.TestCase):
         compression_config = RuntimeCompressionConfig(
             enabled_mid_run=True,
             round_interval=4,
-            light_token_ratio=0.95,
             strong_token_ratio=0.99,
             context_window_tokens=16000,
             keep_recent_turns=8,
             tool_burst_threshold=1,
             consistency_guard=True,
-            target_keep_ratio_light=0.55,
             target_keep_ratio_strong=0.35,
             target_keep_ratio_finalize=0.50,
             min_keep_messages=6,
