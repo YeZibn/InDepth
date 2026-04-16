@@ -1,13 +1,13 @@
 # InDepth 参考文档总索引
 
-更新时间：2026-04-13
+更新时间：2026-04-16
 
 `doc/refer/` 目标：把"实现事实"沉淀为可查、可维护、可验证的工程参考，而不是概念说明。
 
 ## 1. 文档清单
 
 - `architecture-reference.md`：系统整体架构图、核心模块设计、技术选型依据、组件交互流程。
-- `runtime-reference.md`：`AgentRuntime` 主循环、收敛逻辑、评估与记忆收尾。
+- `runtime-reference.md`：`AgentRuntime` 主循环、收敛逻辑、评估与记忆收尾（含 Runtime CLI 单一 task 模式说明）。
 - `memory-reference.md`：运行时记忆压缩、结构化摘要、系统记忆卡与事件闭环。
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
 - `search-guard-reference.md`：检索门禁会话模型、预算控制、自动扩容与状态诊断。

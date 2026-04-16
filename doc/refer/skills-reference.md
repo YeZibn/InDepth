@@ -1,6 +1,6 @@
 # InDepth Skills 参考
 
-更新时间：2026-04-13
+更新时间：2026-04-16
 
 ## 1. 定位
 
@@ -74,6 +74,7 @@ Skills(_skills)
 
 2. `Runtime CLI`（`app/agent/runtime_agent.py`）
 - 默认 `skill_paths=["app/skills"]`，即加载项目内全部技能。
+- 运行在单一 `task` 模式；普通输入统一走执行链路。
 
 3. `SubAgent`（`app/agent/sub_agent.py`）
 - 默认 `skill_paths=["app/skills/memory-knowledge-skill"]`。
@@ -105,4 +106,3 @@ Skills(_skills)
 
 3. 可以一次加载整个 `app/skills` 吗？
 - 可以。`build_skills_manager(["app/skills"], validate=False)` 会扫描其下技能子目录。
-

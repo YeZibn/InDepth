@@ -1,6 +1,6 @@
 # InDepth Runtime 参考
 
-更新时间：2026-04-15
+更新时间：2026-04-16
 
 ## 1. 定位
 
@@ -459,7 +459,20 @@ class RuntimeCompressionConfig:
 | `BaseAgent` | `app/agent/agent.py` | 主 Agent 封装 |
 | `SubAgent` | `app/agent/sub_agent.py` | 子 Agent 封装 |
 
-### 10.1 CLI 澄清交互
+### 10.1 Runtime CLI（单一 task 模式）
+
+当前 `runtime_agent.py` 采用单一 `task` 模式：
+1. 启动即进入 `task` 模式，并初始化 `task` 任务。
+2. 普通输入统一走执行链路（不再按模式禁用工具）。
+3. `/mode` 仅保留兼容提示：当前只支持 `task` 单模式。
+4. 可用命令：
+   - `/task <label>`：结束旧任务并开启新任务
+   - `/newtask <label>`：`/task` 别名
+   - `/new [label]`：结束旧任务并开启新任务
+   - `/status`：查看 `mode=task` 与当前 `task_id`
+   - `/help`、`/exit`
+
+### 10.2 CLI 澄清交互
 
 当前 CLI 在澄清态（`awaiting_user_input`）增强行为：
 1. 输出样式：
@@ -468,7 +481,7 @@ class RuntimeCompressionConfig:
    - `请直接回复补充信息，我会在当前任务中继续。`
 2. 用户下一次正常输入默认作为澄清补充，沿用同一 `run_id` 恢复执行。
 3. 空输入不会触发模型调用，会提示：`[需要澄清] 请补充信息后继续...`
-4. 支持 `/new [label]` 在当前模式下立即结束旧任务并启动新任务（清空澄清等待态）。
+4. 支持 `/new [label]` 立即结束旧任务并启动新任务（清空澄清等待态）。
 
 ## 11. 测试
 

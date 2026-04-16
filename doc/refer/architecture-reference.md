@@ -1,6 +1,6 @@
 # InDepth 架构参考
 
-更新时间：2026-04-13
+更新时间：2026-04-16
 
 ## 1. 系统架构总览
 
@@ -130,7 +130,7 @@ app/
 ├── agent/                          # Agent 封装
 │   ├── agent.py                    # BaseAgent
 │   ├── sub_agent.py                # SubAgent
-│   ├── runtime_agent.py            # CLI 入口
+│   ├── runtime_agent.py            # CLI 入口（单一 task 模式）
 │   ├── create_skill_agent.py       # 技能创建 Agent
 │   └── prompts/sub_agent_roles/    # 角色提示词模板
 │
