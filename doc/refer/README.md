@@ -8,6 +8,7 @@
 
 - `architecture-reference.md`：系统整体架构图、核心模块设计、技术选型依据、组件交互流程。
 - `runtime-reference.md`：`AgentRuntime` 主循环、收敛逻辑、评估与记忆收尾（含 Runtime CLI 单一 task 模式说明）。
+- `prompt-reference.md`：Prompt 组装、运行时注入顺序、主/子 Agent 提示词来源。
 - `memory-reference.md`：运行时记忆压缩、结构化摘要、系统记忆卡与事件闭环。
 - **`user-preference-reference.md`：用户偏好记忆存储、API 与使用场景（新增）。**
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
@@ -22,15 +23,16 @@
 
 1. `architecture-reference.md`（概览）
 2. `runtime-reference.md`
-3. `tools-reference.md`
-4. `search-guard-reference.md`
-5. `skills-reference.md`
-6. `memory-reference.md`
-7. **`user-preference-reference.md`（新增）**
-8. `eval-reference.md`
-9. `observability-reference.md`
-10. `agent-collaboration-reference.md`
-11. `config-reference.md`
+3. `prompt-reference.md`
+4. `tools-reference.md`
+5. `search-guard-reference.md`
+6. `skills-reference.md`
+7. `memory-reference.md`
+8. **`user-preference-reference.md`（新增）**
+9. `eval-reference.md`
+10. `observability-reference.md`
+11. `agent-collaboration-reference.md`
+12. `config-reference.md`
 
 ## 3. 代码主映射
 

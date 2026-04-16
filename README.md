@@ -259,6 +259,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 | [总索引](doc/refer/README.md) | 文档索引与阅读顺序 |
 | [架构总览](doc/refer/architecture-reference.md) | 系统架构、模块职责、交互流程 |
 | [Runtime](doc/refer/runtime-reference.md) | AgentRuntime 主循环、收敛逻辑 |
+| [Prompt](doc/refer/prompt-reference.md) | Prompt 组装、运行时注入顺序、主/子 Agent 提示词来源 |
 | [Skills](doc/refer/skills-reference.md) | 技能加载、`<skills_system>` 注入、技能访问工具 |
 | [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
 | [**User Preference**](doc/refer/user-preference-reference.md) | **用户偏好记忆存储、API 与使用场景（新增）** |
