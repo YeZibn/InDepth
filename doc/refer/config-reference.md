@@ -112,12 +112,12 @@ class RuntimeModelConfig:
 |----------|------|--------|------|
 | `ENABLE_MID_RUN_COMPACTION` | `enabled_mid_run` | `True` | 是否启用运行时压缩 |
 | `COMPACTION_ROUND_INTERVAL` | `round_interval` | `4` | 兼容保留配置（当前 mid-run 不使用 round 触发） |
-| `COMPACTION_STRONG_TOKEN_RATIO` | `strong_token_ratio` | `0.82` | 强力压缩阈值（0~1） |
+| `COMPACTION_MIDRUN_TOKEN_RATIO` | `midrun_token_ratio` | `0.82` | mid-run 压缩阈值（0~1，兼容旧 `COMPACTION_STRONG_TOKEN_RATIO`） |
 | `COMPACTION_CONTEXT_WINDOW_TOKENS` | `context_window_tokens` | `16000` | 上下文窗口大小（最小 1024） |
 | `COMPACTION_KEEP_RECENT_TURNS` | `keep_recent_turns` | `8` | 预算不可用时的轮次兜底（最小 1） |
 | `COMPACTION_TOOL_BURST_THRESHOLD` | `tool_burst_threshold` | `5` | 单次 `tool_calls` 条目阈值（最小 1） |
 | `COMPACTION_CONSISTENCY_GUARD` | `consistency_guard` | `True` | 是否启用一致性守护 |
-| `COMPACTION_TARGET_KEEP_RATIO_STRONG` | `target_keep_ratio_strong` | `0.40` | strong 压缩保留比例（0~1） |
+| `COMPACTION_TARGET_KEEP_RATIO_MIDRUN` | `target_keep_ratio_midrun` | `0.40` | midrun 压缩保留比例（0~1，兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `target_keep_ratio_finalize` | `0.40` | finalize 压缩保留比例（0~1） |
 | `COMPACTION_MIN_KEEP_MESSAGES` | `min_keep_messages` | `6` | 最小保留消息数（最小 1） |
 
@@ -128,12 +128,12 @@ class RuntimeModelConfig:
 class RuntimeCompressionConfig:
     enabled_mid_run: bool = True
     round_interval: int = 4
-    strong_token_ratio: float = 0.82
+    midrun_token_ratio: float = 0.82
     context_window_tokens: int = 16000
     keep_recent_turns: int = 8
     tool_burst_threshold: int = 5
     consistency_guard: bool = True
-    target_keep_ratio_strong: float = 0.40
+    target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
     min_keep_messages: int = 6
 ```
@@ -158,7 +158,7 @@ class RuntimeCompressionConfig:
 
 | 条件 | trigger | mode | 说明 |
 |------|---------|------|------|
-| `token_ratio >= strong_token_ratio` | `token` | `strong` | 强力压缩 |
+| `token_ratio >= midrun_token_ratio` | `token` | `midrun` | 运行中 token 压缩 |
 | `current_tool_calls_count >= tool_burst_threshold` | `event` | `event` | 事件触发（工具链替换压缩） |
 
 ## 5. GenerationConfig（运行时推理参数）

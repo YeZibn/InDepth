@@ -29,9 +29,9 @@ def maybe_compact_mid_run(
     mode = ""
     estimated_tokens = estimate_context_tokens(messages)
     usage = estimate_context_usage(estimated_tokens)
-    if usage >= compression_config.strong_token_ratio:
+    if usage >= compression_config.midrun_token_ratio:
         trigger = "token"
-        mode = "strong"
+        mode = "midrun"
     elif consecutive_tool_calls >= compression_config.tool_burst_threshold:
         trigger = "event"
         mode = "event"

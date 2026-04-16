@@ -52,7 +52,7 @@ def create_runtime(
             keep_recent=compression_config.keep_recent_turns,
             consistency_guard=compression_config.consistency_guard,
             context_window_tokens=compression_config.context_window_tokens,
-            target_keep_ratio_strong=compression_config.target_keep_ratio_strong,
+            target_keep_ratio_midrun=compression_config.target_keep_ratio_midrun,
             target_keep_ratio_finalize=compression_config.target_keep_ratio_finalize,
             min_keep_messages=compression_config.min_keep_messages,
         ),

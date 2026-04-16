@@ -15,12 +15,12 @@ class RuntimeModelConfig:
 class RuntimeCompressionConfig:
     enabled_mid_run: bool
     round_interval: int
-    strong_token_ratio: float
+    midrun_token_ratio: float
     context_window_tokens: int
     keep_recent_turns: int
     tool_burst_threshold: int
     consistency_guard: bool
-    target_keep_ratio_strong: float
+    target_keep_ratio_midrun: float
     target_keep_ratio_finalize: float
     min_keep_messages: int
 
@@ -109,16 +109,36 @@ def _env_float(name: str, default: float, min_value: float = 0.0, max_value: flo
     return value
 
 
+def _env_float_alias(
+    primary_name: str,
+    legacy_name: str,
+    default: float,
+    min_value: float = 0.0,
+    max_value: float = 1.0,
+) -> float:
+    primary_raw = (os.getenv(primary_name) or "").strip()
+    if primary_raw:
+        return _env_float(primary_name, default, min_value=min_value, max_value=max_value)
+    legacy_raw = (os.getenv(legacy_name) or "").strip()
+    if legacy_raw:
+        return _env_float(legacy_name, default, min_value=min_value, max_value=max_value)
+    return default
+
+
 def load_runtime_compression_config() -> RuntimeCompressionConfig:
     return RuntimeCompressionConfig(
         enabled_mid_run=_env_bool("ENABLE_MID_RUN_COMPACTION", True),
         round_interval=_env_int("COMPACTION_ROUND_INTERVAL", 4, min_value=1),
-        strong_token_ratio=_env_float("COMPACTION_STRONG_TOKEN_RATIO", 0.82),
+        midrun_token_ratio=_env_float_alias("COMPACTION_MIDRUN_TOKEN_RATIO", "COMPACTION_STRONG_TOKEN_RATIO", 0.82),
         context_window_tokens=_env_int("COMPACTION_CONTEXT_WINDOW_TOKENS", 16000, min_value=1024),
         keep_recent_turns=_env_int("COMPACTION_KEEP_RECENT_TURNS", 8, min_value=1),
         tool_burst_threshold=_env_int("COMPACTION_TOOL_BURST_THRESHOLD", 5, min_value=1),
         consistency_guard=_env_bool("COMPACTION_CONSISTENCY_GUARD", True),
-        target_keep_ratio_strong=_env_float("COMPACTION_TARGET_KEEP_RATIO_STRONG", 0.40),
+        target_keep_ratio_midrun=_env_float_alias(
+            "COMPACTION_TARGET_KEEP_RATIO_MIDRUN",
+            "COMPACTION_TARGET_KEEP_RATIO_STRONG",
+            0.40,
+        ),
         target_keep_ratio_finalize=_env_float("COMPACTION_TARGET_KEEP_RATIO_FINALIZE", 0.40),
         min_keep_messages=_env_int("COMPACTION_MIN_KEEP_MESSAGES", 6, min_value=1),
     )

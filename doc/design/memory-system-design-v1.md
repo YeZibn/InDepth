@@ -30,24 +30,24 @@
 
 ## 3. 触发机制
 
-触发优先级：强 token > 事件 > 轮次 > run 结束
+触发优先级：midrun token > 事件 > 轮次 > run 结束
 
 1. token 触发
 - `light`: ratio >= 0.70
-- `strong`: ratio >= 0.82
+- `midrun`: ratio >= 0.82
 
 2. 轮次触发
 - 每 4 步尝试一次轻压缩
 
 3. 事件触发
-- 连续工具调用达到 3 次触发轻压缩
+- 连续工具调用达到 3 次触发事件压缩
 
 ## 4. 当前配置默认值
 
 - `ENABLE_MID_RUN_COMPACTION=true`
 - `COMPACTION_ROUND_INTERVAL=4`
 - `COMPACTION_LIGHT_TOKEN_RATIO=0.70`
-- `COMPACTION_STRONG_TOKEN_RATIO=0.82`
+- `COMPACTION_MIDRUN_TOKEN_RATIO=0.82`
 - `COMPACTION_CONTEXT_WINDOW_TOKENS=16000`
 - `COMPACTION_KEEP_RECENT_TURNS=8`
 - `COMPACTION_TOOL_BURST_THRESHOLD=5`

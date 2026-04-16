@@ -287,16 +287,16 @@ append_message(conversation_id, role, content, ...)
 
 | 优先级 | 条件 | trigger | mode | 说明 |
 |-------|------|---------|------|------|
-| 1 | `token_ratio >= strong_token_ratio` | token | strong | 强力压缩 |
+| 1 | `token_ratio >= midrun_token_ratio` | token | midrun | 运行中 token 压缩 |
 | 2 | `current_tool_calls_count >= tool_burst_threshold` | event | event | 单次 tool_calls 条目触发 |
 
 **默认值**：
 
 | 参数 | 默认值 | 环境变量 |
 |------|--------|---------|
-| `strong_token_ratio` | 0.82 | `COMPACTION_STRONG_TOKEN_RATIO` |
+| `midrun_token_ratio` | 0.82 | `COMPACTION_MIDRUN_TOKEN_RATIO`（兼容旧 `COMPACTION_STRONG_TOKEN_RATIO`） |
 | `tool_burst_threshold` | 5 | `COMPACTION_TOOL_BURST_THRESHOLD` |
-| `target_keep_ratio_strong` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_STRONG` |
+| `target_keep_ratio_midrun` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN`（兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `target_keep_ratio_finalize` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` |
 | `min_keep_messages` | 6 | `COMPACTION_MIN_KEEP_MESSAGES` |
 | `keep_recent_turns` | 8 | `COMPACTION_KEEP_RECENT_TURNS`（预算不可用兜底） |
@@ -311,7 +311,7 @@ append_message(conversation_id, role, content, ...)
 def _compact_impl(
     self,
     conversation_id: str,
-    mode: str,      # strong / event / finalize
+    mode: str,      # midrun / event / finalize
     trigger: str,   # token / event / finalize
     force: bool,
     min_total: int,

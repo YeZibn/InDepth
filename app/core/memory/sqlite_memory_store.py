@@ -42,7 +42,7 @@ class SQLiteMemoryStore:
         summarize_threshold: int = 15,
         consistency_guard: bool = True,
         context_window_tokens: int = 16000,
-        target_keep_ratio_strong: float = 0.40,
+        target_keep_ratio_midrun: float = 0.40,
         target_keep_ratio_finalize: float = 0.40,
         min_keep_messages: int = 6,
         keep_recent_event_tool_pairs: int = 1,
@@ -53,7 +53,7 @@ class SQLiteMemoryStore:
         self.summarize_threshold = summarize_threshold
         self.consistency_guard = bool(consistency_guard)
         self.context_window_tokens = max(int(context_window_tokens), 64)
-        self.target_keep_ratio_strong = max(0.0, min(float(target_keep_ratio_strong), 1.0))
+        self.target_keep_ratio_midrun = max(0.0, min(float(target_keep_ratio_midrun), 1.0))
         self.target_keep_ratio_finalize = max(0.0, min(float(target_keep_ratio_finalize), 1.0))
         self.min_keep_messages = max(int(min_keep_messages), 1)
         self.keep_recent_event_tool_pairs = max(int(keep_recent_event_tool_pairs), 0)
@@ -430,7 +430,7 @@ class SQLiteMemoryStore:
                 return max(int(token_budget), 0)
             except (TypeError, ValueError):
                 return 0
-        ratio = self.target_keep_ratio_strong
+        ratio = self.target_keep_ratio_midrun
         if mode == "finalize":
             ratio = self.target_keep_ratio_finalize
         return max(int(self.context_window_tokens * ratio), 0)

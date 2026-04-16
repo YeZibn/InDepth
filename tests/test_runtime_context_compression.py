@@ -412,12 +412,12 @@ class RuntimeContextCompressionTests(unittest.TestCase):
         compression_config = RuntimeCompressionConfig(
             enabled_mid_run=True,
             round_interval=4,
-            strong_token_ratio=0.99,
+            midrun_token_ratio=0.99,
             context_window_tokens=16000,
             keep_recent_turns=8,
             tool_burst_threshold=1,
             consistency_guard=True,
-            target_keep_ratio_strong=0.35,
+            target_keep_ratio_midrun=0.35,
             target_keep_ratio_finalize=0.50,
             min_keep_messages=6,
         )

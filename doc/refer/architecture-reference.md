@@ -100,7 +100,7 @@
 3. **`UserPreferenceStore`：用户偏好记忆（`memory/preferences/user-preferences.md`）**
 
 **压缩触发**（`_maybe_compact_mid_run`）：
-1. token 使用比 >= `strong_token_ratio` -> `mode=strong`
+1. token 使用比 >= `midrun_token_ratio` -> `mode=midrun`
 2. 单次 `tool_calls` 条目数 >= `tool_burst_threshold` -> `mode=event`
 
 **用户偏好存储特性**：
@@ -328,12 +328,12 @@ LLM_BASE_URL         # API 基础 URL
 ```bash
 ENABLE_MID_RUN_COMPACTION=true
 COMPACTION_ROUND_INTERVAL=4
-COMPACTION_STRONG_TOKEN_RATIO=0.82
+COMPACTION_MIDRUN_TOKEN_RATIO=0.82
 COMPACTION_CONTEXT_WINDOW_TOKENS=16000
 COMPACTION_KEEP_RECENT_TURNS=8
 COMPACTION_TOOL_BURST_THRESHOLD=5
 COMPACTION_CONSISTENCY_GUARD=true
-COMPACTION_TARGET_KEEP_RATIO_STRONG=0.40
+COMPACTION_TARGET_KEEP_RATIO_MIDRUN=0.40
 COMPACTION_TARGET_KEEP_RATIO_FINALIZE=0.40
 COMPACTION_MIN_KEEP_MESSAGES=6
 ```

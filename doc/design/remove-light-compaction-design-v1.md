@@ -5,15 +5,15 @@
 
 当前落地状态（2026-04-16）：
 1. 已移除 mid-run `light` token 压缩触发与配置项。
-2. 已保留 `token/strong`、`event`、`finalize` 三类压缩路径。
+2. 已将唯一的 mid-run token 压缩模式重命名为 `token/midrun`，并保留 `event`、`finalize`。
 3. 已更新核心实现与相关回归测试。
-4. 已将 `target_keep_ratio_strong` 与 `target_keep_ratio_finalize` 默认值统一调整为 `0.40`。
+4. 已将 `target_keep_ratio_midrun` 与 `target_keep_ratio_finalize` 默认值统一调整为 `0.40`。
 
 ## 1. 背景与问题
 
 当前 Runtime 中途压缩存在两档 token 压缩模式：
 1. `light`：上下文占用达到 `light_token_ratio` 时触发。
-2. `strong`：上下文占用达到 `strong_token_ratio` 时触发。
+2. `midrun`：上下文占用达到 `midrun_token_ratio` 时触发。
 
 但在当前实现里，这两档模式的差异主要只有“压缩后保留比例不同”：
 1. 两者都走同一条 `summary_json` 生成链路。
@@ -30,7 +30,7 @@
 
 本方案目标：
 1. 移除中途 `light` token 压缩模式。
-2. 保留 `strong` 作为唯一 token 压缩模式。
+2. 保留 `midrun` 作为唯一 token 压缩模式。
 3. 保留 `event` 工具链替换压缩，不影响其现有职责。
 4. 保留 `finalize` 结束阶段压缩，不影响任务收尾沉淀。
 5. 降低配置、日志、测试和理解复杂度。
@@ -56,23 +56,23 @@
 ### 5.1 触发模型调整
 
 中途压缩触发从当前：
-1. `usage >= strong_token_ratio` -> `token/strong`
+1. `usage >= midrun_token_ratio` -> `token/midrun`
 2. `consecutive_tool_calls >= tool_burst_threshold` -> `event/light`
 3. `usage >= light_token_ratio` -> `token/light`
 
 调整为：
-1. `usage >= strong_token_ratio` -> `token/strong`
+1. `usage >= midrun_token_ratio` -> `token/midrun`
 2. `consecutive_tool_calls >= tool_burst_threshold` -> `event`
 3. 其他情况 -> 不做中途压缩
 
 即：
 1. 删除 `light_token_ratio` 触发分支。
-2. 中途 token 压缩只在达到强阈值时触发。
+2. 中途 token 压缩只在达到 `midrun` 阈值时触发。
 
 ### 5.2 模式集合调整
 
 调整后 Runtime 压缩模式保留为三类：
-1. `token/strong`：唯一中途 token 压缩模式。
+1. `token/midrun`：唯一中途 token 压缩模式。
 2. `event`：最近连续工具链替换压缩。
 3. `finalize`：run 结束后的摘要沉淀压缩。
 
@@ -84,11 +84,11 @@
 
 当前预算：
 1. `light` -> `target_keep_ratio_light`
-2. `strong` -> `target_keep_ratio_strong`
+2. `midrun` -> `target_keep_ratio_midrun`
 3. `finalize` -> `target_keep_ratio_finalize`
 
 调整后预算：
-1. 中途 token 压缩仅使用 `target_keep_ratio_strong`
+1. 中途 token 压缩仅使用 `target_keep_ratio_midrun`
 2. `finalize` 继续使用 `target_keep_ratio_finalize`
 
 也就是说：
@@ -107,7 +107,7 @@
 2. `event` 触发不再赋值 `mode="light"`，建议改为：
    - `trigger="event"`
    - `mode="event"`
-3. 当 `usage < strong_token_ratio` 且未命中 `event` 时，直接返回原始 `messages`。
+3. 当 `usage < midrun_token_ratio` 且未命中 `event` 时，直接返回原始 `messages`。
 
 结果：
 1. 中途 token 压缩只剩一个阈值判断。
@@ -126,14 +126,15 @@
    - `COMPACTION_LIGHT_TOKEN_RATIO`
    - `COMPACTION_TARGET_KEEP_RATIO_LIGHT`
 3. 保留：
-   - `COMPACTION_STRONG_TOKEN_RATIO`
-   - `COMPACTION_TARGET_KEEP_RATIO_STRONG`
+   - `COMPACTION_MIDRUN_TOKEN_RATIO`
+   - `COMPACTION_TARGET_KEEP_RATIO_MIDRUN`
    - `COMPACTION_TARGET_KEEP_RATIO_FINALIZE`
 
 兼容策略建议：
 1. V1 代码层不再使用 light 配置。
-2. 若环境中仍设置 legacy `COMPACTION_LIGHT_TOKEN_RATIO`，默认忽略，不报错。
-3. 文档中明确其已废弃，后续版本再彻底清理。
+2. 对 mid-run 模式，兼容读取 legacy `COMPACTION_STRONG_TOKEN_RATIO` 与 `COMPACTION_TARGET_KEEP_RATIO_STRONG`。
+3. 若环境中仍设置 legacy `COMPACTION_LIGHT_TOKEN_RATIO`，默认忽略，不报错。
+4. 文档中明确其已废弃，后续版本再彻底清理。
 
 ### 6.3 Store 预算逻辑
 
@@ -143,9 +144,9 @@
 建议改动：
 1. 构造函数移除 `target_keep_ratio_light` 参数。
 2. `_resolve_target_keep_tokens()` 改为：
-   - `mode == "strong"` -> `target_keep_ratio_strong`
+   - `mode == "midrun"` -> `target_keep_ratio_midrun`
    - `mode == "finalize"` -> `target_keep_ratio_finalize`
-   - 其他 token 模式默认回退到 `target_keep_ratio_strong` 或明确拒绝非法 mode
+   - 其他 token 模式默认回退到 `target_keep_ratio_midrun` 或明确拒绝非法 mode
 3. 删除与 `light` 相关的分支和测试断言。
 
 ### 6.4 调用装配层
@@ -168,7 +169,7 @@
 
 事件语义调整建议：
 1. `context_compression_started` 的 `mode` 只应出现：
-   - `strong`
+   - `midrun`
    - `event`
    - `finalize`（如有结束阶段记录）
 2. 历史观测数据允许保留旧值，不做迁移。
@@ -186,14 +187,14 @@
 
 1. 失去“70% 就先压一轮”的预防性压缩能力。
 2. 某些长任务会更晚进入 token 压缩。
-3. 在 `70% ~ strong_token_ratio` 区间内，上下文增长会更多依赖 `event` 工具链压缩和自然收敛。
+3. 在 `70% ~ midrun_token_ratio` 区间内，上下文增长会更多依赖 `event` 工具链压缩和自然收敛。
 
 ## 8. 风险与缓解
 
 风险 1：中途压缩触发变晚，可能增加接近 length 风险的概率。  
 缓解：
-1. 保持 `strong_token_ratio` 可配置。
-2. 如果观测到风险升高，可直接下调 `COMPACTION_STRONG_TOKEN_RATIO`，用一个阈值替代原来的双阈值。
+1. 保持 `midrun_token_ratio` 可配置。
+2. 如果观测到风险升高，可直接下调 `COMPACTION_MIDRUN_TOKEN_RATIO`，用一个阈值替代原来的双阈值。
 
 风险 2：某些依赖“较早压缩”的任务，历史消息保留时间变长。  
 缓解：
@@ -209,9 +210,9 @@
 
 建议新增或调整以下回归：
 
-1. `mid_run_should_not_compact_when_usage_below_strong_threshold`
-2. `mid_run_should_compact_with_token_strong_when_usage_reaches_strong_threshold`
-3. `mid_run_should_prefer_event_compaction_for_tool_burst_below_strong_threshold`
+1. `mid_run_should_not_compact_when_usage_below_midrun_threshold`
+2. `mid_run_should_compact_with_token_midrun_when_usage_reaches_midrun_threshold`
+3. `mid_run_should_prefer_event_compaction_for_tool_burst_below_midrun_threshold`
 4. `resolve_target_keep_tokens_should_not_require_light_ratio`
 5. `runtime_compression_config_should_not_expose_light_fields`
 6. `compression_observability_should_not_emit_light_mode`
