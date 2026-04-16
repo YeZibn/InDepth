@@ -152,6 +152,7 @@ class EventRecord:
 | | `search_round_started` | 检索轮次开始 |
 | | `search_round_finished` | 检索轮次结束 |
 | | `search_stopped` | 检索停止 |
+| | `search_budget_auto_overridden` | 检索预算自动扩容 |
 | **记忆** | `memory_triggered` | 记忆触发 |
 | | `memory_retrieved` | 记忆检索 |
 | | `memory_decision_made` | 记忆决策 |
@@ -163,6 +164,8 @@ class EventRecord:
 | | `verification_passed` | 评估通过 |
 | | `verification_failed` | 评估失败 |
 | | `verification_skipped` | 评估跳过（等待用户输入） |
+| **技能** | `skill_loaded` | 技能加载完成 |
+| | `skill_tool_called` | 技能工具被调用 |
 
 ### 3.3 未知事件处理
 

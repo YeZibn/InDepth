@@ -101,23 +101,41 @@ InDepth 的设计遵循以下原则：
 1. 安装依赖
    - `pip install -r requirements.txt`
 2. 配置模型环境变量
-   - `LLM_MODEL_ID`
-   - `LLM_MODEL_MINI_ID`
-   - `LLM_API_KEY`
-   - `LLM_BASE_URL`
+   - 必填：`LLM_MODEL_ID`、`LLM_API_KEY`、`LLM_BASE_URL`
+   - 可选：`LLM_MODEL_MINI_ID`（未设置时回退到 `LLM_MODEL_ID`）
+   - 缺失任一必填项会在启动时抛出 `ValueError`
 3. 启动 CLI
    - `python app/agent/runtime_agent.py`
    - 默认加载 `app/skills/` 下全部技能（当前为 `memory-knowledge-skill`、`ppt-skill`、`skill-creator`）
 4. 常用 CLI 命令
    - `/help`：查看命令帮助
-   - `/mode chat`：切换到聊天模式
-   - `/mode task [label]`：切换到任务模式，并开启新 `task_id`（默认后缀 `_task`，有 label 则使用 label）
-   - `/task <label>`：在任务模式下结束当前任务并启动下一任务
+   - `/task <label>`：结束当前任务并启动下一任务
    - `/newtask <label>`：`/task` 的别名
-   - `/status`：查看当前模式与 `task_id`
+   - `/new [label]`：结束当前任务并启动下一任务
+   - `/status`：查看当前模式（固定 `task`）与 `task_id`
    - `/exit`：退出
 
-### 4.2 关键目录
+### 4.2 运行模式说明（Runtime CLI）
+
+- 当前仅支持 `task` 单模式（启动即进入 `task`）
+- 普通输入统一走执行链路，不再区分 chat/task 的工具可用性
+- 当 Runtime 进入 `awaiting_user_input`：
+  - CLI 会提示 `[需要澄清]`
+  - 用户下一次正常输入会沿用同一 `run_id` 恢复执行
+  - 空输入不会触发模型调用
+
+### 4.3 配置速查（压缩相关，可选）
+
+| 环境变量 | 默认值 | 作用 |
+|----------|--------|------|
+| `ENABLE_MID_RUN_COMPACTION` | `True` | 是否启用运行中压缩 |
+| `COMPACTION_LIGHT_TOKEN_RATIO` | `0.70` | 轻量压缩 token 阈值 |
+| `COMPACTION_STRONG_TOKEN_RATIO` | `0.82` | 强力压缩 token 阈值 |
+| `COMPACTION_TOOL_BURST_THRESHOLD` | `5` | 单次 `tool_calls` 条目触发阈值 |
+| `COMPACTION_CONTEXT_WINDOW_TOKENS` | `16000` | 上下文窗口 token 预算 |
+| `COMPACTION_CONSISTENCY_GUARD` | `True` | 一致性守护开关 |
+
+### 4.4 关键目录
 
 ```text
 app/
@@ -137,6 +155,23 @@ work/                    # 交付物输出
 observability-evals/     # 评估与复盘输出
 InDepth.md               # 运行协议
 ```
+
+### 4.5 默认工具能力（简版）
+
+| 类别 | 关键工具 | 用途 |
+|------|---------|------|
+| 基础执行 | `bash`、`read_file`、`write_file`、`get_current_time` | 命令执行与文件操作 |
+| 检索门禁 | `init_search_guard`、`guarded_ddg_search`、`update_search_progress`、`build_search_conclusion` | 受控检索与预算治理 |
+| 子代理协同 | `create_sub_agent`、`run_sub_agent`、`run_sub_agents_parallel` | 角色化并行执行 |
+| Todo 编排 | `create_task`、`update_task_status`、`get_next_task_item`、`generate_task_report` | 子任务管理与进度跟踪 |
+| 记忆工具 | `capture_runtime_memory_candidate`、`search_memory_cards` | 经验捕获与检索 |
+
+### 4.6 观测与产物落点
+
+- 全量事件流（JSONL）：`app/observability/data/events.jsonl`
+- 记忆事件与经验卡（SQLite）：`db/system_memory.db`
+- 每次运行复盘目录：`observability-evals/<task_id>__<run_id>/`
+- 复盘主文件：`observability-evals/<task_id>__<run_id>/postmortem.md`
 
 ## 5. 分层架构
 
@@ -187,18 +222,20 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
    - 输出：`task_judged` 判定结果（系统级最终判定依据）。
 
 5. 记忆层（L5）
-   - 作用：让系统具备“经验可积累、后续可复用”的长期能力。
+   - 作用：让系统具备"经验可积累、后续可复用"的长期能力。
    - 关键模块：
      - Runtime memory：`app/core/memory/sqlite_memory_store.py`
      - 压缩器：`app/core/memory/context_compressor.py`
      - System memory：`app/core/memory/system_memory_store.py`
+     - **用户偏好：`app/core/memory/user_preference_store.py`（新增）**
    - 主要机制：
      - 运行中压缩分两路：`token` 触发写入 `summary_json`；`event` 触发将连续工具调用段替换为单条摘要消息（状态工具豁免、保留最近工具单元）
      - 任务开始前执行 system memory 高精度召回（最多 5 条，摘要注入，未命中不阻塞）
      - 运行中候选记忆捕获保持 tool 显式调用（`capture_runtime_memory_candidate`）
      - 任务结束强制沉淀经验卡（`memory_card`）
      - 记忆事件（triggered/retrieved/decision）进入 observability 链路
-   - 输出：结构化历史摘要、系统经验卡、可统计的记忆治理数据。
+     - **用户偏好记忆：Markdown 单文件存储，支持置信度与来源追踪，用于个性化提示词注入**
+   - 输出：结构化历史摘要、系统经验卡、**用户偏好画像**、可统计的记忆治理数据。
 
 ### 5.1 System Architecture
 
@@ -211,12 +248,21 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 | 文档 | 说明 |
 |------|------|
 | [总索引](doc/refer/README.md) | 文档索引与阅读顺序 |
+| [架构总览](doc/refer/architecture-reference.md) | 系统架构、模块职责、交互流程 |
 | [Runtime](doc/refer/runtime-reference.md) | AgentRuntime 主循环、收敛逻辑 |
 | [Skills](doc/refer/skills-reference.md) | 技能加载、`<skills_system>` 注入、技能访问工具 |
 | [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
+| [**User Preference**](doc/refer/user-preference-reference.md) | **用户偏好记忆存储、API 与使用场景（新增）** |
 | [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
 | [Search Guard](doc/refer/search-guard-reference.md) | 检索门禁、预算与自动扩容策略 |
 | [Eval](doc/refer/eval-reference.md) | 判定模型、verifier 链路 |
 | [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
 | [Agent 协同](doc/refer/agent-collaboration-reference.md) | 主从 Agent 协同与角色路由 |
 | [配置](doc/refer/config-reference.md) | 模型配置、压缩配置、环境变量 |
+
+## 7. 常用测试入口
+
+- 运行全部测试：`pytest`
+- Runtime 关键链路：`pytest tests/test_runtime_eval_integration.py tests/test_runtime_context_compression.py`
+- 工具与协同：`pytest tests/test_tool_registry.py tests/test_sub_agent_tool.py tests/test_sub_agent_role_tools.py`
+- 检索门禁自动扩容：`pytest tests/test_search_guard_auto_override.py`

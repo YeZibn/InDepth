@@ -9,6 +9,7 @@
 - `architecture-reference.md`：系统整体架构图、核心模块设计、技术选型依据、组件交互流程。
 - `runtime-reference.md`：`AgentRuntime` 主循环、收敛逻辑、评估与记忆收尾（含 Runtime CLI 单一 task 模式说明）。
 - `memory-reference.md`：运行时记忆压缩、结构化摘要、系统记忆卡与事件闭环。
+- **`user-preference-reference.md`：用户偏好记忆存储、API 与使用场景（新增）。**
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
 - `search-guard-reference.md`：检索门禁会话模型、预算控制、自动扩容与状态诊断。
 - `skills-reference.md`：技能加载、`<skills_system>` 注入、技能访问工具与 Agent 默认差异。
@@ -25,16 +26,18 @@
 4. `search-guard-reference.md`
 5. `skills-reference.md`
 6. `memory-reference.md`
-7. `eval-reference.md`
-8. `observability-reference.md`
-9. `agent-collaboration-reference.md`
-10. `config-reference.md`
+7. **`user-preference-reference.md`（新增）**
+8. `eval-reference.md`
+9. `observability-reference.md`
+10. `agent-collaboration-reference.md`
+11. `config-reference.md`
 
 ## 3. 代码主映射
 
 - 架构核心：`app/core/runtime/agent_runtime.py` + `app/core/*`
 - 工具体系：`app/core/tools/*` + `app/tool/*`
-- 记忆体系：`app/core/memory/*`
+- 记忆体系：`app/core/memory/*`（含 SQLiteMemoryStore、SystemMemoryStore、**UserPreferenceStore**）
 - 评估体系：`app/eval/*`
 - 可观测性：`app/observability/*`
 - 主/子代理：`app/agent/agent.py` + `app/agent/sub_agent.py` + `app/tool/sub_agent_tool/sub_agent_tool.py`
+- 用户偏好：`app/core/memory/user_preference_store.py` + `memory/preferences/user-preferences.md`

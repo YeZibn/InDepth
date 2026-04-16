@@ -94,14 +94,20 @@
 
 ### 2.4 MemoryStore (`app/core/memory/`)
 
-**两条链路**：
+**三条链路**：
 1. `SQLiteMemoryStore`：Runtime 会话记忆（`db/runtime_memory_*.db`）
 2. `SystemMemoryStore`：系统经验记忆（`db/system_memory.db`）
+3. **`UserPreferenceStore`：用户偏好记忆（`memory/preferences/user-preferences.md`）**
 
 **压缩触发**（`_maybe_compact_mid_run`）：
 1. token 使用比 >= `strong_token_ratio` -> `mode=strong`
 2. 单次 `tool_calls` 条目数 >= `tool_burst_threshold` -> `mode=light`（event）
 3. token 使用比 >= `light_token_ratio` -> `mode=light`
+
+**用户偏好存储特性**：
+- Markdown 单文件格式，原子写入
+- 支持置信度与来源追踪（`source=explicit_user|llm_extract_v1`）
+- 用于个性化提示词注入
 
 ### 2.5 EvalOrchestrator (`app/eval/orchestrator.py`)
 
@@ -136,10 +142,15 @@ app/
 │
 ├── core/
 │   ├── runtime/
-│   │   └── agent_runtime.py         # 主循环
+│   │   ├── agent_runtime.py         # 主循环
+│   │   ├── runtime_utils.py         # 运行时工具
+│   │   ├── system_memory_lifecycle.py  # 系统记忆生命周期
+│   │   ├── tool_execution.py        # 工具执行
+│   │   └── verification_handoff.py  # 验证交接
 │   ├── model/
 │   │   ├── base.py                 # ModelProvider 抽象
-│   │   └── http_chat_provider.py   # HTTP 模型适配
+│   │   ├── http_chat_provider.py   # HTTP 模型适配
+│   │   └── mock_provider.py        # Mock 模型适配
 │   ├── tools/
 │   │   ├── decorator.py            # @tool 装饰器
 │   │   ├── registry.py             # 工具注册表
@@ -148,6 +159,7 @@ app/
 │   ├── memory/
 │   │   ├── sqlite_memory_store.py  # 会话记忆
 │   │   ├── system_memory_store.py  # 系统记忆
+│   │   ├── user_preference_store.py # 用户偏好存储（新增）
 │   │   └── context_compressor.py   # 压缩逻辑
 │   ├── skills/
 │   │   ├── factory.py              # skills manager 构建入口
@@ -163,8 +175,11 @@ app/
 │   ├── read_file_tool.py
 │   ├── write_file_tool.py
 │   ├── get_current_time_tool.py
+│   ├── memory_query_tool.py        # 记忆查询工具
+│   ├── runtime_memory_harvest_tool.py  # 运行时记忆捕获
 │   ├── search_tool/
 │   │   ├── ddg_search_tool.py      # DuckDuckGo 搜索
+│   │   ├── baidu_search_tool.py    # 百度搜索
 │   │   ├── url_search_tool.py
 │   │   └── search_guard.py         # 搜索门禁
 │   ├── sub_agent_tool/
@@ -186,7 +201,8 @@ app/
 │   ├── store.py                    # 事件存储
 │   ├── metrics.py                  # 指标聚合
 │   ├── postmortem.py               # 复盘生成
-│   └── trace.py                    # trace 构建
+│   ├── trace.py                    # trace 构建
+│   └── schema.py                   # 观测数据模型
 │
 └── skills/                         # 项目内技能
     ├── memory-knowledge-skill/     # 记忆知识技能

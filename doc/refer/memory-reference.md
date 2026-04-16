@@ -1,20 +1,22 @@
 # InDepth Memory 参考
 
-更新时间：2026-04-14
+更新时间：2026-04-16
 
 ## 1. 模块范围
 
-当前记忆体系由两条链路组成：
+当前记忆体系由**三条链路**组成：
 
 | 链路 | 用途 | 存储 |
 |------|------|------|
 | Runtime 会话记忆 | 多轮对话上下文管理 | `db/runtime_memory_*.db` (SQLite) |
 | 系统经验记忆 | 跨任务经验沉淀与检索 | `db/system_memory.db` (SQLite) |
+| **用户偏好记忆** | **用户个人偏好持久化** | **`memory/preferences/user-preferences.md`** |
 
 相关代码：
 - `app/core/memory/sqlite_memory_store.py` - Runtime 记忆存储
 - `app/core/memory/context_compressor.py` - 上下文压缩器
 - `app/core/memory/system_memory_store.py` - 系统记忆存储
+- **`app/core/memory/user_preference_store.py` - 用户偏好存储（新增）**
 - `app/tool/runtime_memory_harvest_tool.py` - 候选记忆捕获工具
 - `app/tool/memory_query_tool.py` - 记忆检索工具
 - `app/observability/store.py::SystemMemoryEventStore` - 记忆事件落盘
@@ -56,6 +58,16 @@
 │  │ SQLite                  │   │ JSONL + SQLite     │               │
 │  │ db/runtime_memory_*.db │   │ events.jsonl       │               │
 │  └─────────────────────────┘   └─────────────────────┘               │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                   UserPreferenceStore (新增)                      │   │
+│  │                                                                  │   │
+│  │  ┌───────────────────┐        ┌─────────────────────────────┐   │   │
+│  │  │  Markdown 解析器  │───────▶│ user-preferences.md         │   │   │
+│  │  │  - 原子写入       │        │ - 用户偏好键值对            │   │   │
+│  │  │  - 版本管理       │        │ - 置信度与来源追踪          │   │   │
+│  │  └───────────────────┘        └─────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1022,7 +1034,96 @@ def emit_event(...):
 | token 预算优先 | `token/finalize` 路径按预算裁剪，`keep_recent_turns` 仅作兜底 |
 | event 就地替换 | `event` 路径删除连续工具段并插入替代消息，不写 `summary_json` |
 
-## 11. 测试映射
+## 11. 用户偏好存储（UserPreferenceStore）
+
+### 11.1 定位
+
+`UserPreferenceStore` 提供**单层、单文件的 Markdown 格式**用户偏好存储，与 Runtime Memory 和 System Memory 形成互补：
+
+| 维度 | UserPreferenceStore | RuntimeMemoryStore | SystemMemoryStore |
+|------|---------------------|-------------------|-------------------|
+| **存储内容** | 用户个人偏好 | 会话上下文 | 任务经验卡片 |
+| **存储格式** | Markdown 单文件 | SQLite | SQLite |
+| **数据来源** | 用户声明/LLM提取 | 对话消息 | 任务执行沉淀 |
+| **使用场景** | 个性化提示词注入 | 多轮对话管理 | 跨任务经验检索 |
+| **置信度追踪** | ✅ 有 | ❌ 无 | ❌ 无 |
+| **来源追踪** | ✅ 有（source字段） | ❌ 无 | ❌ 无 |
+
+### 11.2 存储位置
+
+默认路径：`memory/preferences/user-preferences.md`
+
+### 11.3 数据结构
+
+```markdown
+# User Preferences
+
+meta:
+- version: 1
+- updated_at: 2026-04-16T00:36:16+08:00
+- enabled: true
+
+## preferences
+
+### interest_topics
+- value: [编程, AI]
+- source: llm_extract_v1
+- confidence: 0.96
+- updated_at: 2026-04-16T00:36:16+08:00
+- note: evidence=用户提到喜欢编程
+
+### job_role
+- value: 程序员
+- source: explicit_user
+- confidence: 0.98
+- updated_at: 2026-04-16T00:36:16+08:00
+- note: 用户自我介绍
+```
+
+### 11.4 核心 API
+
+```python
+from app.core.memory.user_preference_store import UserPreferenceStore
+
+store = UserPreferenceStore()
+
+# 检查启用状态
+if store.is_enabled():
+    # 获取所有偏好
+    prefs = store.list_preferences()
+    
+    # 插入/更新偏好
+    store.upsert_preference(
+        key="coding_style",
+        value="简洁优先",
+        source="explicit_user",  # 或 "llm_extract_v1"
+        confidence=0.95,
+        note="用户明确说明"
+    )
+    
+    # 获取单个偏好
+    pref = store.get_preference("interest_topics")
+    
+    # 删除偏好
+    store.delete_preference("old_preference")
+```
+
+### 11.5 特性
+
+1. **原子写入**：使用临时文件 + `os.replace` 避免写入损坏
+2. **自动初始化**：文件不存在时自动创建默认结构
+3. **容错解析**：解析失败时返回安全默认值
+4. **值类型支持**：支持字符串和列表两种值类型
+
+### 11.6 使用场景
+
+1. **LLM 提取用户偏好**：对话中自动识别用户兴趣、角色等信息
+2. **用户显式设置**：用户直接声明的偏好（如"我喜欢简洁的代码"）
+3. **个性化提示词注入**：在 Agent 系统提示词中注入用户偏好上下文
+
+详见独立文档：`user-preference-reference.md`
+
+## 12. 测试映射
 
 | 测试文件 | 覆盖内容 |
 |---------|---------|
@@ -1031,3 +1132,5 @@ def emit_event(...):
 | `tests/test_system_memory_store.py` | 系统记忆存储 CRUD、检索 |
 | `tests/test_memory_observability_events.py` | 记忆观测事件 SQLite 落盘 |
 | `tests/test_runtime_eval_integration.py` | 启动召回注入、任务结束沉淀 |
+| `tests/test_user_preference_store.py` | 用户偏好存储 CRUD |
+| `tests/test_user_preference_runtime.py` | 用户偏好运行时集成 |

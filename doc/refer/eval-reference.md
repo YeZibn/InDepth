@@ -299,9 +299,93 @@ VerifierAgent 必须输出严格 JSON：
 - 禁止路径穿越（如 `/etc/passwd`）
 - 只允许读取 project root 下的文件
 
-## 6. Runtime 集成
+## 6. 澄清门评估（Clarification Gate）
 
-### 6.1 事件顺序
+### 6.1 定位
+
+澄清门用于判断模型输出的内容是"最终答案"还是"需要用户澄清"。当模型输出疑似澄清请求时，系统会暂停执行，等待用户补充信息。
+
+相关代码：
+- `app/eval/orchestrator.py::ClarificationGate` - 澄清门判定
+- `app/eval/agent/verifier_agent.py` - 澄清判定 Agent
+
+### 6.2 判定流程
+
+```
+模型输出
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 1. 启发式预筛选                                              │
+│    - 包含问号？                                               │
+│    - 包含澄清关键词（如"请提供"、"需要确认"）？              │
+│    - 长度较短（<100字符）？                                   │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ├──▶ 未命中启发式 ──▶ 视为最终答案，继续执行
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. LLM Judge 判定（ClarificationJudge）                      │
+│    - 输入：模型输出 + 历史上下文                             │
+│    - 输出：{is_clarification_request, confidence, reason}    │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ├──▶ 判定为澄清请求 ──▶ 进入 awaiting_user_input 状态
+    │
+    └──▶ 判定为最终答案 ──▶ 继续执行
+```
+
+### 6.3 状态流转
+
+```
+AgentRuntime.run() 执行中
+    │
+    ▼
+模型返回疑似澄清内容
+    │
+    ▼
+ClarificationGate.evaluate()
+    │
+    ├──▶ 判定为澄清请求
+    │       │
+    │       ▼
+    │   runtime_state = "awaiting_user_input"
+    │       │
+    │       ▼
+    │   emit_event(clarification_requested)
+    │       │
+    │       ▼
+    │   返回澄清问题给 CLI
+    │       │
+    │       ▼
+    │   用户输入补充信息
+    │       │
+    │       ▼
+    │   emit_event(user_clarification_received)
+    │       │
+    │       ▼
+    │   emit_event(run_resumed)
+    │       │
+    │       ▼
+    │   同一 run_id 恢复执行
+    │
+    └──▶ 判定为最终答案
+            │
+            ▼
+        继续正常执行流程
+```
+
+### 6.4 关键特性
+
+1. **同一 run_id 恢复**：澄清恢复使用同一 `run_id`，保持执行连续性
+2. **会话记忆保留**：Runtime memory 中保留完整对话历史
+3. **评估跳过**：澄清等待阶段触发 `verification_skipped`，不触发 `task_judged`
+4. **可配置阈值**：`CLARIFICATION_CONFIDENCE_THRESHOLD`（默认 0.7）
+
+## 7. Runtime 集成
+
+### 7.1 事件顺序
 
 ```
 AgentRuntime.run() 结束
@@ -335,15 +419,15 @@ emit_event(task_judged)
 postmortem 生成（覆盖写）
 ```
 
-### 6.2 postmortem 时机
+### 7.2 postmortem 时机
 
 - `task_finished`：先生成初版（给 VerifierAgent 提供同 run 证据）
 - `task_judged`：评估后覆盖写最终版
 - `verification_skipped`：澄清等待阶段也会生成 run 级复盘（无最终判定）
 
-## 7. 扩展指南
+## 8. 扩展指南
 
-### 7.1 添加自定义 Verifier
+### 8.1 添加自定义 Verifier
 
 ```python
 class CustomVerifier(BaseVerifier):
@@ -362,7 +446,7 @@ class CustomVerifier(BaseVerifier):
         )
 ```
 
-### 7.2 注册到默认链路
+### 8.2 注册到默认链路
 
 修改 `build_default_deterministic_verifiers()`：
 
@@ -376,7 +460,7 @@ def build_default_deterministic_verifiers():
     ]
 ```
 
-## 8. 测试映射
+## 9. 测试映射
 
 | 测试文件 | 覆盖内容 |
 |---------|---------|
@@ -384,14 +468,15 @@ def build_default_deterministic_verifiers():
 | `tests/test_verifier_agent.py` | LLM Judge、输出解析 |
 | `tests/test_runtime_eval_integration.py` | Runtime 集成、事件顺序 |
 | `tests/test_self_reported_success.py` | 自我报告推断 |
+| `tests/test_clarification_llm_judge.py` | 澄清门判定 |
 
-## 9. Postmortem 交付内容映射
+## 10. Postmortem 交付内容映射
 
 生成时机说明：
 - `verification_handoff` 优先在 step 终态时构建（非 `awaiting_user_input`）。
 - 循环外评估前仍保留一次兜底生成。
 
-postmortem 会从 `task_judged.payload.verification_handoff` 渲染“交付内容”区块，重点展示：
+postmortem 会从 `task_judged.payload.verification_handoff` 渲染"交付内容"区块，重点展示：
 - `claimed_done_items`
 - `expected_artifacts`
 - `known_gaps`

@@ -156,9 +156,10 @@ Model returns tool_calls ---> ToolRegistry.invoke(name, args)
 
 **职责**：管理会话历史与上下文压缩
 
-两条链路：
+三条链路：
 1. `SQLiteMemoryStore`：Runtime 会话记忆
 2. `SystemMemoryStore`：系统经验记忆
+3. `UserPreferenceStore`：用户偏好记忆（用于个性化提示词注入）
 
 ### 3.4 EvalOrchestrator
 
@@ -213,7 +214,7 @@ def run(
 | 其他 + 有文本 | fallback 收敛 | `fallback_content` |
 | 其他 + 空 | 标记错误 | `model_failed` |
 
-### 4.4 澄清判定链路
+### 4.4 澄清判定与恢复链路
 
 `finish_reason=stop` 且有文本时：
 1. 进入澄清判定子流程 `_judge_clarification_request(...)`。
@@ -226,7 +227,38 @@ def run(
 5. 命中澄清时：
    - `runtime_state=awaiting_user_input`
    - 发 `clarification_requested`
-   - 跳过 verifier（发 `verification_skipped`）。
+   - 跳过 verifier（发 `verification_skipped`）
+
+#### 澄清恢复机制
+
+当 Runtime 进入 `awaiting_user_input` 状态后：
+
+```
+用户输入补充信息
+    │
+    ▼
+emit_event(user_clarification_received)
+    │
+    ▼
+emit_event(run_resumed)
+    │
+    ▼
+AgentRuntime.run(
+    user_input=<补充信息>,
+    resume_from_waiting=True,  # 关键参数
+    task_id=<相同task_id>,
+    run_id=<相同run_id>        # 保持连续性
+)
+    │
+    ▼
+从上次中断点继续执行（保留完整对话历史）
+```
+
+**关键特性**：
+- **同一 run_id**：恢复执行使用相同的 `run_id`，保证观测事件连续性
+- **会话记忆保留**：`SQLiteMemoryStore` 中保留完整对话历史
+- **自动检测**：`resume_from_waiting=True` 时自动检测并恢复状态
+- **空输入处理**：空输入不会触发模型调用，提示用户补充信息
 
 ## 5. 上下文压缩
 
