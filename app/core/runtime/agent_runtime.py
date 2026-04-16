@@ -113,6 +113,18 @@ class AgentRuntime:
     START_RECALL_TOP_K = 5
     START_RECALL_MIN_SCORE = 0.65
     START_RECALL_CANDIDATE_POOL = 50
+    TODO_BINDING_GUARD_MODE = "warn"
+    TODO_BINDING_EXEMPT_TOOLS = {
+        "create_task",
+        "list_tasks",
+        "get_next_task",
+        "get_task_progress",
+        "generate_task_report",
+        "update_task_status",
+        "record_task_fallback",
+        "plan_task_recovery",
+        "append_followup_subtasks",
+    }
 
     def __init__(
         self,
@@ -1162,18 +1174,32 @@ class AgentRuntime:
         task_id: str,
         run_id: str,
     ) -> Dict[str, Any]:
-        return handle_native_tool_calls(
-            tool_calls=tool_calls,
-            messages=messages,
-            task_id=task_id,
-            run_id=run_id,
-            tool_registry=self.tool_registry,
-            memory_store=self.memory_store,
-            enrich_capture_memory_tool_args=self._enrich_capture_memory_tool_args,
-            emit_event=emit_event,
-            trace=self._trace,
-            preview_json=self._preview_json,
-        )
+        failures: List[Dict[str, str]] = []
+        executions: List[Dict[str, Any]] = []
+        for call in tool_calls:
+            fn = call.get("function", {}) if isinstance(call, dict) else {}
+            tool_name = str(fn.get("name", "")).strip()
+            self._maybe_emit_todo_binding_warning(tool_name=tool_name, task_id=task_id, run_id=run_id)
+            outcome = handle_native_tool_calls(
+                tool_calls=[call],
+                messages=messages,
+                task_id=task_id,
+                run_id=run_id,
+                tool_registry=self.tool_registry,
+                memory_store=self.memory_store,
+                enrich_capture_memory_tool_args=self._enrich_capture_memory_tool_args,
+                emit_event=emit_event,
+                trace=self._trace,
+                preview_json=self._preview_json,
+            )
+            batch_failures = outcome.get("failures", [])
+            batch_executions = outcome.get("executions", [])
+            if isinstance(batch_failures, list):
+                failures.extend(batch_failures)
+            if isinstance(batch_executions, list):
+                executions.extend(batch_executions)
+                self._update_active_todo_context(batch_executions)
+        return {"failures": failures, "executions": executions}
 
     def _update_active_todo_context(self, executions: List[Dict[str, Any]]) -> None:
         for execution in executions:
@@ -1183,14 +1209,28 @@ class AgentRuntime:
             if tool == "create_task" and execution.get("success"):
                 todo_id = str(payload.get("todo_id", "")).strip()
                 if todo_id:
-                    self._active_todo_context = {"todo_id": todo_id, "subtask_number": None}
+                    self._active_todo_context = {
+                        "todo_id": todo_id,
+                        "active_subtask_number": None,
+                        "execution_phase": "planning",
+                        "binding_required": True,
+                    }
             elif tool == "update_task_status":
                 todo_id = str(args.get("todo_id", payload.get("todo_id", ""))).strip()
                 subtask_number = args.get("subtask_number")
                 if todo_id and subtask_number is not None:
+                    status = str(args.get("status", "") or "").strip()
+                    active_number = int(subtask_number)
+                    if status in {"completed", "abandoned", "pending"}:
+                        active_number = None
+                    phase = "executing" if status == "in-progress" else "planning"
+                    if status in {"blocked", "failed", "partial", "awaiting_input", "timed_out"}:
+                        phase = "recovering"
                     self._active_todo_context = {
                         "todo_id": todo_id,
-                        "subtask_number": int(subtask_number),
+                        "active_subtask_number": active_number,
+                        "execution_phase": phase,
+                        "binding_required": True,
                     }
             elif tool == "record_task_fallback":
                 todo_id = str(args.get("todo_id", payload.get("todo_id", ""))).strip()
@@ -1198,14 +1238,91 @@ class AgentRuntime:
                 if todo_id and subtask_number is not None:
                     self._active_todo_context = {
                         "todo_id": todo_id,
-                        "subtask_number": int(subtask_number),
+                        "active_subtask_number": int(subtask_number),
+                        "execution_phase": "recovering",
+                        "binding_required": True,
                     }
             elif tool == "get_next_task":
                 todo_id = str(args.get("todo_id", "")).strip()
                 next_task = payload.get("next_task", {}) if isinstance(payload, dict) else {}
                 number = next_task.get("number")
                 if todo_id and number:
-                    self._active_todo_context = {"todo_id": todo_id, "subtask_number": int(number)}
+                    self._active_todo_context = {
+                        "todo_id": todo_id,
+                        "active_subtask_number": int(number),
+                        "execution_phase": "planning",
+                        "binding_required": True,
+                    }
+
+    def _tool_requires_todo_binding(self, tool_name: str) -> bool:
+        tool_norm = str(tool_name or "").strip()
+        if not tool_norm:
+            return False
+        return tool_norm not in self.TODO_BINDING_EXEMPT_TOOLS
+
+    def _maybe_emit_todo_binding_warning(self, tool_name: str, task_id: str, run_id: str) -> None:
+        if self.TODO_BINDING_GUARD_MODE != "warn":
+            return
+        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
+        todo_id = str(ctx.get("todo_id", "") or "").strip()
+        active_subtask_number = ctx.get("active_subtask_number")
+        binding_required = bool(ctx.get("binding_required"))
+        if not todo_id or not binding_required:
+            return
+        if active_subtask_number not in (None, ""):
+            return
+        if not self._tool_requires_todo_binding(tool_name):
+            return
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="todo_binding_missing_warning",
+            status="error",
+            payload={
+                "todo_id": todo_id,
+                "tool": tool_name,
+                "execution_phase": str(ctx.get("execution_phase", "") or ""),
+                "guard_mode": self.TODO_BINDING_GUARD_MODE,
+            },
+        )
+
+    def _build_orphan_todo_recovery(self, final_answer: str, stop_reason: str) -> Dict[str, Any]:
+        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
+        todo_id = str(ctx.get("todo_id", "") or "").strip()
+        phase = str(ctx.get("execution_phase", "") or "planning").strip() or "planning"
+        fallback_record = {
+            "state": "failed",
+            "reason_code": "orphan_subtask_unbound",
+            "reason_detail": "Todo flow failed before the runtime could bind the current step to an active subtask.",
+            "impact_scope": "Automatic subtask-level recovery could not continue because no active subtask was selected.",
+            "retryable": True,
+            "required_input": ["Bind the next action to a concrete subtask before resuming execution."],
+            "suggested_next_action": "decision_handoff",
+            "evidence": [self._preview(final_answer, 300)],
+            "owner": "main",
+            "retry_count": 0,
+            "retry_budget_remaining": 1,
+            "failure_stage": phase,
+        }
+        recovery_decision = {
+            "primary_action": "decision_handoff",
+            "recommended_actions": ["decision_handoff", "split"],
+            "decision_level": "agent_decide",
+            "rationale": "The todo is active, but the failing step was not bound to a concrete subtask.",
+            "preserve_artifacts": [],
+            "next_subtasks": [],
+            "resume_condition": "Select or create the correct subtask, then mark it in-progress before resuming work.",
+            "escalation_reason": "Runtime could not attribute the failure to a concrete subtask.",
+            "stop_auto_recovery": True,
+            "suggested_owner": "main",
+        }
+        return {
+            "todo_id": todo_id,
+            "fallback_record": fallback_record,
+            "recovery_decision": recovery_decision,
+        }
 
     def _build_runtime_fallback_record(
         self,
@@ -1294,10 +1411,30 @@ class AgentRuntime:
     ) -> None:
         ctx = self._active_todo_context or {}
         todo_id = str(ctx.get("todo_id", "")).strip()
-        subtask_number = ctx.get("subtask_number")
-        if not todo_id or subtask_number is None:
+        subtask_number = ctx.get("active_subtask_number")
+        if not todo_id:
             return
         if runtime_state == "completed":
+            return
+        if subtask_number is None:
+            self._latest_todo_recovery = self._build_orphan_todo_recovery(
+                final_answer=final_answer,
+                stop_reason=stop_reason,
+            )
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="todo_orphan_failure_detected",
+                status="error",
+                payload={
+                    "todo_id": todo_id,
+                    "stop_reason": stop_reason,
+                    "runtime_state": runtime_state,
+                    "execution_phase": str(ctx.get("execution_phase", "") or ""),
+                },
+            )
             return
         if not self.tool_registry.has("record_task_fallback") or not self.tool_registry.has("plan_task_recovery"):
             return

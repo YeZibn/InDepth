@@ -12,6 +12,111 @@ from app.tool.todo_tool.todo_tool import _parse_task_file, load_todo_tools
 
 
 class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
+    def test_runtime_reports_orphan_failure_when_todo_is_unbound(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Demo Todo","context":"Runtime orphan demo",'
+                                                    '"split_reason":"Need tracked todo recovery",'
+                                                    '"subtasks":[{"name":"Implement step","description":"Do the work"}]}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_fail",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "always_fail",
+                                                "arguments": '{"text":"boom"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": ""},
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        registry.register(
+            ToolSpec(
+                name="always_fail",
+                description="Always fail for testing",
+                handler=lambda text: {"success": False, "error": f"forced failure: {text}"},
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+
+        runtime = AgentRuntime(model_provider=provider, tool_registry=registry, max_steps=3, enable_verification_handoff_llm=False)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_999999_demo"),
+            ):
+                final = runtime.run(
+                    "Please create a todo and execute the implementation step.",
+                    task_id="runtime_todo_orphan_task",
+                    run_id="runtime_todo_orphan_run",
+                )
+
+            self.assertIn("恢复摘要:", final)
+            self.assertIn("todo: 20260416_999999_demo", final)
+            self.assertIn("failure: failed / orphan_subtask_unbound", final)
+            self.assertIn("next: decision_handoff / agent_decide", final)
+            self.assertNotIn("subtask:", final)
+            parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
+            self.assertEqual(parsed["subtasks"][0]["status"], "pending")
+
     def test_runtime_auto_records_fallback_and_appends_followups_after_tool_failure(self):
         provider = MockModelProvider(
             scripted_outputs=[

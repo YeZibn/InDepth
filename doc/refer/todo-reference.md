@@ -309,13 +309,26 @@ follow-up subtask 的 `kind` 当前支持：
 
 `AgentRuntime` 现在会跟踪活跃的 todo 上下文：
 - `todo_id`
-- `subtask_number`
+- `active_subtask_number`
+- `execution_phase`
+- `binding_required`
 
 上下文来源于工具执行结果，例如：
 - `create_task`
 - `update_task_status`
 - `record_task_fallback`
 - `get_next_task`
+
+当前语义：
+- `create_task` 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
+- `update_task_status(..., status="in-progress")` 后，runtime 会把该 subtask 视为当前 active subtask，并进入 `executing`
+- `record_task_fallback(...)` 后，runtime 会把该 subtask 视为恢复中的 subtask，并进入 `recovering`
+- `get_next_task` 返回 ready subtask 后，runtime 会记录候选 active subtask，但此时仍属于“待激活”状态，阶段仍偏向 `planning`
+
+这意味着 runtime 已经不只是“记住最近的 todo_id”，而是开始区分：
+- 当前是否已经进入 todo 执行流
+- 当前是否已经绑定具体 subtask
+- 当前是在规划、执行，还是恢复阶段
 
 ### 10.2 自动触发点
 
@@ -338,6 +351,49 @@ follow-up subtask 的 `kind` 当前支持：
 - 失败记录不再只靠 agent 自觉
 - 即便 agent 没主动做恢复登记，runtime 也会在失败出口补上
 
+### 10.4 当前新增的绑定告警与 orphan failure
+
+当前 runtime 还没有把“每个 step 都必须绑定 subtask”升级为强拦截，但已经新增了一层 `warn` 级 guard：
+
+- 当 todo 已创建
+- 且 runtime 认为当前动作应属于某个 subtask
+- 但模型仍直接调用普通业务工具
+
+runtime 会记录 `todo_binding_missing_warning` 观测事件。
+
+当前被视为“补救性/编排性”的工具包括：
+- `create_task`
+- `list_tasks`
+- `get_next_task`
+- `get_task_progress`
+- `generate_task_report`
+- `update_task_status`
+- `record_task_fallback`
+- `plan_task_recovery`
+- `append_followup_subtasks`
+
+除这些工具外，其他工具默认会被视为“需要 active subtask 绑定的普通执行工具”。
+
+#### 10.4.1 orphan failure
+
+当前 runtime 还新增了一个重要异常分支：`orphan failure`
+
+含义：
+- 已经创建了 todo
+- 但失败发生时还没有 active subtask
+- 导致失败无法归属到具体 subtask
+
+当前处理方式：
+- runtime 不再静默跳过恢复链路
+- 会生成一份最小恢复摘要
+- `reason_code = orphan_subtask_unbound`
+- `primary_action = decision_handoff`
+- `decision_level = agent_decide`
+
+这种情况下：
+- 当前 todo 文件里的 subtask 不会被自动改写成 `failed`
+- 但最终交付与恢复摘要会明确说明：当前失败来自“todo 已存在，但执行未绑定到具体 subtask”
+
 ## 11. 恢复信息如何外溢
 
 当前恢复信息会进一步进入以下位置：
@@ -345,7 +401,7 @@ follow-up subtask 的 `kind` 当前支持：
 1. `verification_handoff.recovery`
    包含：
    - `todo_id`
-   - `subtask_number`
+   - `subtask_number`（若存在 active subtask）
    - `fallback_record`
    - `recovery_decision`
 
