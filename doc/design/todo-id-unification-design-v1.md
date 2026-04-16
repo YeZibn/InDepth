@@ -23,7 +23,7 @@
 
 对外参数改造：
 1. `update_task_status(todo_id, subtask_number, status)`
-2. `get_next_task_item(todo_id)`
+2. `get_next_task(todo_id)`
 3. `get_task_progress(todo_id)`
 4. `generate_task_report(todo_id)`
 

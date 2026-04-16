@@ -181,7 +181,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 当前工具仍然会对 `in-progress`、`completed`、`partial` 做依赖检查：
 - 若依赖未满足，不允许直接推进。
 
-`get_next_task_item()` 只会返回依赖满足的 `pending` 任务作为下一个 ready subtask。
+`get_next_task()` 只会返回依赖满足的 `pending` 任务作为下一个 ready subtask。
 
 ## 7. Fallback 记录
 

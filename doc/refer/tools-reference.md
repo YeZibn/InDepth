@@ -161,7 +161,7 @@
 │  │  create_task ──▶ update_task_status                               │   │
 │  │       │                     │                                    │   │
 │  │       ▼                     ▼                                    │   │
-│  │  list_tasks ──▶ get_next_task_item                               │   │
+│  │  list_tasks ──▶ get_next_task                                    │   │
 │  │       │                     │                                    │   │
 │  │       ▼                     ▼                                    │   │
 │  │  get_task_progress ──▶ generate_task_report                      │   │
@@ -422,7 +422,7 @@ append_followup_subtasks(
 
 # 查询任务
 list_tasks() -> List[Dict]
-get_next_task_item(todo_id: str) -> Dict
+get_next_task(todo_id: str) -> Dict
 get_task_progress(todo_id: str) -> Dict
 
 # 生成报告
@@ -457,12 +457,14 @@ record_task_fallback()
 ```
 
 **运行时接入**：
-1. Runtime 会跟踪当前活跃的 `todo_id/subtask_number`
+1. Runtime 会跟踪当前活跃的 todo 执行上下文，包括 `todo_id/active_subtask_number/execution_phase/binding_required`
 2. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
    - 调 `record_task_fallback`
    - 调 `plan_task_recovery`
    - 对 `decision_level=auto` 的恢复决策追加 follow-up subtasks
-3. 恢复信息会进一步进入：
+3. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
+4. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
+5. 恢复信息会进一步进入：
    - `verification_handoff.recovery`
    - `task_judged.payload.verification_handoff`
    - postmortem “交付内容”区块
@@ -520,5 +522,5 @@ SubAgent 按角色挂载不同工具集：
 | `tests/test_main_agent.py` | 主 Agent 工具注册 |
 | `tests/test_sub_agent_role_tools.py` | 角色工具隔离 |
 | `tests/test_sub_agent_tool.py` | reviewer/verifier 创建门禁 |
-| `tests/test_tool_registry.py` | 注册与调用 |
-| `tests/test_tool_validation.py` | 参数校验 |
+| `tests/test_runtime_todo_recovery_integration.py` | Runtime Todo 恢复链路与 orphan failure |
+| `tests/test_todo_recovery_flow.py` | Todo 恢复状态机、fallback 与 follow-up subtasks |
