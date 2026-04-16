@@ -185,7 +185,7 @@ class MainAgentTests(unittest.TestCase):
         agent._awaiting_user_input = True
         agent._active_run_id = "main_agent_deadbeef"
         mode, msg, handled = handle_cli_command(agent, "/new cli_reset", "chat")
-        self.assertEqual(mode, "chat")
+        self.assertEqual(mode, "task")
         self.assertTrue(handled)
         self.assertIn("已结束任务", msg)
         self.assertNotEqual(agent.current_task_id, old_task_id)

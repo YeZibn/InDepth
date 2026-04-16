@@ -20,20 +20,19 @@ def build_runtime_cli_agent() -> BaseAgent:
 
 def handle_cli_command(agent: BaseAgent, command: str, mode: str) -> tuple[str, str, bool]:
     text = (command or "").strip()
+    normalized_mode = "task"
     if not text.startswith("/"):
-        return mode, "", False
+        return normalized_mode, "", False
 
     if text in {"/help", "/h"}:
         return (
-            mode,
+            normalized_mode,
             (
                 "命令:\n"
-                "/mode chat - 切换到聊天模式\n"
-                "/mode task [label] - 切换到任务模式（自动开启新任务并结束旧任务）\n"
-                "/task <label> - 在任务模式下开启新任务并结束旧任务\n"
+                "/task <label> - 开启新任务并结束旧任务\n"
                 "/newtask <label> - /task 的别名\n"
-                "/new [label] - 在当前模式下结束旧任务并开启新任务\n"
-                "/status - 查看当前模式和 task_id\n"
+                "/new [label] - 结束旧任务并开启新任务\n"
+                "/status - 查看当前模式（固定为 task）和 task_id\n"
                 "/exit - 退出"
             ),
             True,
@@ -42,35 +41,16 @@ def handle_cli_command(agent: BaseAgent, command: str, mode: str) -> tuple[str, 
     if text.startswith("/mode "):
         mode_args = text.split()[1:]
         target = (mode_args[0] if mode_args else "").strip().lower()
-        task_label = " ".join(mode_args[1:]).strip()
-        if target not in {"chat", "task"}:
-            return mode, "无效模式，仅支持: chat/task", True
-        if target == mode:
-            return mode, f"当前已是 {mode} 模式。", True
         if target == "task":
-            old_task_id = agent.current_task_id
-            new_task_id = agent.start_new_task(task_label or "task")
-            return (
-                "task",
-                f"已进入 task 模式。\n已结束任务: {old_task_id}\n新任务: {new_task_id}",
-                True,
-            )
-        old_task_id = agent.current_task_id
-        new_task_id = agent.start_new_task("chat")
-        return (
-            "chat",
-            f"已进入 chat 模式。\n已结束任务: {old_task_id}\n新任务: {new_task_id}",
-            True,
-        )
+            return normalized_mode, "当前仅支持 task 单模式。", True
+        return normalized_mode, "chat 模式已移除，当前仅支持 task 单模式。", True
 
     if text.startswith("/task") or text.startswith("/newtask"):
-        if mode != "task":
-            return mode, "请先使用 /mode task 进入任务模式。", True
         label = text.split(" ", 1)[1].strip() if " " in text else ""
         old_task_id = agent.current_task_id
         new_task_id = agent.start_new_task(label or "next_task")
         return (
-            mode,
+            normalized_mode,
             f"已结束任务: {old_task_id}\n新任务已启动: {new_task_id}",
             True,
         )
@@ -78,27 +58,26 @@ def handle_cli_command(agent: BaseAgent, command: str, mode: str) -> tuple[str, 
     if text.startswith("/new"):
         label = text.split(" ", 1)[1].strip() if " " in text else ""
         old_task_id = agent.current_task_id
-        default_label = "chat" if mode == "chat" else "next_task"
-        new_task_id = agent.start_new_task(label or default_label)
+        new_task_id = agent.start_new_task(label or "next_task")
         return (
-            mode,
+            normalized_mode,
             f"已结束任务: {old_task_id}\n新任务已启动: {new_task_id}",
             True,
         )
 
     if text == "/status":
-        return mode, f"mode={mode}, task_id={agent.current_task_id}", True
+        return normalized_mode, f"mode=task, task_id={agent.current_task_id}", True
 
     if text == "/exit":
-        return mode, "", False
+        return normalized_mode, "", False
 
-    return mode, f"未知命令: {text}，输入 /help 查看命令。", True
+    return normalized_mode, f"未知命令: {text}，输入 /help 查看命令。", True
 
 
 if __name__ == "__main__":
     agent = build_runtime_cli_agent()
-    mode = "chat"
-    agent.start_new_task("chat")
+    mode = "task"
+    agent.start_new_task("task")
     print("欢迎使用 InDepth Runtime（BaseAgent 模式）！输入 'exit' 退出。\n")
     print("输入 /help 查看命令。\n")
 
