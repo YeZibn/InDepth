@@ -25,6 +25,8 @@ class RuntimeCompressionConfig:
     min_keep_turns: int
     compressor_kind: str
     compressor_llm_max_tokens: int
+    event_summarizer_kind: str
+    event_summarizer_max_tokens: int
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,8 @@ def load_runtime_compression_config() -> RuntimeCompressionConfig:
         min_keep_turns=_env_int("COMPACTION_MIN_KEEP_TURNS", 3, min_value=1),
         compressor_kind=(os.getenv("COMPACTION_COMPRESSOR_KIND") or "auto").strip().lower() or "auto",
         compressor_llm_max_tokens=_env_int("COMPACTION_COMPRESSOR_LLM_MAX_TOKENS", 1200, min_value=200),
+        event_summarizer_kind=(os.getenv("COMPACTION_EVENT_SUMMARIZER_KIND") or "auto").strip().lower() or "auto",
+        event_summarizer_max_tokens=_env_int("COMPACTION_EVENT_SUMMARIZER_MAX_TOKENS", 280, min_value=120),
     )
 
 

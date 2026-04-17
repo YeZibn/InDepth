@@ -20,6 +20,7 @@ class MockModelProvider:
             {
                 "messages": [dict(m) for m in messages],
                 "tools": [dict(t) for t in tools],
+                "config": config,
             }
         )
         if not self._outputs:

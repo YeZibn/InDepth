@@ -1,6 +1,6 @@
 # InDepth 架构参考
 
-更新时间：2026-04-16
+更新时间：2026-04-17
 
 ## 1. 系统架构总览
 
@@ -102,6 +102,10 @@
 **压缩触发**（`_maybe_compact_mid_run`）：
 1. token 使用比 >= `midrun_token_ratio` -> `mode=midrun`
 2. 单次 `tool_calls` 条目数 >= `tool_burst_threshold` -> `mode=event`
+
+**压缩实现分工**：
+- `midrun/finalize`：由 `ContextCompressor / LLMContextCompressor` 生成 `summary_json`
+- `event`：由 `SQLiteMemoryStore` 做工具链替换；替代摘要支持独立的 `rule / llm / auto`，真实 provider 默认优先 mini 模型
 
 **用户偏好存储特性**：
 - Markdown 单文件格式，原子写入

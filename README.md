@@ -149,12 +149,15 @@ InDepth 的设计遵循以下原则：
 | `COMPACTION_MIN_KEEP_TURNS` | `3` | 压缩后至少保留最近 3 轮原文 |
 | `COMPACTION_COMPRESSOR_KIND` | `auto` | 压缩器类型：`auto / rule / llm` |
 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` | `1200` | LLM 压缩摘要生成 token 上限 |
+| `COMPACTION_EVENT_SUMMARIZER_KIND` | `auto` | `event` 工具链替代摘要器类型：`auto / rule / llm` |
+| `COMPACTION_EVENT_SUMMARIZER_MAX_TOKENS` | `280` | `event` 工具链 mini 摘要生成 token 上限 |
 
 压缩器说明：
 - `auto`：真实模型默认使用 LLM 压缩；`MockModelProvider` 自动回退到规则压缩，方便测试稳定复现
 - `rule`：始终使用现有规则压缩器
 - `llm`：优先使用 LLM 压缩；若模型报错、输出非 JSON 或一致性校验失败，则自动回退到规则压缩
-- `event` 路径仍然只做工具链替换压缩；LLM 压缩仅用于 `midrun/finalize` 摘要生成
+- `midrun/finalize` 路径使用 `COMPACTION_COMPRESSOR_*` 控制结构化摘要压缩
+- `event` 路径使用独立的 `COMPACTION_EVENT_SUMMARIZER_*` 控制工具链替代摘要；真实运行时默认优先使用 mini 模型，失败回退规则摘要
 
 ### 4.4 关键目录
 

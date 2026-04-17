@@ -562,6 +562,143 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             self.assertFalse(bool(result.get("applied")))
             self.assertIn(str(result.get("reason")), {"no_eligible_tool_chain", "below_threshold", "nothing_to_cut"})
 
+    def test_event_compaction_uses_llm_summary_with_mini_model_override(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                json.dumps(
+                    {
+                        "summary": "读取了两个关键文件并尝试执行测试，测试失败暴露出压缩链路中的回归点。",
+                        "key_results": [
+                            "定位到 runtime 与 memory compaction 两个核心实现位置",
+                            "测试执行失败并返回具体错误摘要",
+                        ],
+                        "failures": ["1 failed, 12 passed"],
+                    }
+                )
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_event_llm.db")
+            with patch("app.core.memory.llm_tool_chain_summarizer.load_runtime_model_config") as mock_cfg:
+                mock_cfg.return_value = type("Cfg", (), {"mini_model_id": "mini-test-model"})()
+                store = SQLiteMemoryStore(
+                    db_file=db_path,
+                    summarize_threshold=3,
+                    keep_recent_event_tool_pairs=0,
+                    event_summarizer_kind="llm",
+                    event_summarizer_max_tokens=180,
+                    event_summarizer_model_provider=provider,
+                )
+                task_id = "event_llm_task"
+                store.append_message(task_id, "user", "帮我处理这个任务")
+                store.append_message(
+                    task_id,
+                    "assistant",
+                    "",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"},
+                        }
+                    ],
+                )
+                store.append_message(task_id, "tool", "{\"success\": true, \"content\": \"A\"}", tool_call_id="call_1")
+                store.append_message(
+                    task_id,
+                    "assistant",
+                    "",
+                    tool_calls=[
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": "{\"command\":\"pytest\"}"},
+                        }
+                    ],
+                )
+                store.append_message(task_id, "tool", "{\"success\": false, \"error\": \"1 failed, 12 passed\"}", tool_call_id="call_2")
+
+                result = store.compact_mid_run(task_id, trigger="event", mode="event")
+                self.assertTrue(bool(result.get("success")))
+                self.assertTrue(bool(result.get("applied")))
+                self.assertEqual(result.get("tool_chain_summary_applied"), "llm")
+                self.assertEqual(result.get("tool_chain_summary_model"), "mini-test-model")
+
+                with store._connect() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT role, content
+                        FROM messages
+                        WHERE conversation_id = ?
+                        ORDER BY id ASC
+                        """,
+                        (task_id,),
+                    ).fetchall()
+
+                self.assertIn("读取了两个关键文件并尝试执行测试", str(rows[1][1]))
+                cfg = provider.requests[-1]["config"]
+                self.assertEqual(str(cfg.provider_options.get("model")), "mini-test-model")
+
+    def test_event_compaction_falls_back_to_rule_on_invalid_llm_json(self):
+        provider = MockModelProvider(scripted_outputs=["not-json"])
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_event_llm_fallback.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                keep_recent_event_tool_pairs=0,
+                event_summarizer_kind="llm",
+                event_summarizer_model_provider=provider,
+            )
+            task_id = "event_llm_fallback_task"
+            store.append_message(task_id, "user", "帮我处理这个任务")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": true, \"content\": \"A\"}", tool_call_id="call_1")
+            store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=[
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "write_file", "arguments": "{\"path\":\"b.txt\"}"},
+                    }
+                ],
+            )
+            store.append_message(task_id, "tool", "{\"success\": false, \"error\": \"permission denied\"}", tool_call_id="call_2")
+
+            result = store.compact_mid_run(task_id, trigger="event", mode="event")
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+            self.assertEqual(result.get("tool_chain_summary_applied"), "rule")
+            self.assertTrue(bool(result.get("tool_chain_summary_fallback_used")))
+            self.assertIn("llm_error", str(result.get("tool_chain_summary_fallback_reason")))
+
+            with store._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT role, content
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+
+            self.assertIn("- summary:", str(rows[1][1]))
+
     def test_runtime_triggers_mid_run_compaction_by_event(self):
         provider = MockModelProvider(
             scripted_outputs=[
@@ -631,6 +768,8 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             min_keep_turns=3,
             compressor_kind="auto",
             compressor_llm_max_tokens=800,
+            event_summarizer_kind="auto",
+            event_summarizer_max_tokens=280,
         )
 
         runtime = AgentRuntime(

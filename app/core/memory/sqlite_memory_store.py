@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.memory.context_compressor import ContextCompressor
+from app.core.memory.llm_tool_chain_summarizer import summarize_tool_chain_payload
+from app.core.model.base import ModelProvider
 
 
 @dataclass
@@ -48,6 +50,9 @@ class SQLiteMemoryStore:
         keep_recent_event_tool_pairs: int = 1,
         event_stateful_tools: Optional[List[str]] = None,
         compressor: Optional[ContextCompressor] = None,
+        event_summarizer_kind: str = "rule",
+        event_summarizer_max_tokens: int = 280,
+        event_summarizer_model_provider: Optional[ModelProvider] = None,
     ):
         self.db_file = db_file
         self.keep_recent = keep_recent
@@ -70,6 +75,9 @@ class SQLiteMemoryStore:
             if str(x).strip()
         }
         self.compressor = compressor or ContextCompressor()
+        self.event_summarizer_kind = str(event_summarizer_kind or "rule").strip().lower() or "rule"
+        self.event_summarizer_max_tokens = max(int(event_summarizer_max_tokens), 120)
+        self.event_summarizer_model_provider = event_summarizer_model_provider
         os.makedirs(os.path.dirname(db_file) or ".", exist_ok=True)
         self._init_db()
 
@@ -583,7 +591,7 @@ class SQLiteMemoryStore:
             if len(chain_rows) <= 1:
                 return {"success": True, "applied": False, "reason": "tool_chain_too_short", "total": total}
 
-            chain_summary = self._build_tool_chain_summary(chain_rows)
+            chain_summary, summary_meta = self._build_tool_chain_summary(chain_rows)
             anchor_id = chain_rows[0].id
             conn.execute(
                 """
@@ -612,6 +620,11 @@ class SQLiteMemoryStore:
                 "dropped_messages": max(len(chain_rows) - 1, 0),
                 "replaced_message_count": len(chain_rows),
                 "inserted_summary_message_id": anchor_id,
+                "tool_chain_summary_requested": str(summary_meta.get("tool_chain_summary_requested", "")),
+                "tool_chain_summary_applied": str(summary_meta.get("tool_chain_summary_applied", "")),
+                "tool_chain_summary_fallback_used": bool(summary_meta.get("tool_chain_summary_fallback_used", False)),
+                "tool_chain_summary_fallback_reason": str(summary_meta.get("tool_chain_summary_fallback_reason", "")),
+                "tool_chain_summary_model": str(summary_meta.get("tool_chain_summary_model", "")),
                 "tool_chain_span": {
                     "start_message_id": chain_rows[0].id,
                     "end_message_id": chain_rows[-1].id,
@@ -728,24 +741,84 @@ class SQLiteMemoryStore:
     def _is_stateful_tool_name(self, tool_name: str) -> bool:
         return str(tool_name or "").strip().lower() in self.event_stateful_tools
 
-    def _build_tool_chain_summary(self, rows: List[_MessageRow]) -> str:
+    def _build_tool_chain_summary(self, rows: List[_MessageRow]) -> Tuple[str, Dict[str, Any]]:
+        payload = self._collect_tool_chain_payload(rows)
+        llm_result = summarize_tool_chain_payload(
+            payload=payload,
+            model_provider=self.event_summarizer_model_provider,
+            kind=self.event_summarizer_kind,
+            max_tokens=self.event_summarizer_max_tokens,
+        )
+        summary_meta = llm_result.get("meta", {}) if isinstance(llm_result, dict) else {}
+        summary_line = str(llm_result.get("summary", "") or "").strip() if isinstance(llm_result, dict) else ""
+        key_results = [
+            str(x).strip()
+            for x in ((llm_result.get("key_results") or []) if isinstance(llm_result, dict) else [])
+            if str(x).strip()
+        ]
+        failures = [
+            str(x).strip()
+            for x in ((llm_result.get("failures") or []) if isinstance(llm_result, dict) else [])
+            if str(x).strip()
+        ]
+        if not summary_line:
+            summary_line = str(payload.get("default_summary", "")).strip()
+        if not key_results:
+            key_results = [str(x).strip() for x in (payload.get("default_key_results") or []) if str(x).strip()]
+        if not failures:
+            failures = [str(x).strip() for x in (payload.get("default_failures") or []) if str(x).strip()]
+
+        tools_text = str(payload.get("tools_text", "") or "unknown").strip()
+        success_count = int(payload.get("success_count", 0) or 0)
+        failed_count = int(payload.get("failed_count", 0) or 0)
+        key_id_text = str(payload.get("key_id_text", "") or "none").strip() or "none"
+        result_text = " | ".join([x for x in key_results[:3] if x]) or "n/a"
+        failure_text = "; ".join([x for x in failures[:3] if x]) or "none"
+
+        text = (
+            "[tool-chain-compact] 已压缩连续工具调用段。\n"
+            f"- tools: {tools_text}\n"
+            f"- stats: success={success_count}, failed={failed_count}\n"
+            f"- summary: {summary_line}\n"
+            f"- key_ids: {key_id_text}\n"
+            f"- key_results: {result_text}\n"
+            f"- failures: {failure_text}"
+        )[:2200]
+        return text, summary_meta
+
+    def _collect_tool_chain_payload(self, rows: List[_MessageRow]) -> Dict[str, Any]:
         tool_names: List[str] = []
         success_count = 0
         failed_count = 0
         failure_samples: List[str] = []
         result_samples: List[str] = []
         key_ids: Dict[str, str] = {}
+        call_name_map: Dict[str, str] = {}
+        executions: List[Dict[str, Any]] = []
 
         for row in rows:
             role = str(row.role or "").strip().lower()
             if role == "assistant":
-                tool_names.extend(self._extract_tool_names_from_assistant_row(row))
+                for call in self._parse_tool_calls_json(row.tool_calls_json):
+                    fn = call.get("function", {}) if isinstance(call, dict) else {}
+                    call_id = str(call.get("id", "")).strip()
+                    name = str(fn.get("name", "")).strip()
+                    if name:
+                        tool_names.append(name)
+                    if call_id and name:
+                        call_name_map[call_id] = name
                 continue
             if role != "tool":
                 continue
 
             parsed = self._parse_json_object(row.content)
             if isinstance(parsed, dict):
+                execution: Dict[str, Any] = {
+                    "tool": call_name_map.get(str(row.tool_call_id or "").strip(), ""),
+                    "success": bool(parsed.get("success")) if isinstance(parsed.get("success"), bool) else None,
+                    "error": str(parsed.get("error", "")).strip(),
+                    "payload_preview": "",
+                }
                 success_val = parsed.get("success")
                 if isinstance(success_val, bool):
                     if success_val:
@@ -758,28 +831,48 @@ class SQLiteMemoryStore:
                 preview = self._compact_preview_json(parsed)
                 if preview:
                     result_samples.append(preview)
+                    execution["payload_preview"] = preview
                 for key, value in self._extract_key_identifiers(parsed).items():
                     key_ids.setdefault(key, value)
+                if key_ids:
+                    execution["key_ids"] = {
+                        key: value for key, value in self._extract_key_identifiers(parsed).items()
+                    }
+                executions.append(execution)
             else:
                 result_samples.append(str(row.content or "").strip()[:120])
+                executions.append(
+                    {
+                        "tool": call_name_map.get(str(row.tool_call_id or "").strip(), ""),
+                        "success": None,
+                        "error": "",
+                        "payload_preview": str(row.content or "").strip()[:120],
+                    }
+                )
 
         tool_counter: Dict[str, int] = {}
         for name in tool_names:
             tool_counter[name] = tool_counter.get(name, 0) + 1
         tool_parts = [f"{name}x{count}" for name, count in tool_counter.items()]
         tools_text = ", ".join(tool_parts[:8]) if tool_parts else "unknown"
-        result_text = " | ".join([x for x in result_samples[:3] if x]) or "n/a"
-        failure_text = "; ".join([x for x in failure_samples[:3] if x]) or "none"
         key_id_text = "; ".join([f"{k}={v}" for k, v in key_ids.items()]) if key_ids else "none"
-
-        return (
-            "[tool-chain-compact] 已压缩连续工具调用段。\n"
-            f"- tools: {tools_text}\n"
-            f"- stats: success={success_count}, failed={failed_count}\n"
-            f"- key_ids: {key_id_text}\n"
-            f"- key_results: {result_text}\n"
-            f"- failures: {failure_text}"
-        )[:2200]
+        default_summary = (
+            f"执行了 {len(tool_names)} 次工具调用，成功 {success_count} 次，失败 {failed_count} 次。"
+            if tool_names
+            else f"压缩了连续工具调用段，成功 {success_count} 次，失败 {failed_count} 次。"
+        )
+        return {
+            "tools": tool_names[:12],
+            "tools_text": tools_text,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "key_ids": key_ids,
+            "key_id_text": key_id_text,
+            "default_summary": default_summary,
+            "default_key_results": [x for x in result_samples[:3] if x],
+            "default_failures": [x for x in failure_samples[:3] if x],
+            "executions": executions[:8],
+        }
 
     def _parse_json_object(self, text: str) -> Optional[Dict[str, Any]]:
         raw = str(text or "").strip()

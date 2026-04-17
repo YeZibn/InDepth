@@ -1,6 +1,6 @@
 # InDepth Runtime 参考
 
-更新时间：2026-04-16
+更新时间：2026-04-17
 
 ## 1. 定位
 
@@ -589,13 +589,16 @@ class RuntimeCompressionConfig:
     min_keep_turns: int = 3
     compressor_kind: str = "auto"
     compressor_llm_max_tokens: int = 1200
+    event_summarizer_kind: str = "auto"
+    event_summarizer_max_tokens: int = 280
 ```
 
 压缩器策略说明：
 - `auto`：真实模型走 LLM 压缩，`MockModelProvider` 自动使用规则压缩
 - `rule`：全程规则压缩
 - `llm`：优先走 LLM 压缩，失败时自动回退规则压缩
-- `event` 模式仍使用工具链替换压缩，不走 LLM 摘要生成
+- `midrun/finalize` 路径由 `compressor_kind` 控制结构化摘要压缩
+- `event` 路径由独立的 `event_summarizer_kind` 控制工具链替代摘要；真实 provider 默认优先使用 mini 模型，失败时回退规则摘要
 
 ## 10. 入口点
 

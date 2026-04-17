@@ -122,6 +122,8 @@ class RuntimeModelConfig:
 | `COMPACTION_MIN_KEEP_TURNS` | `min_keep_turns` | `3` | 最小保留轮次数（最小 1） |
 | `COMPACTION_COMPRESSOR_KIND` | `compressor_kind` | `auto` | 压缩器类型：`auto / rule / llm` |
 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` | `compressor_llm_max_tokens` | `1200` | LLM 压缩器生成摘要时的 `max_tokens` |
+| `COMPACTION_EVENT_SUMMARIZER_KIND` | `event_summarizer_kind` | `auto` | `event` 工具链替代摘要器类型：`auto / rule / llm` |
+| `COMPACTION_EVENT_SUMMARIZER_MAX_TOKENS` | `event_summarizer_max_tokens` | `280` | `event` 工具链 mini 摘要生成 `max_tokens` |
 
 ### 4.2 RuntimeCompressionConfig
 
@@ -140,6 +142,8 @@ class RuntimeCompressionConfig:
     min_keep_turns: int = 3
     compressor_kind: str = "auto"
     compressor_llm_max_tokens: int = 1200
+    event_summarizer_kind: str = "auto"
+    event_summarizer_max_tokens: int = 280
 ```
 
 补充说明：
@@ -158,7 +162,17 @@ class RuntimeCompressionConfig:
 ### 4.2.2 适用范围
 
 - `midrun` 与 `finalize` 的摘要压缩路径支持 `rule / llm / auto`
-- `event` 触发仍保持工具链替换压缩，不走 LLM 摘要生成
+- `event` 触发仍保持工具链替换压缩，但替代摘要生成支持独立的 `rule / llm / auto`
+
+### 4.2.3 Event 摘要器选择规则
+
+- `event_summarizer_kind=auto`
+  - 真实模型提供者：优先使用 mini 模型生成工具链替代摘要
+  - `MockModelProvider`：自动退回规则摘要
+- `event_summarizer_kind=rule`
+  - 始终使用规则替代摘要
+- `event_summarizer_kind=llm`
+  - 强制优先使用 LLM 生成替代摘要，但在模型报错、输出非合法 JSON、或 `summary` 为空时回退到规则摘要
 
 ### 4.2.1 Event 替换压缩安全默认值（SQLiteMemoryStore）
 

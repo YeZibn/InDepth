@@ -1,6 +1,6 @@
 # InDepth Memory 参考
 
-更新时间：2026-04-16
+更新时间：2026-04-17
 
 ## 1. 模块范围
 
@@ -274,7 +274,7 @@ append_message(conversation_id, role, content, ...)
 │    _maybe_compact_mid_run()?                                         │
 │    ├── YES ──▶ compact_mid_run(trigger, mode)                       │
 │    │            │                                                   │
-│    │            ├── trigger=event: 工具链替换压缩（仅改 messages）    │
+│    │            ├── trigger=event: 工具链替换压缩（替代摘要可走独立 LLM）│
 │    │            └── trigger=token/finalize: summary 压缩路径         │
 │    │                                                                   │
 │    └── NO ──▶ 仅写入消息                                             │
@@ -301,6 +301,8 @@ append_message(conversation_id, role, content, ...)
 | `min_keep_turns` | 3 | `COMPACTION_MIN_KEEP_TURNS` |
 | `compressor_kind` | `auto` | `COMPACTION_COMPRESSOR_KIND` |
 | `compressor_llm_max_tokens` | 1200 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` |
+| `event_summarizer_kind` | `auto` | `COMPACTION_EVENT_SUMMARIZER_KIND` |
+| `event_summarizer_max_tokens` | 280 | `COMPACTION_EVENT_SUMMARIZER_MAX_TOKENS` |
 
 ### 8.3 压缩器类型
 
@@ -314,6 +316,18 @@ append_message(conversation_id, role, content, ...)
   - 真实 provider 下走 `llm`
   - `MockModelProvider` 下走 `rule`，保证测试稳定和可复现
 
+### 8.3.1 Event 替代摘要器类型
+
+- `rule`
+  - 使用本地规则生成 `[tool-chain-compact]` 替代消息
+- `llm`
+  - 对被替换的工具链区段构造轻量 payload，调用独立 event summarizer 生成 `summary/key_results/failures`
+  - `tools/stats/key_ids` 仍由程序生成，避免关键 ID 漂移
+  - 若模型报错、非 JSON、或 `summary` 为空，则自动回退规则摘要
+- `auto`
+  - 真实 provider 下优先使用 mini 模型
+  - `MockModelProvider` 下自动回退 `rule`
+
 ### 8.4 压缩器观测字段
 
 `compact_mid_run()` / `compact_final()` 返回结果会额外暴露以下字段：
@@ -322,6 +336,14 @@ append_message(conversation_id, role, content, ...)
 - `compressor_kind_applied`
 - `compressor_fallback_used`
 - `compressor_failure_reason`
+
+`event` 工具链替换压缩还会额外暴露：
+
+- `tool_chain_summary_requested`
+- `tool_chain_summary_applied`
+- `tool_chain_summary_fallback_used`
+- `tool_chain_summary_fallback_reason`
+- `tool_chain_summary_model`
 
 `summary_json.compression_meta` 也会同步写入这些字段，便于后续排查“请求 LLM 但最终回退到规则压缩”的情况。
 | `keep_recent_turns` | 8 | `COMPACTION_KEEP_RECENT_TURNS`（预算不可用兜底） |
@@ -487,6 +509,10 @@ compact_mid_run(trigger="event")
     ├──▶ 保留最近 N 个工具单元原文（默认 N=1）
     │
     ├──▶ 对可压缩连续区段做就地替换：
+    │      先构造工具链 payload
+    │      再生成 [tool-chain-compact] 替代摘要
+    │      - `rule`: 本地规则摘要
+    │      - `llm/auto`: 独立 event summarizer（默认优先 mini 模型）
     │      UPDATE 锚点消息为 [tool-chain-compact] 摘要
     │      DELETE 同区段其余消息
     │
@@ -526,6 +552,10 @@ compact_mid_run(trigger="event")
     "mode": "light",
     "trim_strategy": "tool_chain_replace",
     "replaced_message_count": 6,
+    "tool_chain_summary_requested": "llm",
+    "tool_chain_summary_applied": "llm",
+    "tool_chain_summary_fallback_used": False,
+    "tool_chain_summary_model": "gpt-*-mini",
     "tool_chain_span": {"start_message_id": 101, "end_message_id": 106},
 }
 ```
