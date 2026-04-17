@@ -12,6 +12,99 @@ from app.tool.todo_tool.todo_tool import _parse_task_file, load_todo_tools
 
 
 class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
+    def test_runtime_rejects_duplicate_create_task_when_active_todo_is_bound(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create_1",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Demo Todo","context":"Runtime duplicate guard",'
+                                                    '"split_reason":"Need a todo",'
+                                                    '"subtasks":[{"name":"Implement step","description":"Do the work"}]}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create_2",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Second Todo","context":"Should be rejected",'
+                                                    '"split_reason":"Should not create another todo",'
+                                                    '"subtasks":[{"name":"Another step","description":"Do the other work"}]}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": ""},
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(model_provider=provider, tool_registry=registry, max_steps=3, enable_verification_handoff_llm=False)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_999999_demo"),
+            ):
+                final = runtime.run(
+                    "Please create a todo and then create another one.",
+                    task_id="runtime_todo_duplicate_guard_task",
+                    run_id="runtime_todo_duplicate_guard_run",
+                )
+
+            self.assertIn("任务未完成", final)
+            self.assertIn("create_task", final)
+            parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
+            self.assertEqual(len(parsed["subtasks"]), 1)
+
     def test_runtime_reports_orphan_failure_when_todo_is_unbound(self):
         provider = MockModelProvider(
             scripted_outputs=[
@@ -243,9 +336,8 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
             self.assertIn("next: retry_with_fix / auto", final)
             parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
             self.assertEqual(parsed["subtasks"][0]["status"], "failed")
-            self.assertEqual(parsed["subtasks"][0]["fallback_record"]["reason_code"], "tool_error")
-            self.assertGreaterEqual(len(parsed["subtasks"]), 3)
-            self.assertEqual(parsed["subtasks"][1]["kind"], "diagnose")
+            self.assertEqual(parsed["subtasks"][0]["fallback_record"]["reason_code"], "tool_invocation_error")
+            self.assertEqual(len(parsed["subtasks"]), 1)
 
     def test_runtime_includes_recovery_context_in_task_judged_handoff(self):
         provider = MockModelProvider(
@@ -395,8 +487,11 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         recovery = handoff.get("recovery", {})
         self.assertEqual(recovery.get("todo_id"), "20260416_999999_demo")
         self.assertEqual(recovery.get("subtask_number"), 1)
-        self.assertEqual(recovery.get("fallback_record", {}).get("reason_code"), "tool_error")
+        self.assertTrue(recovery.get("subtask_id", "").startswith("st_"))
+        self.assertEqual(recovery.get("fallback_record", {}).get("reason_code"), "tool_invocation_error")
         self.assertEqual(recovery.get("recovery_decision", {}).get("primary_action"), "retry_with_fix")
+        self.assertTrue(recovery.get("recovery_decision", {}).get("can_resume_in_place"))
+        self.assertFalse(recovery.get("recovery_decision", {}).get("needs_derived_recovery_subtask"))
 
 
 if __name__ == "__main__":

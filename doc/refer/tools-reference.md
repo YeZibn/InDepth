@@ -376,6 +376,7 @@ create_task(
     task_name: str,
     context: str,
     split_reason: str,  # 顶层拆分理由，必填
+    force_new_cycle: bool = False,  # 显式开启新 task 周期时才使用
     subtasks: List[Dict[str, Any]]  # [{name, description, split_reason?, dependencies?, priority?}] 必填
 ) -> Dict
 
@@ -386,12 +387,30 @@ update_task_status(
     status: str  # pending/in-progress/completed/blocked/failed/partial/awaiting_input/timed_out/abandoned
 ) -> Dict
 
+# 细粒度更新 subtask
+update_subtask(
+    todo_id: str,
+    fields_to_update: Dict[str, Any],
+    subtask_id: str = "",
+    subtask_number: int = 0,
+    update_reason: str = "",
+) -> Dict
+
+# 显式重开 subtask
+reopen_subtask(
+    todo_id: str,
+    subtask_id: str = "",
+    subtask_number: int = 0,
+    reason: str = "",
+) -> Dict
+
 # 记录失败/未完成信息
 record_task_fallback(
     todo_id: str,
     subtask_number: int,
     state: str,
     reason_code: str,
+    failure_state: str = "",
     reason_detail: str = "",
     impact_scope: str = "",
     retryable: bool = True,
@@ -432,6 +451,7 @@ generate_task_report(todo_id: str) -> str
 **文件结构**：`todo/<timestamp>_<sanitized_name>.md`
 **标识规范**：
 - Todo 领域统一使用 `todo_id`
+- Subtask 领域统一使用 `subtask_id` 作为稳定内部锚点，`subtask_number` 保留为展示与兼容层
 - `create_task` 返回 `todo_id`
 - `list_tasks` 返回项包含 `todo_id`
 
@@ -449,22 +469,26 @@ pending ──▶ in-progress ──▶ completed
 **恢复链路**：
 ```
 record_task_fallback()
-    ├──▶ 持久化 fallback_record + 更新未完成状态
+    ├──▶ 持久化 fallback_record（不直接覆盖 subtask status）
+    ├──▶ update_task_status()
+    │       └──▶ 基于 failure_state/reason_code 单独更新 subtask 状态
     ├──▶ plan_task_recovery()
-    │       └──▶ 生成 recovery_decision
+    │       └──▶ 先判断 can_resume_in_place / needs_derived_recovery_subtask
     └──▶ append_followup_subtasks()
-            └──▶ 低风险恢复动作落成新的 follow-up subtasks
+            └──▶ 仅在需要派生 recovery subtask 时才自动追加
 ```
 
 **运行时接入**：
-1. Runtime 会跟踪当前活跃的 todo 执行上下文，包括 `todo_id/active_subtask_number/execution_phase/binding_required`
+1. Runtime 会跟踪当前活跃的 todo 执行上下文，包括 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at`
 2. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
    - 调 `record_task_fallback`
+   - 调 `update_task_status`
    - 调 `plan_task_recovery`
-   - 对 `decision_level=auto` 的恢复决策追加 follow-up subtasks
+   - 仅对 `needs_derived_recovery_subtask=true` 且 `decision_level=auto` 的恢复决策追加 follow-up subtasks
 3. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
-4. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
-5. 恢复信息会进一步进入：
+4. 若当前 task 已绑定 active todo，再次 `create_task` 默认会被拒绝，除非显式传入 `force_new_cycle=true`
+5. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
+6. 恢复信息会进一步进入：
    - `verification_handoff.recovery`
    - `task_judged.payload.verification_handoff`
    - postmortem “交付内容”区块

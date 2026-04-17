@@ -212,7 +212,7 @@ def run(
 | `stop_reason` | `str` | 收敛原因 |
 | `runtime_state` | `str` | `running/awaiting_user_input/completed/failed` |
 | `last_tool_failures` | `List[Dict]` | 工具失败记录 |
-| `_active_todo_context` | `Dict[str, Any]` | 当前活跃的 todo 执行上下文，包含 `todo_id/active_subtask_number/execution_phase/binding_required` |
+| `_active_todo_context` | `Dict[str, Any]` | 当前活跃的 todo 执行上下文，包含 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at` |
 | `_latest_todo_recovery` | `Dict[str, Any]` | 最近一次自动恢复链路产物 |
 | `consecutive_tool_calls` | `int` | 当前一次 `tool_calls` 响应的条目数 |
 
@@ -281,22 +281,31 @@ AgentRuntime.run(
 
 Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 - `todo_id`
+- `active_subtask_id`
 - `active_subtask_number`
 - `execution_phase`
 - `binding_required`
+- `binding_state`
+- `todo_bound_at`
 
 主要来源工具：
 - `create_task`
 - `update_task_status`
+- `update_subtask`
 - `record_task_fallback`
+- `reopen_subtask`
 - `get_next_task`
 
 当前语义：
 - `create_task` 后会记录 `todo_id`，并进入 `planning`
+- `create_task` 若当前 task 已绑定 active todo，默认会被拒绝；只有显式 `force_new_cycle=true` 才允许切新周期
 - `update_task_status(..., status="in-progress")` 后会记录 `active_subtask_number`，并进入 `executing`
+- `update_subtask(...)` 后会同步当前 active subtask 的 `subtask_id/subtask_number`
 - `update_task_status(..., status in {blocked, failed, partial, awaiting_input, timed_out})` 后会进入 `recovering`
 - `record_task_fallback` 后会把该 subtask 视为当前恢复目标，并进入 `recovering`
+- `reopen_subtask` 后会把该 subtask 重新视为当前执行目标，并进入 `executing`
 - `get_next_task` 返回 ready subtask 后会记录候选 `active_subtask_number`，但此时仍更接近“待激活”的 `planning`
+- run 完成后当前 todo 绑定会切换到 `closed`
 
 这层上下文的作用不只是记忆，而是帮助 Runtime 判断：
 - 当前是否已经进入 todo 执行流
@@ -313,8 +322,9 @@ Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 
 自动顺序为：
 1. `record_task_fallback`
-2. `plan_task_recovery`
-3. 若 `decision_level=auto && stop_auto_recovery=false`，则 `append_followup_subtasks`
+2. `update_task_status`
+3. `plan_task_recovery`
+4. 若 `needs_derived_recovery_subtask=true && decision_level=auto && stop_auto_recovery=false`，则 `append_followup_subtasks`
 
 #### 4.5.3 自动恢复结果
 

@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import re
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,15 +46,19 @@ RECOVERY_DECISION_LEVELS = {"auto", "agent_decide", "user_confirm"}
 RECOVERY_ACTIONS = {
     "retry",
     "retry_with_fix",
+    "repair",
     "split",
     "fallback_path",
     "execution_handoff",
     "decision_handoff",
+    "wait_user",
+    "resolve_dependency",
     "pause",
     "degrade",
     "abandon",
 }
 FOLLOWUP_KINDS = {"diagnose", "repair", "retry", "verify", "handoff", "resume", "report"}
+IN_PLACE_RECOVERY_ACTIONS = {"retry", "retry_with_fix", "repair", "wait_user", "resolve_dependency", "pause"}
 
 
 def _find_project_root() -> str:
@@ -109,6 +114,10 @@ def _json_loads(text: str, default: Any) -> Any:
         return json.loads(text)
     except Exception:
         return default
+
+
+def _generate_subtask_id() -> str:
+    return f"st_{uuid.uuid4().hex[:10]}"
 
 
 def _extract_simple_field(task_content: str, label: str) -> str:
@@ -171,6 +180,7 @@ def _normalize_fallback_record(record: Any) -> Dict[str, Any]:
         "reason_detail",
         "impact_scope",
         "suggested_next_action",
+        "failure_state",
         "last_attempt_summary",
         "owner",
         "failure_stage",
@@ -207,6 +217,7 @@ def _normalize_fallback_record(record: Any) -> Dict[str, Any]:
 def _render_subtask(subtask: Dict[str, Any]) -> str:
     number = subtask["number"]
     name = subtask["name"]
+    subtask_id = str(subtask.get("subtask_id", "")).strip()
     status = subtask.get("status", "pending")
     priority = subtask.get("priority", "medium")
     dependencies = subtask.get("dependencies", [])
@@ -217,9 +228,12 @@ def _render_subtask(subtask: Dict[str, Any]) -> str:
     owner = str(subtask.get("owner", "")).strip()
     acceptance_criteria = _normalize_acceptance_criteria(subtask.get("acceptance_criteria", []))
     fallback_record = _normalize_fallback_record(subtask.get("fallback_record", {}))
+    origin_subtask_id = str(subtask.get("origin_subtask_id", "")).strip()
+    origin_subtask_number = str(subtask.get("origin_subtask_number", "")).strip()
 
     lines = [
         f"### Task {number}: {name}",
+        f"- **Subtask ID**: {subtask_id or _generate_subtask_id()}",
         f"- **Status**: {status}",
         f"- **Priority**: {priority}",
         f"- **Dependencies**: {deps_str}",
@@ -228,6 +242,10 @@ def _render_subtask(subtask: Dict[str, Any]) -> str:
         lines.append(f"- **Kind**: {kind}")
     if owner:
         lines.append(f"- **Owner**: {owner}")
+    if origin_subtask_id:
+        lines.append(f"- **Origin Subtask ID**: {origin_subtask_id}")
+    if origin_subtask_number:
+        lines.append(f"- **Origin Subtask Number**: {origin_subtask_number}")
     if split_rationale:
         lines.append(f"- **Split Rationale**: {split_rationale}")
     if acceptance_criteria:
@@ -266,9 +284,12 @@ def _parse_task_file(filepath: str) -> Dict[str, Any]:
         status = _extract_simple_field(task_content, "Status") or "pending"
         priority = _extract_simple_field(task_content, "Priority") or "medium"
         deps_str = _extract_simple_field(task_content, "Dependencies")
+        subtask_id = _extract_simple_field(task_content, "Subtask ID") or f"legacy-task-{task_num}"
         split_rationale = _extract_simple_field(task_content, "Split Rationale")
         kind = _extract_simple_field(task_content, "Kind")
         owner = _extract_simple_field(task_content, "Owner")
+        origin_subtask_id = _extract_simple_field(task_content, "Origin Subtask ID")
+        origin_subtask_number = _extract_simple_field(task_content, "Origin Subtask Number")
         acceptance_criteria = _extract_json_field(task_content, "Acceptance Criteria", [])
         fallback_record = _extract_json_field(task_content, "Fallback Record", {})
 
@@ -276,12 +297,13 @@ def _parse_task_file(filepath: str) -> Dict[str, Any]:
         if deps_str.strip() and deps_str.strip().lower() != "none":
             dependencies = re.findall(r"Task\s*(\d+)", deps_str)
 
-        checklist_items = re.findall(r"- \*\[(.)\]\* (.*)", task_content)
-        description = checklist_items[0][1] if checklist_items else ""
+        checklist_items = re.findall(r"- \*{1,2}\[(.)\]\*{1,2} (.*)", task_content)
+        description = checklist_items[0][1].strip() if checklist_items else ""
 
         subtasks.append(
             {
                 "number": task_num,
+                "subtask_id": subtask_id,
                 "name": task_name,
                 "status": status,
                 "priority": priority,
@@ -291,6 +313,8 @@ def _parse_task_file(filepath: str) -> Dict[str, Any]:
                 "split_rationale": split_rationale,
                 "kind": kind,
                 "owner": owner,
+                "origin_subtask_id": origin_subtask_id,
+                "origin_subtask_number": origin_subtask_number,
                 "acceptance_criteria": acceptance_criteria if isinstance(acceptance_criteria, list) else [],
                 "fallback_record": fallback_record if isinstance(fallback_record, dict) else {},
             }
@@ -542,9 +566,6 @@ def _update_subtask_fallback(filepath: str, task_number: str, fallback_record: D
         return False, str(exc)
 
     target["fallback_record"] = normalized
-    fallback_state = normalized.get("state")
-    if fallback_state:
-        target["status"] = fallback_state
 
     try:
         _rewrite_task_file(filepath, subtasks)
@@ -597,6 +618,7 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
 
         normalized.append(
             {
+                "subtask_id": str(item.get("subtask_id") or "").strip() or _generate_subtask_id(),
                 "name": name.strip(),
                 "description": description.strip(),
                 "status": status,
@@ -611,6 +633,8 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
                 ),
                 "kind": kind,
                 "owner": owner,
+                "origin_subtask_id": str(item.get("origin_subtask_id", "") or "").strip(),
+                "origin_subtask_number": str(item.get("origin_subtask_number", "") or "").strip(),
                 "acceptance_criteria": acceptance_criteria,
                 "fallback_record": fallback_record,
             }
@@ -671,6 +695,7 @@ def _normalize_followup_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
 
         normalized.append(
             {
+                "subtask_id": str(item.get("subtask_id") or "").strip() or _generate_subtask_id(),
                 "name": name.strip(),
                 "description": description.strip(),
                 "goal": goal.strip(),
@@ -679,6 +704,8 @@ def _normalize_followup_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
                 "priority": str(item.get("priority", "medium")).strip().lower() or "medium",
                 "dependencies": dependencies,
                 "source_task_refs": source_task_refs,
+                "origin_subtask_id": str(item.get("origin_subtask_id", "") or "").strip(),
+                "origin_subtask_number": str(item.get("origin_subtask_number", "") or "").strip(),
                 "acceptance_criteria": acceptance_criteria,
                 "status": "pending",
             }
@@ -697,7 +724,11 @@ def _build_recovery_decision(
 ) -> Dict[str, Any]:
     fallback_record = subtask.get("fallback_record", {}) or {}
     reason_code = str(fallback_record.get("reason_code", "")).strip()
-    state = str(fallback_record.get("state") or subtask.get("status", "pending")).strip()
+    state = str(
+        fallback_record.get("failure_state")
+        or fallback_record.get("state")
+        or subtask.get("status", "pending")
+    ).strip()
     retry_count = int(fallback_record.get("retry_count", 0) or 0)
     partial_artifacts = fallback_record.get("partial_artifacts", [])
     has_partial_value = bool(partial_artifacts) or state == "partial"
@@ -705,119 +736,87 @@ def _build_recovery_decision(
     suggested_owner = "main"
     escalation_reason = ""
     stop_auto_recovery = False
+    can_resume_in_place = True
+    needs_derived_recovery_subtask = False
 
-    primary_action = "split"
-    recommended_actions = ["split", "retry_with_fix", "execution_handoff"]
+    primary_action = "retry_with_fix"
+    recommended_actions = ["retry_with_fix", "split", "execution_handoff"]
     decision_level = "auto"
-    rationale = "Default to narrowing the problem before attempting a broad retry."
-    next_subtasks: List[Dict[str, Any]] = [
-        {
-            "name": f"Diagnose recovery path for Task {subtask['number']}",
-            "goal": "Identify the smallest safe next step to recover this unfinished task",
-            "description": "Review current failure evidence, isolate the cause, and recommend the next action",
-            "kind": "diagnose",
-            "owner": "main",
-            "depends_on": [subtask["number"]],
-            "acceptance_criteria": ["Root cause summary produced", "Next action chosen"],
-        }
-    ]
-    resume_condition = "A smaller recovery step is ready for execution."
+    rationale = "Prefer recovering the original subtask in place before deriving new recovery work."
+    next_subtasks: List[Dict[str, Any]] = []
+    resume_condition = "The original subtask can resume with a narrower corrective action."
 
     if reason_code == "dependency_unmet":
-        primary_action = "pause"
-        recommended_actions = ["pause", "split"]
-        rationale = "Dependencies are not satisfied yet, so the safest next step is to wait or create a prerequisite task."
-        next_subtasks = []
+        primary_action = "resolve_dependency"
+        recommended_actions = ["resolve_dependency", "pause", "split"]
+        rationale = "Dependencies are not satisfied yet, so the original subtask should wait or have prerequisites resolved first."
         resume_condition = "All prerequisite subtasks are completed."
-    elif reason_code == "tool_error":
+    elif reason_code in {"tool_error", "tool_invocation_error", "execution_environment_error"}:
         primary_action = "retry_with_fix"
         recommended_actions = ["retry_with_fix", "split"]
-        rationale = "A tool error usually benefits from a targeted fix before another attempt."
-        next_subtasks = [
-            {
-                "name": f"Diagnose tool error for Task {subtask['number']}",
-                "goal": "Identify whether the failure came from arguments, environment, or execution path",
-                "description": "Inspect the failing tool output and isolate the smallest corrective change",
-                "kind": "diagnose",
-                "owner": "main",
-                "depends_on": [subtask["number"]],
-                "acceptance_criteria": ["Tool error root cause identified", "Recovery action selected"],
-            },
-            {
-                "name": f"Retry Task {subtask['number']} with fix",
-                "goal": "Re-run the task after applying the narrowest safe fix",
-                "description": "Apply the identified fix and retry the failed path once",
-                "kind": "retry",
-                "owner": subtask.get("owner") or "main",
-                "depends_on": ["diagnose:tool-error"],
-                "acceptance_criteria": ["Retry completed", "Outcome recorded"],
-            },
-        ]
+        rationale = "Execution failures should first try the smallest safe in-place correction before deriving extra recovery tasks."
+        resume_condition = "Apply the targeted fix and retry the original subtask."
     elif reason_code == "validation_failed":
-        primary_action = "split"
-        recommended_actions = ["split", "execution_handoff"]
-        rationale = "Validation failure means the work likely needs diagnosis plus a focused repair and re-check."
-        suggested_owner = "main"
-        next_subtasks = [
-            {
-                "name": f"Diagnose validation failure for Task {subtask['number']}",
-                "goal": "Determine why the result failed acceptance checks",
-                "description": "Inspect failed outputs and produce a precise repair plan",
-                "kind": "diagnose",
-                "owner": "main",
-                "depends_on": [subtask["number"]],
-                "acceptance_criteria": ["Validation gap identified", "Repair scope defined"],
-            },
-            {
-                "name": f"Repair Task {subtask['number']} after validation failure",
-                "goal": "Address the failed validation gaps without changing the main objective",
-                "description": "Implement the smallest repair that satisfies the acceptance checks",
-                "kind": "repair",
-                "owner": "subagent:builder" if "builder" in available_roles else "main",
-                "depends_on": ["diagnose:validation-failure"],
-                "acceptance_criteria": ["Repair applied", "Ready for verification"],
-            },
-            {
-                "name": f"Verify repaired output for Task {subtask['number']}",
-                "goal": "Confirm the repair closes the validation gap",
-                "description": "Run focused verification on the repaired result",
-                "kind": "verify",
-                "owner": "subagent:verifier" if "verifier" in available_roles else "main",
-                "depends_on": ["repair:validation-failure"],
-                "acceptance_criteria": ["Verification result recorded"],
-            },
-        ]
-        resume_condition = "Repair and focused verification have both completed."
+        primary_action = "repair"
+        recommended_actions = ["repair", "retry", "verify", "split"]
+        rationale = "Validation failure usually means the original subtask should be repaired in place and then re-checked."
+        suggested_owner = subtask.get("owner") or "main"
+        resume_condition = "Repair the original subtask and verify the corrected result."
     elif reason_code in {"missing_context", "waiting_user_input"}:
-        primary_action = "decision_handoff"
-        recommended_actions = ["decision_handoff", "pause"]
+        primary_action = "wait_user"
+        recommended_actions = ["wait_user", "decision_handoff"]
         decision_level = "user_confirm"
-        rationale = "The task needs new information before the system can safely continue."
+        rationale = "The original subtask is blocked on missing information and should resume only after the input arrives."
         escalation_reason = "Missing input changes how the task should proceed."
         suggested_owner = "user"
         stop_auto_recovery = True
-        next_subtasks = []
         resume_condition = "Required user input is provided."
+    elif reason_code == "partial_progress":
+        primary_action = "repair"
+        recommended_actions = ["repair", "retry", "split"]
+        rationale = "Partial value exists, so the best next step is to finish the original subtask in place."
+        resume_condition = "Use the existing partial output to complete the original subtask."
     elif reason_code == "budget_exhausted" or state == "timed_out":
+        can_resume_in_place = False
+        needs_derived_recovery_subtask = True
         if allowed_degraded_delivery and has_partial_value and not is_on_critical_path:
             primary_action = "degrade"
             recommended_actions = ["degrade", "split", "abandon"]
             decision_level = "agent_decide"
             rationale = "The budget is exhausted, but partial value exists and may be deliverable."
             escalation_reason = "Degraded delivery changes the completion promise."
+            next_subtasks = []
         else:
             primary_action = "split"
             recommended_actions = ["split", "degrade", "abandon"]
             decision_level = "agent_decide"
-            rationale = "Budget is exhausted, so the next step should be smaller or explicitly de-scoped."
+            rationale = "Budget is exhausted, so recovery should shrink scope into smaller derived work."
             escalation_reason = "Further recovery needs explicit tradeoff handling."
+            next_subtasks = [
+                {
+                    "origin_subtask_id": subtask.get("subtask_id", ""),
+                    "origin_subtask_number": subtask["number"],
+                    "name": f"Split recovery path for Task {subtask['number']}",
+                    "goal": "Break the unfinished subtask into a smaller recovery step",
+                    "description": "Design the smallest derived task that can safely advance the original subtask",
+                    "kind": "diagnose",
+                    "owner": "main",
+                    "depends_on": [subtask["number"]],
+                    "acceptance_criteria": ["Smaller recovery step defined"],
+                }
+            ]
         stop_auto_recovery = True
+        resume_condition = "A smaller derived recovery step is ready, or degraded delivery is explicitly accepted."
     elif reason_code == "subagent_empty_result":
+        can_resume_in_place = False
+        needs_derived_recovery_subtask = True
         primary_action = "split"
         recommended_actions = ["split", "retry_with_fix", "execution_handoff"]
         rationale = "An empty sub-agent result usually means the brief should be narrowed before retrying."
         next_subtasks = [
             {
+                "origin_subtask_id": subtask.get("subtask_id", ""),
+                "origin_subtask_number": subtask["number"],
                 "name": f"Rewrite sub-agent brief for Task {subtask['number']}",
                 "goal": "Create a narrower, more actionable instruction set for the failed sub-agent task",
                 "description": "Shrink scope and make the expected output explicit before re-dispatching",
@@ -827,6 +826,8 @@ def _build_recovery_decision(
                 "acceptance_criteria": ["Updated sub-agent brief prepared"],
             },
             {
+                "origin_subtask_id": subtask.get("subtask_id", ""),
+                "origin_subtask_number": subtask["number"],
                 "name": f"Re-dispatch Task {subtask['number']} to a narrowed sub-agent task",
                 "goal": "Retry the failed sub-agent path with a smaller objective",
                 "description": "Run the task again with the narrowed brief",
@@ -836,13 +837,18 @@ def _build_recovery_decision(
                 "acceptance_criteria": ["New sub-agent result recorded"],
             },
         ]
+        resume_condition = "A narrowed sub-agent retry has been prepared."
     elif reason_code == "subagent_execution_error":
+        can_resume_in_place = False
+        needs_derived_recovery_subtask = True
         primary_action = "execution_handoff"
         recommended_actions = ["execution_handoff", "retry_with_fix", "split"]
         rationale = "The current executor is likely a poor fit for the failure mode, so responsibility should move first."
         suggested_owner = "main"
         next_subtasks = [
             {
+                "origin_subtask_id": subtask.get("subtask_id", ""),
+                "origin_subtask_number": subtask["number"],
                 "name": f"Review sub-agent execution error for Task {subtask['number']}",
                 "goal": "Determine whether the failure came from role mismatch, context loss, or task size",
                 "description": "Inspect the sub-agent error and choose a safer execution owner",
@@ -852,8 +858,41 @@ def _build_recovery_decision(
                 "acceptance_criteria": ["New execution owner selected"],
             }
         ]
+        resume_condition = "A safer execution owner has been selected."
+    elif reason_code == "orphan_subtask_unbound":
+        can_resume_in_place = False
+        needs_derived_recovery_subtask = False
+        primary_action = "decision_handoff"
+        recommended_actions = ["decision_handoff", "pause"]
+        decision_level = "agent_decide"
+        rationale = "Runtime could not attribute the failure to a concrete subtask, so execution should not continue automatically."
+        escalation_reason = "A concrete subtask must be bound before recovery can proceed."
+        suggested_owner = "main"
+        stop_auto_recovery = True
+        next_subtasks = []
+        resume_condition = "Select or create the correct subtask before resuming work."
 
     if retry_budget_remaining <= 0 or retry_count >= 2:
+        if can_resume_in_place and primary_action in {"retry", "retry_with_fix", "repair"}:
+            can_resume_in_place = False
+            needs_derived_recovery_subtask = True
+            primary_action = "split"
+            recommended_actions = ["split", "execution_handoff", "abandon"]
+            rationale = "Automatic retry budget is exhausted, so recovery should derive a smaller or different path."
+            next_subtasks = [
+                {
+                    "origin_subtask_id": subtask.get("subtask_id", ""),
+                    "origin_subtask_number": subtask["number"],
+                    "name": f"Derive a smaller recovery step for Task {subtask['number']}",
+                    "goal": "Create a safer recovery step after retry budget exhaustion",
+                    "description": "Decide how to shrink or hand off the original subtask after repeated failed attempts",
+                    "kind": "diagnose",
+                    "owner": "main",
+                    "depends_on": [subtask["number"]],
+                    "acceptance_criteria": ["Recovery split or handoff selected"],
+                }
+            ]
+            resume_condition = "A smaller derived recovery step is defined."
         decision_level = "agent_decide"
         stop_auto_recovery = True
         escalation_reason = escalation_reason or "Automatic recovery budget is exhausted."
@@ -868,7 +907,10 @@ def _build_recovery_decision(
 
     return {
         "todo_id": task_data.get("metadata", {}).get("Todo ID", ""),
+        "subtask_id": subtask.get("subtask_id", ""),
         "subtask_number": subtask["number"],
+        "can_resume_in_place": can_resume_in_place,
+        "needs_derived_recovery_subtask": needs_derived_recovery_subtask,
         "primary_action": primary_action,
         "recommended_actions": recommended_actions,
         "decision_level": decision_level,
@@ -897,12 +939,19 @@ def _build_recovery_decision(
             "task_name": {"type": "string"},
             "context": {"type": "string"},
             "split_reason": {"type": "string"},
+            "force_new_cycle": {"type": "boolean"},
             "subtasks": {"type": "array", "items": {"type": "object"}},
         },
         "required": ["task_name", "context", "split_reason", "subtasks"],
     },
 )
-def create_task(task_name: str, context: str, split_reason: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+def create_task(
+    task_name: str,
+    context: str,
+    split_reason: str,
+    subtasks: List[Dict[str, Any]],
+    force_new_cycle: bool = False,
+) -> Dict[str, Any]:
     """Create a markdown task file with structured subtasks and dependency metadata."""
     try:
         if not isinstance(split_reason, str) or not split_reason.strip():
@@ -975,7 +1024,14 @@ Task created automatically. Update as needed during execution.
                 "split_reason": split_reason.strip(),
             },
         )
-        return {"success": True, "filepath": filepath, "todo_id": todo_id, "subtask_count": len(normalized_subtasks)}
+        return {
+            "success": True,
+            "filepath": filepath,
+            "todo_id": todo_id,
+            "subtask_count": len(normalized_subtasks),
+            "subtask_ids": [item.get("subtask_id", "") for item in normalized_subtasks],
+            "todo_bound_at": now,
+        }
     except Exception as e:
         _emit_obs(
             todo_id="unknown",
@@ -1010,6 +1066,7 @@ def update_task_status(todo_id: str, subtask_number: int, status: str) -> Dict[s
 
     updated_task = _parse_task_file(task_data["filepath"])
     completed, total, percentage = _calculate_progress(updated_task.get("subtasks", []))
+    subtask = next((item for item in updated_task.get("subtasks", []) if item.get("number") == str(subtask_number)), {})
     _emit_obs(
         todo_id=todo_id,
         event_type="status_updated",
@@ -1017,6 +1074,7 @@ def update_task_status(todo_id: str, subtask_number: int, status: str) -> Dict[s
             "tool": "update_task_status",
             "todo_id": todo_id,
             "subtask_number": subtask_number,
+            "subtask_id": subtask.get("subtask_id", ""),
             "status": status,
             "progress": f"{completed}/{total} ({percentage}%)",
         },
@@ -1031,6 +1089,64 @@ def update_task_status(todo_id: str, subtask_number: int, status: str) -> Dict[s
         "success": True,
         "message": f"Subtask {subtask_number} updated to: {status}",
         "progress": f"{completed}/{total} ({percentage}%)",
+        "subtask_id": subtask.get("subtask_id", ""),
+        "all_completed": total > 0 and completed == total,
+    }
+
+
+@tool(
+    name="reopen_subtask",
+    description="Reopen a previously failed, blocked, partial, timed out, or completed subtask and mark it in-progress again.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+    parameters={
+        "type": "object",
+        "properties": {
+            "todo_id": {"type": "string"},
+            "subtask_id": {"type": "string"},
+            "subtask_number": {"type": "integer"},
+            "reason": {"type": "string"},
+        },
+        "required": ["todo_id"],
+    },
+)
+def reopen_subtask(todo_id: str, subtask_id: str = "", subtask_number: int = 0, reason: str = "") -> Dict[str, Any]:
+    task_data = _get_task_by_todo_id(todo_id)
+    if not task_data:
+        return {"success": False, "error": f"Todo not found: {todo_id}"}
+
+    target = None
+    if subtask_id:
+        target = next((item for item in task_data.get("subtasks", []) if item.get("subtask_id") == str(subtask_id).strip()), None)
+    if target is None and subtask_number:
+        target = next((item for item in task_data.get("subtasks", []) if item.get("number") == str(subtask_number)), None)
+    if target is None:
+        return {"success": False, "error": "Subtask not found for the given subtask_id/subtask_number"}
+
+    reopen_number = str(target.get("number"))
+    ok, error = _update_task_status(task_data["filepath"], reopen_number, "in-progress")
+    if not ok:
+        return {"success": False, "error": error or "Failed to reopen subtask"}
+
+    updated_task = _parse_task_file(task_data["filepath"])
+    saved = next((item for item in updated_task.get("subtasks", []) if item.get("number") == reopen_number), target)
+    _emit_obs(
+        todo_id=todo_id,
+        event_type="subtask_reopened",
+        payload={
+            "tool": "reopen_subtask",
+            "todo_id": todo_id,
+            "subtask_id": saved.get("subtask_id", ""),
+            "subtask_number": saved.get("number", ""),
+            "reason": str(reason or "").strip(),
+        },
+    )
+    return {
+        "success": True,
+        "subtask_id": saved.get("subtask_id", ""),
+        "subtask_number": saved.get("number", ""),
+        "status": saved.get("status", ""),
     }
 
 
@@ -1046,6 +1162,7 @@ def record_task_fallback(
     subtask_number: int,
     state: str,
     reason_code: str,
+    failure_state: str = "",
     reason_detail: str = "",
     impact_scope: str = "",
     retryable: bool = True,
@@ -1065,6 +1182,7 @@ def record_task_fallback(
         fallback_record = _normalize_fallback_record(
             {
                 "state": state,
+                "failure_state": failure_state or state,
                 "reason_code": reason_code,
                 "reason_detail": reason_detail,
                 "impact_scope": impact_scope,
@@ -1084,6 +1202,8 @@ def record_task_fallback(
     if not ok:
         return {"success": False, "error": error or f"Failed to record fallback for subtask {subtask_number}"}
 
+    updated_task = _parse_task_file(task_data["filepath"])
+    subtask = next((item for item in updated_task.get("subtasks", []) if item.get("number") == str(subtask_number)), {})
     _emit_obs(
         todo_id=todo_id,
         event_type="task_fallback_recorded",
@@ -1091,10 +1211,122 @@ def record_task_fallback(
             "tool": "record_task_fallback",
             "todo_id": todo_id,
             "subtask_number": subtask_number,
+            "subtask_id": subtask.get("subtask_id", ""),
             "fallback_record": fallback_record,
         },
     )
-    return {"success": True, "fallback_record": fallback_record}
+    return {"success": True, "fallback_record": fallback_record, "subtask_id": subtask.get("subtask_id", "")}
+
+
+@tool(
+    name="update_subtask",
+    description="Patch selected subtask fields by subtask_id or subtask_number without rewriting the whole todo structure.",
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+    parameters={
+        "type": "object",
+        "properties": {
+            "todo_id": {"type": "string"},
+            "subtask_id": {"type": "string"},
+            "subtask_number": {"type": "integer"},
+            "fields_to_update": {"type": "object"},
+            "update_reason": {"type": "string"},
+        },
+        "required": ["todo_id", "fields_to_update"],
+    },
+)
+def update_subtask(
+    todo_id: str,
+    fields_to_update: Dict[str, Any],
+    subtask_id: str = "",
+    subtask_number: int = 0,
+    update_reason: str = "",
+) -> Dict[str, Any]:
+    task_data = _get_task_by_todo_id(todo_id)
+    if not task_data:
+        return {"success": False, "error": f"Todo not found: {todo_id}"}
+    if not isinstance(fields_to_update, dict) or not fields_to_update:
+        return {"success": False, "error": "fields_to_update must be a non-empty object"}
+
+    subtasks = task_data.get("subtasks", [])
+    target = None
+    if subtask_id:
+        target = next((item for item in subtasks if item.get("subtask_id") == str(subtask_id).strip()), None)
+    if target is None and subtask_number:
+        target = next((item for item in subtasks if item.get("number") == str(subtask_number)), None)
+    if target is None:
+        return {"success": False, "error": "Subtask not found for the given subtask_id/subtask_number"}
+
+    patch = dict(fields_to_update)
+    if "subtask_id" in patch and str(patch.get("subtask_id") or "").strip() != target.get("subtask_id", ""):
+        return {"success": False, "error": "subtask_id is immutable"}
+
+    for key in ["name", "title"]:
+        if key in patch:
+            name = str(patch.get(key) or "").strip()
+            if not name:
+                return {"success": False, "error": "name/title cannot be empty"}
+            target["name"] = name
+            break
+    if "description" in patch:
+        desc = str(patch.get("description") or "").strip()
+        if not desc:
+            return {"success": False, "error": "description cannot be empty"}
+        target["description"] = desc
+    if "status" in patch:
+        try:
+            target["status"] = _normalize_status(str(patch.get("status") or ""))
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+    if "priority" in patch:
+        target["priority"] = str(patch.get("priority") or "medium").strip().lower() or "medium"
+    if "dependencies" in patch:
+        dependencies = patch.get("dependencies")
+        if isinstance(dependencies, str):
+            return {"success": False, "error": "dependencies must be an array"}
+        if not isinstance(dependencies, list):
+            return {"success": False, "error": "dependencies must be an array"}
+        target["dependencies"] = [str(dep).strip() for dep in dependencies if str(dep).strip()]
+    if "acceptance_criteria" in patch:
+        try:
+            target["acceptance_criteria"] = _normalize_acceptance_criteria(patch.get("acceptance_criteria"))
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+    for key in ["split_rationale", "owner", "kind", "origin_subtask_id", "origin_subtask_number"]:
+        if key in patch:
+            target[key] = str(patch.get(key) or "").strip()
+    if "fallback_record" in patch:
+        try:
+            target["fallback_record"] = _normalize_fallback_record(patch.get("fallback_record"))
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+    try:
+        _rewrite_task_file(task_data["filepath"], subtasks)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+    updated = _parse_task_file(task_data["filepath"])
+    saved = next((item for item in updated.get("subtasks", []) if item.get("subtask_id") == target.get("subtask_id")), target)
+    _emit_obs(
+        todo_id=todo_id,
+        event_type="subtask_updated",
+        payload={
+            "tool": "update_subtask",
+            "todo_id": todo_id,
+            "subtask_id": saved.get("subtask_id", ""),
+            "subtask_number": saved.get("number", ""),
+            "updated_fields": sorted(list(fields_to_update.keys())),
+            "update_reason": str(update_reason or "").strip(),
+        },
+    )
+    return {
+        "success": True,
+        "subtask_id": saved.get("subtask_id", ""),
+        "subtask_number": saved.get("number", ""),
+        "updated_fields": sorted(list(fields_to_update.keys())),
+    }
 
 
 @tool(
@@ -1260,6 +1492,7 @@ def get_next_task_item(todo_id: str) -> Dict[str, Any]:
             "status": "ready",
             "next_task": {
                 "number": next_task["number"],
+                "subtask_id": next_task.get("subtask_id", ""),
                 "name": next_task["name"],
                 "description": next_task.get("description", ""),
                 "priority": next_task.get("priority", "medium"),
@@ -1363,6 +1596,8 @@ class TodoTools:
         return [
             create_task,
             update_task_status,
+            reopen_subtask,
+            update_subtask,
             record_task_fallback,
             plan_task_recovery,
             append_followup_subtasks,
@@ -1377,6 +1612,8 @@ class TodoTools:
         return [
             "create_task",
             "update_task_status",
+            "reopen_subtask",
+            "update_subtask",
             "record_task_fallback",
             "plan_task_recovery",
             "append_followup_subtasks",

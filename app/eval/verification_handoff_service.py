@@ -93,11 +93,14 @@ def build_rule_verification_handoff(
     recovery_context = recovery_context if isinstance(recovery_context, dict) else {}
     recovery_handoff: Dict[str, Any] = {}
     todo_id = preview(str(recovery_context.get("todo_id", "") or "").strip(), 120)
+    subtask_id = preview(str(recovery_context.get("subtask_id", "") or "").strip(), 120)
     subtask_number = recovery_context.get("subtask_number")
     fallback_record = recovery_context.get("fallback_record", {})
     recovery_decision = recovery_context.get("recovery_decision", {})
     if todo_id:
         recovery_handoff["todo_id"] = todo_id
+    if subtask_id:
+        recovery_handoff["subtask_id"] = subtask_id
     if subtask_number not in (None, ""):
         recovery_handoff["subtask_number"] = subtask_number
     if isinstance(fallback_record, dict) and fallback_record:

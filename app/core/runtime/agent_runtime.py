@@ -44,6 +44,8 @@ from app.core.runtime.runtime_finalization import (
 from app.core.runtime.todo_runtime_lifecycle import (
     append_recovery_summary_for_user,
     auto_manage_todo_recovery,
+    build_duplicate_todo_binding_error,
+    finalize_active_todo_context,
     maybe_emit_todo_binding_warning,
     update_active_todo_context,
 )
@@ -80,7 +82,9 @@ class AgentRuntime:
         "get_task_progress",
         "generate_task_report",
         "update_task_status",
+        "update_subtask",
         "record_task_fallback",
+        "reopen_subtask",
         "plan_task_recovery",
         "append_followup_subtasks",
     }
@@ -435,6 +439,10 @@ class AgentRuntime:
             tool_failures=last_tool_failures,
             final_answer_written=final_answer_written,
         )
+        self._active_todo_context = finalize_active_todo_context(
+            current_context=self._active_todo_context,
+            runtime_state=runtime_state,
+        )
         self.last_runtime_state = runtime_state
         self.last_stop_reason = stop_reason
         return final_answer
@@ -658,6 +666,41 @@ class AgentRuntime:
         for call in tool_calls:
             fn = call.get("function", {}) if isinstance(call, dict) else {}
             tool_name = str(fn.get("name", "")).strip()
+            raw_args = fn.get("arguments", "{}") if isinstance(fn, dict) else "{}"
+            tool_args = parse_json_dict(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+            if not isinstance(tool_args, dict):
+                tool_args = {}
+            current_todo_id = str(self._active_todo_context.get("todo_id", "") or "").strip()
+            binding_state = str(self._active_todo_context.get("binding_state", "") or "unbound").strip()
+            if tool_name == "create_task" and current_todo_id and binding_state == "bound" and not bool(tool_args.get("force_new_cycle")):
+                outcome = build_duplicate_todo_binding_error(self._active_todo_context)
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="tool_failed",
+                    status="error",
+                    payload={"tool": tool_name, "error": str(outcome.get("error", ""))},
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(call.get("id", "")),
+                        "content": '{"success": false, "error": "Active todo already bound for this task"}',
+                    }
+                )
+                failures.append({"tool": tool_name, "error": str(outcome.get("error", ""))})
+                executions.append(
+                    {
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "success": False,
+                        "error": str(outcome.get("error", "")),
+                        "payload": outcome.get("result", {}) if isinstance(outcome.get("result"), dict) else {},
+                    }
+                )
+                continue
             # todo guard 只做提醒，不阻断执行；这样既能保留观测信号，也不改变现有工具调用语义。
             maybe_emit_todo_binding_warning(
                 tool_name=tool_name,

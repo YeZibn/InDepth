@@ -2,17 +2,17 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-17T00:45:51+08:00
+- updated_at: 2026-04-17T16:37:12+08:00
 - enabled: true
 
 ## preferences
 
 ### goal_long_term
-- value: 写一个简单的小项目到项目主目录的work文件夹下
+- value: 恢复一下
 - source: llm_extract_v1
-- confidence: 0.93
-- updated_at: 2026-04-17T00:13:29+08:00
-- note: evidence=帮我写一个简单的小项目到项目主目录的work文件夹下
+- confidence: 0.95
+- updated_at: 2026-04-17T16:32:06+08:00
+- note: evidence=恢复一下
 
 ### interest_topics
 - value: [编程]
@@ -36,11 +36,11 @@ meta:
 - note: evidence=写一个功能齐全的python计算器
 
 ### response_style
-- value: 整合成一起
+- value: [分段生成, 逐步生成]
 - source: llm_extract_v1
-- confidence: 0.93
-- updated_at: 2026-04-16T20:14:02+08:00
-- note: evidence=我希望你将这些整合成一起
+- confidence: 0.96
+- updated_at: 2026-04-17T16:37:12+08:00
+- note: evidence=可以先细分几个部分，依次生成
 
 ### tooling_stack
 - value: [Python]

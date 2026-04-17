@@ -3,6 +3,51 @@ from typing import Any, Callable, Dict, List
 from app.core.tools.registry import ToolRegistry
 
 
+def build_duplicate_todo_binding_error(todo_context: Dict[str, Any]) -> Dict[str, Any]:
+    ctx = todo_context if isinstance(todo_context, dict) else {}
+    todo_id = str(ctx.get("todo_id", "") or "").strip()
+    return {
+        "success": False,
+        "error": f"Active todo already bound for this task: {todo_id or 'unknown'}",
+        "result": {
+            "success": False,
+            "error": f"Active todo already bound for this task: {todo_id or 'unknown'}",
+            "active_todo_id": todo_id,
+        },
+    }
+
+
+def derive_subtask_status_from_failure(fallback_record: Dict[str, Any]) -> str:
+    record = fallback_record if isinstance(fallback_record, dict) else {}
+    failure_state = str(record.get("failure_state") or record.get("state") or "failed").strip() or "failed"
+    reason_code = str(record.get("reason_code", "") or "").strip()
+    retryable = bool(record.get("retryable", True))
+    if failure_state == "awaiting_input" or reason_code == "waiting_user_input":
+        return "awaiting_input"
+    if failure_state == "timed_out":
+        return "timed_out"
+    if failure_state == "partial" or reason_code == "partial_progress":
+        return "partial"
+    if failure_state == "blocked" or reason_code == "dependency_unmet":
+        return "blocked"
+    if failure_state == "failed" and retryable:
+        return "failed"
+    return failure_state
+
+
+def finalize_active_todo_context(current_context: Dict[str, Any], runtime_state: str) -> Dict[str, Any]:
+    ctx = dict(current_context or {})
+    if not ctx:
+        return {}
+    if runtime_state == "completed":
+        ctx["binding_state"] = "closed"
+        ctx["binding_required"] = False
+        ctx["execution_phase"] = "finalizing"
+        ctx["active_subtask_number"] = None
+        ctx["active_subtask_id"] = None
+    return ctx
+
+
 def update_active_todo_context(
     current_context: Dict[str, Any],
     executions: List[Dict[str, Any]],
@@ -17,9 +62,12 @@ def update_active_todo_context(
             if todo_id:
                 next_context = {
                     "todo_id": todo_id,
+                    "active_subtask_id": None,
                     "active_subtask_number": None,
                     "execution_phase": "planning",
                     "binding_required": True,
+                    "binding_state": "bound",
+                    "todo_bound_at": payload.get("todo_bound_at", ""),
                 }
         elif tool == "update_task_status":
             todo_id = str(args.get("todo_id", payload.get("todo_id", ""))).strip()
@@ -27,16 +75,36 @@ def update_active_todo_context(
             if todo_id and subtask_number is not None:
                 status = str(args.get("status", "") or "").strip()
                 active_number = int(subtask_number)
+                active_subtask_id = str(payload.get("subtask_id", "") or "").strip() or None
                 if status in {"completed", "abandoned", "pending"}:
                     active_number = None
+                    active_subtask_id = None
                 phase = "executing" if status == "in-progress" else "planning"
                 if status in {"blocked", "failed", "partial", "awaiting_input", "timed_out"}:
                     phase = "recovering"
+                binding_state = "closed" if payload.get("all_completed") else "bound"
                 next_context = {
                     "todo_id": todo_id,
+                    "active_subtask_id": active_subtask_id,
                     "active_subtask_number": active_number,
                     "execution_phase": phase,
                     "binding_required": True,
+                    "binding_state": binding_state,
+                    "todo_bound_at": next_context.get("todo_bound_at", ""),
+                }
+        elif tool == "update_subtask":
+            todo_id = str(args.get("todo_id", payload.get("todo_id", ""))).strip()
+            subtask_number = payload.get("subtask_number") or args.get("subtask_number")
+            subtask_id = str(payload.get("subtask_id", "") or args.get("subtask_id", "")).strip()
+            if todo_id and subtask_number is not None:
+                next_context = {
+                    "todo_id": todo_id,
+                    "active_subtask_id": subtask_id or None,
+                    "active_subtask_number": int(subtask_number),
+                    "execution_phase": str(next_context.get("execution_phase", "planning") or "planning"),
+                    "binding_required": True,
+                    "binding_state": str(next_context.get("binding_state", "bound") or "bound"),
+                    "todo_bound_at": next_context.get("todo_bound_at", ""),
                 }
         elif tool == "record_task_fallback":
             todo_id = str(args.get("todo_id", payload.get("todo_id", ""))).strip()
@@ -44,9 +112,26 @@ def update_active_todo_context(
             if todo_id and subtask_number is not None:
                 next_context = {
                     "todo_id": todo_id,
+                    "active_subtask_id": str(payload.get("subtask_id", "") or "").strip() or None,
                     "active_subtask_number": int(subtask_number),
                     "execution_phase": "recovering",
                     "binding_required": True,
+                    "binding_state": "bound",
+                    "todo_bound_at": next_context.get("todo_bound_at", ""),
+                }
+        elif tool == "reopen_subtask":
+            todo_id = str(args.get("todo_id", payload.get("todo_id", ""))).strip()
+            subtask_number = payload.get("subtask_number") or args.get("subtask_number")
+            subtask_id = str(payload.get("subtask_id", "") or args.get("subtask_id", "")).strip()
+            if todo_id and subtask_number is not None:
+                next_context = {
+                    "todo_id": todo_id,
+                    "active_subtask_id": subtask_id or None,
+                    "active_subtask_number": int(subtask_number),
+                    "execution_phase": "executing",
+                    "binding_required": True,
+                    "binding_state": "bound",
+                    "todo_bound_at": next_context.get("todo_bound_at", ""),
                 }
         elif tool == "get_next_task":
             todo_id = str(args.get("todo_id", "")).strip()
@@ -55,9 +140,12 @@ def update_active_todo_context(
             if todo_id and number:
                 next_context = {
                     "todo_id": todo_id,
+                    "active_subtask_id": str(next_task.get("subtask_id", "") or "").strip() or None,
                     "active_subtask_number": int(number),
                     "execution_phase": "planning",
                     "binding_required": True,
+                    "binding_state": str(next_context.get("binding_state", "bound") or "bound"),
+                    "todo_bound_at": next_context.get("todo_bound_at", ""),
                 }
     return next_context
 
@@ -116,6 +204,7 @@ def build_orphan_todo_recovery(
     phase = str(ctx.get("execution_phase", "") or "planning").strip() or "planning"
     fallback_record = {
         "state": "failed",
+        "failure_state": "failed",
         "reason_code": "orphan_subtask_unbound",
         "reason_detail": "Todo flow failed before the runtime could bind the current step to an active subtask.",
         "impact_scope": "Automatic subtask-level recovery could not continue because no active subtask was selected.",
@@ -129,6 +218,8 @@ def build_orphan_todo_recovery(
         "failure_stage": phase,
     }
     recovery_decision = {
+        "can_resume_in_place": False,
+        "needs_derived_recovery_subtask": False,
         "primary_action": "decision_handoff",
         "recommended_actions": ["decision_handoff", "split"],
         "decision_level": "agent_decide",
@@ -158,12 +249,13 @@ def build_runtime_fallback_record(
     if runtime_state == "awaiting_user_input":
         return {
             "state": "awaiting_input",
+            "failure_state": "awaiting_input",
             "reason_code": "waiting_user_input",
             "reason_detail": preview(final_answer, 300),
             "impact_scope": "Requires user input before this subtask can continue",
             "retryable": False,
             "required_input": extract_missing_info_hints(final_answer),
-            "suggested_next_action": "decision_handoff",
+            "suggested_next_action": "wait_user",
             "evidence": [preview(final_answer, 300)],
             "owner": "user",
             "retry_count": 0,
@@ -172,6 +264,7 @@ def build_runtime_fallback_record(
     if stop_reason == "max_steps_reached":
         return {
             "state": "timed_out",
+            "failure_state": "timed_out",
             "reason_code": "budget_exhausted",
             "reason_detail": "Runtime reached max_steps without converging.",
             "impact_scope": "Recovery is needed before this subtask can be considered complete",
@@ -188,9 +281,14 @@ def build_runtime_fallback_record(
             f"{item.get('tool', 'unknown')}: {item.get('error', '')}".strip(": ")
             for item in last_tool_failures[:3]
         ]
+        joined = " ; ".join(details).lower()
+        reason_code = "tool_invocation_error"
+        if any(keyword in joined for keyword in ["permission", "denied", "network", "timeout", "timed out", "connection", "dns", "unreachable", "host"]):
+            reason_code = "execution_environment_error"
         return {
             "state": "failed",
-            "reason_code": "tool_error",
+            "failure_state": "failed",
+            "reason_code": reason_code,
             "reason_detail": "; ".join(details),
             "impact_scope": "Current subtask could not complete because one or more tools failed",
             "retryable": True,
@@ -201,19 +299,23 @@ def build_runtime_fallback_record(
             "retry_count": len(last_tool_failures),
             "retry_budget_remaining": max(0, 2 - len(last_tool_failures)),
         }
-    reason_code = "output_not_verifiable"
+    reason_code = "missing_context"
+    suggested_next_action = "repair"
     if stop_reason == "model_failed":
-        reason_code = "tool_error"
+        reason_code = "execution_environment_error"
+        suggested_next_action = "retry_with_fix"
     elif stop_reason in {"length", "content_filter"}:
-        reason_code = "output_not_verifiable"
+        reason_code = "budget_exhausted" if stop_reason == "length" else "missing_context"
+        suggested_next_action = "split" if stop_reason == "length" else "decision_handoff"
     return {
         "state": "failed",
+        "failure_state": "failed",
         "reason_code": reason_code,
         "reason_detail": preview(final_answer, 300),
         "impact_scope": "Current subtask did not finish successfully",
         "retryable": True,
         "required_input": [],
-        "suggested_next_action": "split",
+        "suggested_next_action": suggested_next_action,
         "evidence": [preview(final_answer, 300)],
         "owner": "main",
         "retry_count": 1,
@@ -237,6 +339,7 @@ def auto_manage_todo_recovery(
     ctx = todo_context or {}
     todo_id = str(ctx.get("todo_id", "")).strip()
     subtask_number = ctx.get("active_subtask_number")
+    subtask_id = str(ctx.get("active_subtask_id", "") or "").strip()
     if not todo_id or runtime_state == "completed":
         return {}
     # 只有已经绑定到具体 subtask，runtime 才能安全地把失败写回 todo 系统并规划恢复。
@@ -280,6 +383,13 @@ def auto_manage_todo_recovery(
     if not record_result.get("success"):
         return {}
 
+    derived_status = derive_subtask_status_from_failure(fallback_record)
+    if tool_registry.has("update_task_status"):
+        tool_registry.invoke(
+            "update_task_status",
+            {"todo_id": todo_id, "subtask_number": int(subtask_number), "status": derived_status},
+        )
+
     plan_result = tool_registry.invoke(
         "plan_task_recovery",
         {
@@ -299,6 +409,7 @@ def auto_manage_todo_recovery(
 
     recovery = {
         "todo_id": todo_id,
+        "subtask_id": subtask_id or str(record_result.get("result", {}).get("subtask_id", "") or "").strip(),
         "subtask_number": int(subtask_number),
         "fallback_record": fallback_record,
         "recovery_decision": decision_payload,
@@ -319,7 +430,8 @@ def auto_manage_todo_recovery(
     )
 
     if (
-        decision_payload.get("decision_level") == "auto"
+        decision_payload.get("needs_derived_recovery_subtask")
+        and decision_payload.get("decision_level") == "auto"
         and not decision_payload.get("stop_auto_recovery")
         and tool_registry.has("append_followup_subtasks")
     ):

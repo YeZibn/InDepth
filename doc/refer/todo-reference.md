@@ -1,6 +1,6 @@
 # InDepth Todo 编排参考
 
-更新时间：2026-04-16
+更新时间：2026-04-17
 
 ## 1. 目标
 
@@ -84,6 +84,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 - 复选描述项
 
 `create_task` / `append_followup_subtasks` 支持的核心字段包括：
+- `subtask_id`
 - `name` / `title`
 - `description`
 - `priority`
@@ -91,6 +92,8 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 - `split_rationale`
 - `kind`
 - `owner`
+- `origin_subtask_id`
+- `origin_subtask_number`
 - `acceptance_criteria`
 - `fallback_record`
 
@@ -197,6 +200,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 
 当前实现支持的核心字段包括：
 - `state`
+- `failure_state`
 - `reason_code`
 - `reason_detail`
 - `impact_scope`
@@ -212,14 +216,16 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 
 当前设计与实现对齐的原因码包括：
 - `dependency_unmet`
-- `tool_error`
+- `tool_invocation_error`
+- `execution_environment_error`
 - `validation_failed`
 - `missing_context`
 - `waiting_user_input`
 - `budget_exhausted`
+- `partial_progress`
+- `orphan_subtask_unbound`
 - `subagent_empty_result`
 - `subagent_execution_error`
-- `output_not_verifiable`
 
 ## 8. Recovery 决策
 
@@ -233,6 +239,9 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 ### 8.2 输出结构
 
 当前恢复决策输出包含：
+- `subtask_id`
+- `can_resume_in_place`
+- `needs_derived_recovery_subtask`
 - `primary_action`
 - `recommended_actions`
 - `decision_level`
@@ -249,10 +258,13 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 规则版恢复决策器当前使用的动作包括：
 - `retry`
 - `retry_with_fix`
+- `repair`
 - `split`
 - `fallback_path`
 - `execution_handoff`
 - `decision_handoff`
+- `wait_user`
+- `resolve_dependency`
 - `pause`
 - `degrade`
 - `abandon`
@@ -273,7 +285,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 
 ### 9.1 作用
 
-当前实现支持把恢复动作进一步落成新的 subtask，而不是只停留在建议层。
+当前实现支持把恢复动作进一步落成新的 subtask，而不是只停留在建议层；但与早期版本不同，派生 follow-up 已不再是默认恢复路径。
 
 对应工具：
 - `append_followup_subtasks(todo_id, follow_up_subtasks)`
@@ -310,21 +322,30 @@ follow-up subtask 的 `kind` 当前支持：
 
 `AgentRuntime` 现在会跟踪活跃的 todo 上下文：
 - `todo_id`
+- `active_subtask_id`
 - `active_subtask_number`
 - `execution_phase`
 - `binding_required`
+- `binding_state`
+- `todo_bound_at`
 
 上下文来源于工具执行结果，例如：
 - `create_task`
 - `update_task_status`
+- `update_subtask`
 - `record_task_fallback`
+- `reopen_subtask`
 - `get_next_task`
 
 当前语义：
 - `create_task` 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
+- `create_task` 默认会绑定当前 task 周期；若当前已有 `active_todo_id` 且未显式 `force_new_cycle`，runtime 会拒绝再次创建 todo
 - `update_task_status(..., status="in-progress")` 后，runtime 会把该 subtask 视为当前 active subtask，并进入 `executing`
+- `update_subtask(...)` 后，runtime 会同步当前 active subtask 的 `subtask_id/subtask_number`
 - `record_task_fallback(...)` 后，runtime 会把该 subtask 视为恢复中的 subtask，并进入 `recovering`
+- `reopen_subtask(...)` 后，runtime 会把该 subtask 重新置回 `executing`
 - `get_next_task` 返回 ready subtask 后，runtime 会记录候选 active subtask，但此时仍属于“待激活”状态，阶段仍偏向 `planning`
+- run 完成后，runtime 会将当前 todo 绑定切到 `closed`
 
 这意味着 runtime 已经不只是“记住最近的 todo_id”，而是开始区分：
 - 当前是否已经进入 todo 执行流
@@ -345,12 +366,14 @@ follow-up subtask 的 `kind` 当前支持：
 当前自动顺序为：
 
 1. `record_task_fallback`
-2. `plan_task_recovery`
-3. 若恢复决策为低风险自动动作，则 `append_followup_subtasks`
+2. 基于 `failure_state/reason_code` 推导 subtask 状态，并单独调用 `update_task_status`
+3. `plan_task_recovery`
+4. 仅当 `needs_derived_recovery_subtask=true` 且恢复决策允许自动推进时，才 `append_followup_subtasks`
 
 这意味着：
 - 失败记录不再只靠 agent 自觉
-- 即便 agent 没主动做恢复登记，runtime 也会在失败出口补上
+- `fallback_record` 与 subtask `status` 已经解耦
+- 恢复优先围绕原 subtask 展开，只有必要时才派生 recovery subtasks
 
 ### 10.4 当前新增的绑定告警与 orphan failure
 
@@ -369,7 +392,9 @@ runtime 会记录 `todo_binding_missing_warning` 观测事件。
 - `get_task_progress`
 - `generate_task_report`
 - `update_task_status`
+- `update_subtask`
 - `record_task_fallback`
+- `reopen_subtask`
 - `plan_task_recovery`
 - `append_followup_subtasks`
 
@@ -402,6 +427,7 @@ runtime 会记录 `todo_binding_missing_warning` 观测事件。
 1. `verification_handoff.recovery`
    包含：
    - `todo_id`
+   - `subtask_id`（若存在 active subtask）
    - `subtask_number`（若存在 active subtask）
    - `fallback_record`
    - `recovery_decision`
@@ -424,6 +450,9 @@ runtime 会记录 `todo_binding_missing_warning` 观测事件。
 
 当前已经实现：
 - richer subtask states
+- `subtask_id`
+- `update_subtask`
+- `reopen_subtask`
 - `fallback_record`
 - 规则版 `recovery_decision`
 - follow-up subtask 追加
@@ -435,7 +464,6 @@ runtime 会记录 `todo_binding_missing_warning` 观测事件。
 当前仍然是“最小规则版恢复系统”，还没有：
 - 更高级的策略评分器
 - 严格的关键路径推断
-- 强制所有复杂任务必须先建 todo 的 runtime gate
 - 恢复效果 metrics（成功率、升级率、止损率）
 
 ## 13. 一句话结论
