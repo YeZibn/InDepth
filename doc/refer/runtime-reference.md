@@ -633,6 +633,18 @@ class RuntimeCompressionConfig:
 3. 空输入不会触发模型调用，会提示：`[需要澄清] 请补充信息后继续...`
 4. 支持 `/new [label]` 立即结束旧任务并启动新任务（清空澄清等待态）。
 
+### 10.3 Completed Run 收尾
+
+completed run 当前分为两段：
+1. 主链路串行完成：`task_finished -> verification -> task_judged`
+2. 收尾任务并行执行，并在全部完成后返回 `run()`
+
+并行收尾任务包括：
+1. postmortem 生成
+2. system memory finalize
+3. user preference capture
+4. final memory compaction
+
 ## 11. 测试
 
 - `tests/test_runtime_context_compression.py`：压缩触发、摘要结构、一致性守护

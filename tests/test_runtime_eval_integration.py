@@ -1,4 +1,5 @@
 import unittest
+import threading
 from unittest.mock import patch
 
 from app.core.model.mock_provider import MockModelProvider
@@ -243,6 +244,95 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         upsert_card = mock_store.upsert_card.call_args.args[0]
         self.assertEqual(upsert_card.get("memory_type"), "experience")
         self.assertEqual(upsert_card.get("scenario", {}).get("stage"), "postmortem")
+
+    def test_runtime_parallelizes_completed_finalizers_and_waits_before_return(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "任务完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "任务完成"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+
+        class _FastOrchestrator:
+            def evaluate(self, run_outcome):
+                return RunJudgement(
+                    self_reported_success=True,
+                    verified_success=True,
+                    final_status="pass",
+                    failure_type=None,
+                    overclaim=False,
+                    confidence=0.9,
+                    verifier_breakdown=[],
+                )
+
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=ToolRegistry(),
+            max_steps=2,
+            eval_orchestrator=_FastOrchestrator(),
+            enable_llm_judge=False,
+        )
+
+        started: list[str] = []
+        started_lock = threading.Lock()
+        all_started = threading.Event()
+        release = threading.Event()
+
+        def _blocking(name: str):
+            def _run(*args, **kwargs):
+                _ = args, kwargs
+                with started_lock:
+                    if name not in started:
+                        started.append(name)
+                    if len(started) == 4:
+                        all_started.set()
+                self.assertTrue(release.wait(timeout=2.0))
+            return _run
+
+        result_box = {"value": ""}
+
+        with patch.object(runtime, "_finalize_task_memory", side_effect=_blocking("task_memory")), patch.object(
+            runtime,
+            "_capture_user_preferences",
+            side_effect=_blocking("user_preferences"),
+        ), patch(
+            "app.core.runtime.agent_runtime.generate_postmortem",
+            side_effect=_blocking("postmortem"),
+        ), patch(
+            "app.core.runtime.agent_runtime.finalize_memory_compaction",
+            side_effect=_blocking("final_compaction"),
+        ):
+            worker = threading.Thread(
+                target=lambda: result_box.__setitem__(
+                    "value",
+                    runtime.run(
+                        "请完成任务",
+                        task_id="runtime_parallel_finalize_task",
+                        run_id="runtime_parallel_finalize_run",
+                    ),
+                )
+            )
+            worker.start()
+            self.assertTrue(all_started.wait(timeout=2.0))
+            self.assertTrue(worker.is_alive())
+            release.set()
+            worker.join(timeout=2.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result_box.get("value"), "任务完成")
+        self.assertEqual(
+            set(started),
+            {"postmortem", "task_memory", "user_preferences", "final_compaction"},
+        )
 
     def test_runtime_finalize_uses_llm_generated_memory_metadata_when_enabled(self):
         provider = MockModelProvider(

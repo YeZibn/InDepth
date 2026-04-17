@@ -63,7 +63,7 @@ def finalize_completed_run(
     eval_orchestrator: Any,
     emit_event: Callable[..., Dict[str, Any]],
 ) -> Dict[str, Any]:
-    # task_finished 必须在 verifier 前发出，这样 verifier 可以读取同一轮 run 的 postmortem 证据。
+    # task_finished 必须在 verifier 前发出，确保终态事件顺序稳定。
     emit_event(
         task_id=task_id,
         run_id=run_id,
@@ -71,6 +71,7 @@ def finalize_completed_run(
         role="general",
         event_type="task_finished",
         status=task_status,
+        generate_postmortem_artifacts=False,
         payload={
             "stop_reason": stop_reason,
             "runtime_state": runtime_state,
@@ -142,6 +143,7 @@ def finalize_completed_run(
             role="general",
             event_type="task_judged",
             status="ok" if judgement.verified_success else "error",
+            generate_postmortem_artifacts=False,
             payload={
                 **judgement_payload,
                 "verification_handoff_source": handoff_source,

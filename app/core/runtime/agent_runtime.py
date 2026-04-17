@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import (
@@ -65,6 +66,7 @@ from app.core.memory.system_memory_store import SystemMemoryStore
 from app.core.memory.user_preference_store import UserPreferenceStore
 from app.core.tools.registry import ToolRegistry
 from app.observability.events import emit_event
+from app.observability.postmortem import generate_postmortem
 
 class AgentRuntime:
     START_RECALL_TOP_K = 5
@@ -422,7 +424,8 @@ class AgentRuntime:
         final_answer = completed_outcome["final_answer"]
         task_finished_status = completed_outcome["task_finished_status"]
 
-        self._finalize_task_memory(
+        self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
+        self._run_parallel_completed_finalizers(
             task_id=task_id,
             run_id=run_id,
             user_input=user_input,
@@ -430,14 +433,7 @@ class AgentRuntime:
             stop_reason=stop_reason,
             runtime_status=task_finished_status,
             tool_failures=last_tool_failures,
-        )
-        self._capture_user_preferences(task_id=task_id, run_id=run_id, user_input=user_input)
-        self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
-        finalize_memory_compaction(
-            task_id=task_id,
-            final_answer=final_answer,
             final_answer_written=final_answer_written,
-            memory_store=self.memory_store,
         )
         self.last_runtime_state = runtime_state
         self.last_stop_reason = stop_reason
@@ -582,6 +578,57 @@ class AgentRuntime:
             preview=self._preview,
             emit_event=emit_event,
         )
+
+    def _generate_run_postmortem(self, task_id: str, run_id: str) -> None:
+        generate_postmortem(task_id=task_id, run_id=run_id)
+
+    def _run_parallel_completed_finalizers(
+        self,
+        task_id: str,
+        run_id: str,
+        user_input: str,
+        final_answer: str,
+        stop_reason: str,
+        runtime_status: str,
+        tool_failures: List[Dict[str, str]],
+        final_answer_written: bool,
+    ) -> None:
+        tasks: List[tuple[str, Callable[[], None]]] = [
+            ("postmortem", lambda: self._generate_run_postmortem(task_id=task_id, run_id=run_id)),
+            (
+                "task_memory",
+                lambda: self._finalize_task_memory(
+                    task_id=task_id,
+                    run_id=run_id,
+                    user_input=user_input,
+                    final_answer=final_answer,
+                    stop_reason=stop_reason,
+                    runtime_status=runtime_status,
+                    tool_failures=tool_failures,
+                ),
+            ),
+            (
+                "user_preferences",
+                lambda: self._capture_user_preferences(task_id=task_id, run_id=run_id, user_input=user_input),
+            ),
+            (
+                "final_compaction",
+                lambda: finalize_memory_compaction(
+                    task_id=task_id,
+                    final_answer=final_answer,
+                    final_answer_written=final_answer_written,
+                    memory_store=self.memory_store,
+                ),
+            ),
+        ]
+        max_workers = max(len(tasks), 1)
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="runtime-finalize") as executor:
+            futures = {executor.submit(fn): name for name, fn in tasks}
+            for future, name in futures.items():
+                try:
+                    future.result()
+                except Exception as e:
+                    self._trace(f"[runtime] finalize_task_failed name={name} error={str(e)}")
 
     def _parse_json_dict(self, text: str) -> Dict[str, Any]:
         return parse_json_dict(text)

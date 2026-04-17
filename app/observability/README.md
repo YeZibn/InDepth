@@ -12,6 +12,7 @@
 
 - `schema.py`：事件结构与事件类型
 - `events.py`：统一 `emit_event(...)` 接口
+  - 支持 `generate_postmortem_artifacts=False`，用于关闭事件级同步 postmortem 副作用，由调用方自行调度
 - `store.py`：事件落盘与查询
 - `store.py::SystemMemoryEventStore`：`memory_triggered/retrieved/decision_made` 落库
 - `metrics.py`：任务级指标聚合

@@ -15,6 +15,7 @@ def emit_event(
     payload: Optional[Dict[str, Any]] = None,
     store: Optional[EventStore] = None,
     system_memory_store: Optional[SystemMemoryEventStore] = None,
+    generate_postmortem_artifacts: bool = True,
 ) -> Dict[str, Any]:
     normalized_payload = dict(payload or {})
     normalized_event_type = (event_type or "").strip()
@@ -50,7 +51,7 @@ def emit_event(
     # - task_finished: 先产出一次复盘，供后续 verifier 检查证据目录
     # - task_judged: 评估完成后再产出一次最终复盘（包含评估结论）
     # - verification_skipped: 记录中间轮次（如 awaiting_user_input）复盘
-    if normalized_event_type in {"task_finished", "task_judged", "verification_skipped"}:
+    if generate_postmortem_artifacts and normalized_event_type in {"task_finished", "task_judged", "verification_skipped"}:
         try:
             from .postmortem import generate_postmortem
 
