@@ -12,9 +12,10 @@ Todo 编排层负责把复杂任务拆成可执行、可验证、可审计的最
 3. 若执行失败，先把失败事实写入 `Fallback Record`
 4. 再单独推导 subtask 当前应进入的状态
 5. 然后由 `plan_task_recovery` 判断能否原地恢复
-6. 只有原地恢复不合适时，才派生 recovery subtask
-7. 恢复完成后，可通过 `reopen_subtask` 显式回到原 subtask 主线
-8. task 完成后，当前 todo 绑定被关闭
+6. 在 rule decision 之后，可选再触发一次独立的 LLM recovery planner 调用
+7. 只有原地恢复不合适时，才派生 recovery subtask
+8. 恢复完成后，可通过 `reopen_subtask` 显式回到原 subtask 主线
+9. task 完成后，当前 todo 绑定被关闭
 
 这条链路里的关键节点包括：
 - `active_todo_id` 绑定：决定本次 task 围绕哪个 todo 运行
@@ -22,6 +23,7 @@ Todo 编排层负责把复杂任务拆成可执行、可验证、可审计的最
 - `record_task_fallback`：记录失败事实，而不是直接重写整个 subtask
 - `update_task_status`：单独维护 subtask 生命周期状态
 - `plan_task_recovery`：决定原地恢复还是派生恢复
+- 独立 `LLM recovery planner`：在规则边界内补充语义化恢复策略
 - `reopen_subtask`：显式把恢复重新挂回原主线
 
 这意味着当前 todo 系统已经不只是“列清单”，而是形成了一套围绕 subtask 主线推进、失败恢复和任务边界管理的运行机制。
@@ -160,11 +162,11 @@ todo 里真正被执行的是某个 active subtask。
 - 让 subtask 状态机仍然保持清晰
 - 避免 `fallback_record` 直接承担所有语义
 
-### 2.1.6 关键节点 6：Recovery Planner 决策
+### 2.1.6 关键节点 6：Rule Recovery Planner 决策
 
 接下来系统会调用 `plan_task_recovery(...)`。
 
-这一层产出 `recovery_decision`，其中最关键的是两个控制位：
+这一层先产出一版规则侧的 `recovery_decision`，其中最关键的是两个控制位：
 - `can_resume_in_place`
 - `needs_derived_recovery_subtask`
 
@@ -173,7 +175,7 @@ todo 里真正被执行的是某个 active subtask。
 1. 原 subtask 能不能继续围绕自己恢复
 2. 恢复动作是否已经独立到需要新建 recovery subtask
 
-除此之外，planner 还会给出：
+除此之外，rule planner 还会给出：
 - `primary_action`
 - `recommended_actions`
 - `decision_level`
@@ -181,7 +183,7 @@ todo 里真正被执行的是某个 active subtask。
 - `resume_condition`
 - 必要时的 `next_subtasks`
 
-这是当前恢复链路最关键的分叉点。
+这是当前恢复链路最关键的第一层分叉点。
 
 ### 2.1.7 关键节点 7：原地恢复 or 派生恢复
 
@@ -284,6 +286,185 @@ task 绑定 active_todo_id
 ```
 
 当前实现里，这 11 个节点一起构成了失败恢复主线。理解了这条主线，再看后面的状态机、fallback 字段和 recovery 输出，就不会只停留在“字段很多”的层面，而能看出系统到底在怎样保护 subtask 主线。
+
+## 2.2 独立 LLM Recovery Planner 详解
+
+前面的 2.1 讲的是失败恢复主线。这里单独讲当前设计里新增的 `LLM recovery planner`，避免把它混在总流程节点里看不清。
+
+这部分最重要的结论只有一句：
+- 它是一 个独立的、额外发生的 planner 调用
+- 它不属于主链路当前 step 的执行推理
+- 它也不直接替代 `plan_task_recovery`
+
+### 2.2.1 它在链路中的位置
+
+当前顺序是：
+1. Runtime 识别 run 未完成或失败退出
+2. `record_task_fallback(...)` 写入失败事实
+3. `update_task_status(...)` 推导并写入 subtask 生命周期状态
+4. `plan_task_recovery(...)` 先生成 rule decision
+5. 若开启 `enable_llm_recovery_planner`，再额外调用一次独立的 `LLM recovery planner`
+6. 系统把 LLM 输出按规则边界做归一化与裁剪
+7. 再决定是否 `append_followup_subtasks(...)`
+
+也就是说，LLM planner 并不负责“发现失败”，它消费的是已经整理好的失败上下文。
+
+### 2.2.2 为什么要单独拆成一次调用
+
+如果把 recovery 判断直接塞进主链路当前 step，会有三个问题：
+- 当前 step 的目标是继续执行任务，容易把“恢复规划”和“继续干活”混在一起
+- 主 step 未必能稳定拿到完整的 fallback facts、rule decision 和边界约束
+- 很难单独开关、观测、测试和回退
+
+因此当前设计坚持：
+- 主链路 step 负责执行
+- 独立 planner 调用负责恢复规划
+- 规则层负责最后裁剪
+
+### 2.2.3 它接收什么信息
+
+当前实现里，独立 LLM planner 接收的核心输入可以分成四组：
+
+第一组，当前恢复上下文：
+- `todo_id`
+- `subtask_id`
+- `subtask_number`
+- `runtime_state`
+- `stop_reason`
+- `final_answer_preview`
+
+第二组，失败事实：
+- `fallback_record`
+- `last_tool_failures`
+
+第三组，运行时绑定信息：
+- `binding_state`
+- `execution_phase`
+
+第四组，规则侧先给出的基线：
+- rule planner 产出的 `fallback_decision`
+- 规则整理出的 `guardrails`
+
+这意味着它不是直接读原始日志乱做判断，而是读一份已经结构化过的 recovery context。
+
+### 2.2.4 规则层先交给它什么边界
+
+在 LLM planner 执行前，系统会先从 rule decision 里整理出一份 guardrails。当前重点包括：
+- `allowed_primary_actions`
+- `fallback_primary_action`
+- `must_stop_auto_recovery`
+- `can_only_escalate_decision_level`
+- `must_preserve_main_subtask`
+- `must_derive_recovery_subtask`
+- `must_anchor_followups_to_origin`
+- `retry_budget_remaining`
+- `retryable`
+
+这些 guardrails 的作用是：
+- 限制它只能在允许动作集合里选动作
+- 不允许它降低既有安全级别
+- 不允许它派生没有来源锚点的 recovery subtasks
+- 不允许它绕过 retry budget 和 stop_auto_recovery 之类的硬边界
+
+### 2.2.5 它主要负责判断什么
+
+当前设计里，LLM planner 不是来“改字段文案”的，而是重点补充语义策略判断。它最重要的职责有四个：
+
+1. 判断这次失败是否仍然适合原地恢复
+这里主要影响 `can_resume_in_place`。
+
+2. 判断恢复动作是否已经独立成新的工作单元
+这里主要影响 `needs_derived_recovery_subtask`。
+
+3. 在允许动作集合中选择更合适的动作
+这里主要影响 `primary_action` 和 `recommended_actions`。
+
+4. 如果需要派生，给出更像样的 recovery subtask 草案
+这里主要影响 `next_subtasks` 的质量。
+
+换句话说，规则层负责“不能乱来”，LLM 负责“在允许范围里更聪明地选”。
+
+### 2.2.6 它输出什么
+
+当前实现里，LLM planner 的目标输出包括：
+- `can_resume_in_place`
+- `needs_derived_recovery_subtask`
+- `primary_action`
+- `recommended_actions`
+- `decision_level`
+- `rationale`
+- `resume_condition`
+- `stop_auto_recovery`
+- `suggested_owner`
+- `next_subtasks`
+
+但这里要注意：
+- 这不是最终直接落地结果
+- 这是“候选恢复策略”
+
+它必须再经过规则归一化之后，才会变成最终 `recovery_decision`。
+
+### 2.2.7 规则最终如何裁剪 LLM 输出
+
+当前实现里，LLM 输出回来后不会直接信任，而是会经过一次 normalize。
+
+重点裁剪规则包括：
+- `primary_action` 必须在 `allowed_primary_actions` 里
+- `decision_level` 只能维持或升级，不能降级
+- `stop_auto_recovery` 只会被维持或收紧，不会被放宽
+- 如果规则已经要求必须派生 recovery subtask，LLM 不能取消
+- 如果最终需要派生，`next_subtasks` 会被补齐 `origin_subtask_id / origin_subtask_number`
+
+这一步非常关键，因为它决定了：
+- LLM 能参与策略
+- 但不能突破系统状态机和安全边界
+
+### 2.2.8 什么时候会真的 append recovery subtasks
+
+不是 LLM 说“需要派生”就一定 append。
+
+当前 runtime 仍然保留原来的自动执行门槛。通常要同时满足：
+- `needs_derived_recovery_subtask = true`
+- `decision_level = auto`
+- `stop_auto_recovery = false`
+- `next_subtasks` 非空
+- `append_followup_subtasks` 工具可用
+
+只有这些条件都成立，系统才会真的自动追加 follow-up subtasks。
+
+所以这里分成两层：
+- planner 决定“建议怎么恢复”
+- runtime 决定“是否现在自动执行这个恢复”
+
+### 2.2.9 失败或异常时如何回退
+
+当前实现里，独立 LLM planner 是可选增强，不是硬依赖。
+
+如果出现下面任一情况：
+- `enable_llm_recovery_planner = false`
+- model provider 不可用
+- LLM 调用异常
+- LLM 输出不是合法 JSON
+- 输出不满足规则约束
+
+系统都会回退到 rule planner 的结果。
+
+这也是为什么当前实现会在最终 `recovery_decision` 里保留：
+- `planner_source = "llm"` 或
+- `planner_source = "rule"`
+
+这样后面做观测、调试和评估时，可以直接看出本次恢复决策最终是谁主导的。
+
+### 2.2.10 现在项目里它的定位
+
+如果用一句话总结当前项目里的定位：
+
+`plan_task_recovery` 是恢复决策的稳定基线，独立 `LLM recovery planner` 是建立在这个基线之上的语义增强层。
+
+所以当前不是“规则还是 LLM 二选一”，而是：
+- 规则先给安全底盘
+- LLM 在底盘内做更细的恢复策略判断
+- runtime 再决定是否自动落地
 
 ## 3. 何时必须创建 Todo
 

@@ -1,5 +1,11 @@
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
+from app.core.model.base import GenerationConfig, ModelProvider
+from app.core.runtime.recovery_planner_service import (
+    build_rule_recovery_guardrails,
+    generate_recovery_decision_llm,
+    normalize_llm_recovery_decision,
+)
 from app.core.tools.registry import ToolRegistry
 
 
@@ -335,6 +341,10 @@ def auto_manage_todo_recovery(
     preview: Callable[[str, int], str],
     extract_missing_info_hints: Callable[[str], List[str]],
     emit_event: Callable[..., Dict[str, Any]],
+    model_provider: Optional[ModelProvider] = None,
+    enable_llm_recovery_planner: bool = False,
+    build_recovery_planner_config: Optional[Callable[[], GenerationConfig]] = None,
+    parse_json_dict: Optional[Callable[[str], Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     ctx = todo_context or {}
     todo_id = str(ctx.get("todo_id", "")).strip()
@@ -407,9 +417,53 @@ def auto_manage_todo_recovery(
     if not plan_result.get("success") or not decision_payload:
         return {}
 
-    recovery = {
+    recovery_context = {
         "todo_id": todo_id,
         "subtask_id": subtask_id or str(record_result.get("result", {}).get("subtask_id", "") or "").strip(),
+        "subtask_number": int(subtask_number),
+        "runtime_state": runtime_state,
+        "stop_reason": stop_reason,
+        "fallback_record": fallback_record,
+        "last_tool_failures": last_tool_failures[:5] if isinstance(last_tool_failures, list) else [],
+        "final_answer_preview": preview(final_answer, 300),
+        "todo_context": {
+            "binding_state": str(ctx.get("binding_state", "") or ""),
+            "execution_phase": str(ctx.get("execution_phase", "") or ""),
+        },
+    }
+    planner_source = "rule"
+    if (
+        enable_llm_recovery_planner
+        and model_provider is not None
+        and build_recovery_planner_config is not None
+        and parse_json_dict is not None
+    ):
+        guardrails = build_rule_recovery_guardrails(
+            fallback_record=fallback_record,
+            fallback_decision=decision_payload,
+        )
+        llm_candidate = generate_recovery_decision_llm(
+            model_provider=model_provider,
+            enabled=True,
+            build_config=build_recovery_planner_config,
+            parse_json_dict=parse_json_dict,
+            recovery_context=recovery_context,
+            fallback_decision=decision_payload,
+            guardrails=guardrails,
+        )
+        decision_payload = normalize_llm_recovery_decision(
+            candidate=llm_candidate,
+            fallback=decision_payload,
+            guardrails=guardrails,
+            current_subtask_id=recovery_context["subtask_id"],
+            current_subtask_number=int(subtask_number),
+            preview=preview,
+        )
+        planner_source = str(decision_payload.get("planner_source", "") or "rule")
+
+    recovery = {
+        "todo_id": todo_id,
+        "subtask_id": recovery_context["subtask_id"],
         "subtask_number": int(subtask_number),
         "fallback_record": fallback_record,
         "recovery_decision": decision_payload,
@@ -426,6 +480,7 @@ def auto_manage_todo_recovery(
             "subtask_number": int(subtask_number),
             "primary_action": decision_payload.get("primary_action", ""),
             "decision_level": decision_payload.get("decision_level", ""),
+            "planner_source": planner_source,
         },
     )
 

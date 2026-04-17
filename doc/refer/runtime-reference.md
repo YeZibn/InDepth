@@ -12,8 +12,9 @@
 3. 维护 active todo / active subtask 执行上下文
 4. 当 run 正常收敛或失败退出时，进入统一的结束处理
 5. 若存在 todo 且 run 未完成，则自动触发 fallback 与 recovery 链路
-6. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
-7. 关闭当前 run 的活跃 todo 绑定并完成收尾
+6. recovery 链路中先生成 rule decision，再可选触发一次独立的 LLM recovery planner 调用
+7. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
+8. 关闭当前 run 的活跃 todo 绑定并完成收尾
 
 当前 Runtime 中与 todo/recovery 最相关的关键节点包括：
 - tool loop：决定当前动作属于哪个工具调用

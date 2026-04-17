@@ -105,6 +105,7 @@ class AgentRuntime:
         enable_memory_recall_reranker: Optional[bool] = None,
         enable_memory_card_metadata_llm: Optional[bool] = None,
         enable_verification_handoff_llm: Optional[bool] = None,
+        enable_llm_recovery_planner: Optional[bool] = None,
         enable_llm_clarification_judge: Optional[bool] = None,
         clarification_judge_confidence_threshold: float = 0.60,
         enable_clarification_heuristic_fallback: bool = True,
@@ -150,6 +151,11 @@ class AgentRuntime:
             self.enable_verification_handoff_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
         else:
             self.enable_verification_handoff_llm = bool(enable_verification_handoff_llm)
+        if enable_llm_recovery_planner is None:
+            # Default on for real providers, off for deterministic test mock provider.
+            self.enable_llm_recovery_planner = self.model_provider.__class__.__name__ != "MockModelProvider"
+        else:
+            self.enable_llm_recovery_planner = bool(enable_llm_recovery_planner)
         if enable_llm_clarification_judge is None:
             # Default on for real providers, off for deterministic test mock provider.
             self.enable_llm_clarification_judge = self.model_provider.__class__.__name__ != "MockModelProvider"
@@ -756,6 +762,10 @@ class AgentRuntime:
             preview=self._preview,
             extract_missing_info_hints=self._extract_missing_info_hints,
             emit_event=emit_event,
+            model_provider=self.model_provider,
+            enable_llm_recovery_planner=self.enable_llm_recovery_planner,
+            build_recovery_planner_config=self._build_recovery_planner_config,
+            parse_json_dict=self._parse_json_dict,
         )
 
     def _append_recovery_summary_for_user(self, answer: str) -> str:
@@ -822,6 +832,21 @@ class AgentRuntime:
         return GenerationConfig(
             temperature=0.1,
             max_tokens=900,
+            provider_options=options,
+        )
+
+    def _build_recovery_planner_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        try:
+            model_cfg = load_runtime_model_config()
+            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
+            if mini_id:
+                options["model"] = mini_id
+        except Exception:
+            pass
+        return GenerationConfig(
+            temperature=0.1,
+            max_tokens=1200,
             provider_options=options,
         )
 

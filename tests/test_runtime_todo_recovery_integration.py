@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,11 @@ from app.tool.todo_tool.todo_tool import _parse_task_file, load_todo_tools
 
 
 class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
+    def test_runtime_disables_llm_recovery_planner_by_default_for_mock_provider(self):
+        provider = MockModelProvider(scripted_outputs=[])
+        runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry())
+        self.assertFalse(runtime.enable_llm_recovery_planner)
+
     def test_runtime_rejects_duplicate_create_task_when_active_todo_is_bound(self):
         provider = MockModelProvider(
             scripted_outputs=[
@@ -492,6 +498,303 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(recovery.get("recovery_decision", {}).get("primary_action"), "retry_with_fix")
         self.assertTrue(recovery.get("recovery_decision", {}).get("can_resume_in_place"))
         self.assertFalse(recovery.get("recovery_decision", {}).get("needs_derived_recovery_subtask"))
+
+    def test_runtime_uses_independent_llm_recovery_planner_when_enabled(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Demo Todo","context":"Runtime recovery demo",'
+                                                    '"split_reason":"Need tracked todo recovery",'
+                                                    '"subtasks":[{"name":"Implement step","description":"Do the work"}]}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_activate",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "update_task_status",
+                                                "arguments": '{"todo_id":"20260416_999999_demo","subtask_number":1,"status":"in-progress"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_fail",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "always_fail",
+                                                "arguments": '{"text":"boom"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": ""},
+                            }
+                        ]
+                    },
+                },
+                json.dumps(
+                    {
+                        "can_resume_in_place": True,
+                        "needs_derived_recovery_subtask": True,
+                        "primary_action": "split",
+                        "recommended_actions": ["split", "retry_with_fix"],
+                        "decision_level": "auto",
+                        "rationale": "The failure suggests splitting out a smaller diagnostic follow-up before retrying.",
+                        "resume_condition": "A smaller diagnostic follow-up is prepared.",
+                        "stop_auto_recovery": False,
+                        "suggested_owner": "main",
+                        "next_subtasks": [
+                            {
+                                "name": "Diagnose the failing tool invocation",
+                                "goal": "Find the smallest fix before retrying the original subtask",
+                                "description": "Inspect the failing tool call and prepare a minimal correction step.",
+                                "kind": "diagnose",
+                                "owner": "main",
+                                "depends_on": [1],
+                                "acceptance_criteria": ["Minimal fix path identified"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        registry.register(
+            ToolSpec(
+                name="always_fail",
+                description="Always fail for testing",
+                handler=lambda text: {"success": False, "error": f"forced failure: {text}"},
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=registry,
+            max_steps=4,
+            enable_verification_handoff_llm=False,
+            enable_llm_recovery_planner=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_999999_demo"),
+            ):
+                final = runtime.run(
+                    "Please create a todo and execute the implementation step.",
+                    task_id="runtime_todo_llm_recovery_task",
+                    run_id="runtime_todo_llm_recovery_run",
+                )
+
+            self.assertIn("next: split / auto", final)
+            parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
+            self.assertEqual(len(parsed["subtasks"]), 2)
+            self.assertEqual(parsed["subtasks"][1]["origin_subtask_number"], "1")
+            self.assertEqual(parsed["subtasks"][1]["origin_subtask_id"], parsed["subtasks"][0]["subtask_id"])
+            self.assertEqual(runtime._latest_todo_recovery["recovery_decision"]["planner_source"], "llm")
+            self.assertGreaterEqual(len(provider.requests), 5)
+            self.assertTrue(
+                any("recovery_planner" in req["messages"][1]["content"] for req in provider.requests if len(req["messages"]) > 1)
+            )
+
+    def test_runtime_recovery_planner_falls_back_to_rule_when_llm_output_is_invalid(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Demo Todo","context":"Runtime recovery demo",'
+                                                    '"split_reason":"Need tracked todo recovery",'
+                                                    '"subtasks":[{"name":"Implement step","description":"Do the work"}]}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_activate",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "update_task_status",
+                                                "arguments": '{"todo_id":"20260416_999999_demo","subtask_number":1,"status":"in-progress"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_fail",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "always_fail",
+                                                "arguments": '{"text":"boom"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": ""},
+                            }
+                        ]
+                    },
+                },
+                "not-json",
+            ]
+        )
+
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        registry.register(
+            ToolSpec(
+                name="always_fail",
+                description="Always fail for testing",
+                handler=lambda text: {"success": False, "error": f"forced failure: {text}"},
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=registry,
+            max_steps=4,
+            enable_verification_handoff_llm=False,
+            enable_llm_recovery_planner=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_999999_demo"),
+            ):
+                final = runtime.run(
+                    "Please create a todo and execute the implementation step.",
+                    task_id="runtime_todo_llm_recovery_invalid_task",
+                    run_id="runtime_todo_llm_recovery_invalid_run",
+                )
+
+            self.assertIn("next: retry_with_fix / auto", final)
+            parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
+            self.assertEqual(len(parsed["subtasks"]), 1)
+            self.assertEqual(runtime._latest_todo_recovery["recovery_decision"]["planner_source"], "rule")
+            self.assertGreaterEqual(len(provider.requests), 5)
 
 
 if __name__ == "__main__":
