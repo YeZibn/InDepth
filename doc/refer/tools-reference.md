@@ -6,6 +6,18 @@
 
 工具体系负责将原子能力封装为 Agent 可调用的函数，是 Agent 与外部世界交互的桥梁。
 
+从整体运行逻辑看，工具体系在当前实现里承担三层作用：
+1. 提供原子能力，例如读写文件、bash、todo 编排、search、memory 等
+2. 作为 Runtime 状态机的输入来源，驱动 `active_todo_context`、失败分类和恢复链路
+3. 作为观测事件的主要产出源，把执行事实写入 event stream、handoff 与 postmortem
+
+其中与整体运行节点关系最紧密的工具链路包括：
+- 普通执行工具：真正推进业务动作
+- Todo 工具：绑定 task 周期、选择 active subtask、记录失败、规划恢复
+- Memory 工具：沉淀运行中经验
+
+因此，工具不只是“可调用函数列表”，而是 Runtime 编排与状态推进的重要触发器。
+
 相关代码：
 - `app/core/tools/decorator.py` - 声明层
 - `app/core/tools/registry.py` - 注册层

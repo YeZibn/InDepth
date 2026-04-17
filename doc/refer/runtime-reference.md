@@ -6,6 +6,24 @@
 
 `AgentRuntime`（`app/core/runtime/agent_runtime.py`）是执行中枢，负责把对话请求转为可控执行循环，并在结束时完成评估、观测、记忆收尾。
 
+从整体运行逻辑看，当前 Runtime 的主链路可以概括为：
+1. 建立本次 run 的消息上下文与执行循环
+2. 在每一步中处理模型输出、工具调用和 stop policy
+3. 维护 active todo / active subtask 执行上下文
+4. 当 run 正常收敛或失败退出时，进入统一的结束处理
+5. 若存在 todo 且 run 未完成，则自动触发 fallback 与 recovery 链路
+6. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
+7. 关闭当前 run 的活跃 todo 绑定并完成收尾
+
+当前 Runtime 中与 todo/recovery 最相关的关键节点包括：
+- tool loop：决定当前动作属于哪个工具调用
+- `_active_todo_context`：跟踪 `todo_id / active_subtask / execution_phase / binding_state`
+- stop policy：决定 run 是正常完成、等待输入还是失败退出
+- `auto_manage_todo_recovery`：在失败出口自动补齐恢复链路
+- finalization：把恢复信息外溢到 handoff、评估与用户可见摘要
+
+因此，Runtime 不只是“跑模型 + 调工具”，它还承担了当前任务边界、subtask 执行归属和失败恢复闭环的编排职责。
+
 核心职责：
 - 管理多步推理循环（Tool Calling Loop）
 - 处理模型响应与工具执行

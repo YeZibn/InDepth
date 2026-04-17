@@ -13,6 +13,22 @@ Eval 层的职责不是“再让模型回答一次”，而是把 Runtime 主链
 
 换句话说，Eval 层负责把“主执行链路的产出”转成“结构化结论”。
 
+如果从整体运行逻辑看，Eval 在当前系统里位于主执行链路之后、观测与 postmortem 之前：
+1. Runtime 完成主循环，得到 `final_answer / stop_reason / runtime_status`
+2. 若 run 触发了 todo recovery，恢复信息会先进入 `verification_handoff`
+3. Eval 读取这些运行事实，构造 `RunOutcome`
+4. verifier 链先做硬检查，再做软判断
+5. 最终输出 `RunJudgement`
+6. judgement 再继续外溢到观测事件、postmortem 和后续复盘
+
+这里与 todo/recovery 最相关的关键节点包括：
+- `verification_handoff`：承接 run 结束时的恢复上下文
+- deterministic verifiers：首先判断运行是否健康
+- LLM judge：只在硬检查通过后评估完成度
+- `task_judged`：把最终判定写回观测与 postmortem 链路
+
+因此，Eval 的作用不是“替 Runtime 重跑一遍”，而是把 Runtime 已经发生的事实，尤其是失败恢复事实，转成统一的可审计结论。
+
 相关代码：
 - `app/eval/schema.py`
 - `app/eval/orchestrator.py`

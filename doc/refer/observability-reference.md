@@ -1,6 +1,6 @@
 # InDepth Observability 参考
 
-更新时间：2026-04-12
+更新时间：2026-04-17
 
 ## 1. 目标
 
@@ -12,6 +12,32 @@
 核心问题：
 - 如何让执行过程可审计？
 - 如何生成可读的复盘报告？
+
+如果从整体运行逻辑看，观测层贯穿整个执行链路，但在当前系统里最重要的角色有三类：
+1. 在运行中记录事实
+   例如模型调用、工具调用、todo binding warning、tool failure、memory event
+2. 在 run 结束时固化关键节点
+   例如 `task_finished`、`verification_started`、`verification_failed`、`task_judged`
+3. 在失败恢复场景里保留恢复证据
+   例如 `todo_orphan_failure_detected`、自动 recovery 规划结果、最终 recovery 摘要
+
+如果把主线压缩成一句话，就是：
+Runtime 和工具在执行过程中不断发事件，观测层把这些事件沉淀为“过程时间线 + 最终 judgement + postmortem”，从而让 todo/recovery 这条链路能够被事后回放。
+
+这里最关键的运行节点包括：
+- `tool_called / tool_succeeded / tool_failed`
+- `todo_binding_missing_warning`
+- `todo_orphan_failure_detected`
+- `task_finished`
+- `verification_started / verification_failed / verification_passed`
+- `task_judged`
+
+其中与失败恢复关系最紧密的是：
+- run 失败出口时记录的 recovery 相关事件
+- `task_finished` 触发的初版 postmortem
+- `task_judged` 触发的最终 judgement 与终版 postmortem
+
+因此，观测层不是简单的日志落盘，而是把“运行节点”稳定地变成“可追溯证据”。
 
 相关代码：
 - `app/observability/schema.py` - 事件模型
