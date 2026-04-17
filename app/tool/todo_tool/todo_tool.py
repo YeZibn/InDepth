@@ -211,6 +211,22 @@ def _normalize_fallback_record(record: Any) -> Dict[str, Any]:
             raise ValueError(f"{key} must be a string or string array")
         normalized[key] = [str(item).strip() for item in value if str(item).strip()]
 
+    for key in ["failure_facts", "failure_interpretation"]:
+        value = record.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"{key} must be an object")
+        normalized[key] = value
+
+    retry_guidance = record.get("retry_guidance")
+    if retry_guidance is not None:
+        if isinstance(retry_guidance, str):
+            retry_guidance = [retry_guidance]
+        if not isinstance(retry_guidance, list):
+            raise ValueError("retry_guidance must be a string or string array")
+        normalized["retry_guidance"] = [str(item).strip() for item in retry_guidance if str(item).strip()]
+
     return normalized
 
 
@@ -871,6 +887,62 @@ def _build_recovery_decision(
     allowed_degraded_delivery: bool,
     is_on_critical_path: bool,
 ) -> Dict[str, Any]:
+    def _pick_primary_action(record: Dict[str, Any], retryable_value: bool) -> str:
+        suggested = str(record.get("suggested_next_action", "") or "").strip()
+        if suggested in RECOVERY_ACTIONS:
+            return suggested
+        return "retry_with_fix" if retryable_value else "decision_handoff"
+
+    def _recommended_actions_for(
+        primary: str,
+        retryable_value: bool,
+        allow_degraded: bool,
+        has_partial: bool,
+    ) -> List[str]:
+        actions: List[str] = [primary]
+        if primary in {"retry", "retry_with_fix", "repair"}:
+            actions.extend(["retry_with_fix", "repair", "split", "execution_handoff"])
+        elif primary == "split":
+            actions.extend(["split", "retry_with_fix", "execution_handoff", "decision_handoff"])
+        elif primary == "execution_handoff":
+            actions.extend(["execution_handoff", "retry_with_fix", "split", "decision_handoff"])
+        elif primary == "wait_user":
+            actions.extend(["wait_user", "decision_handoff", "pause"])
+        elif primary == "resolve_dependency":
+            actions.extend(["resolve_dependency", "pause", "split"])
+        elif primary in {"degrade", "fallback_path"}:
+            actions.extend(["degrade", "fallback_path", "split", "decision_handoff"])
+        elif primary == "abandon":
+            actions.extend(["abandon", "decision_handoff", "fallback_path"])
+        else:
+            actions.extend(["decision_handoff", "split", "retry_with_fix"])
+
+        if retryable_value and "retry_with_fix" not in actions:
+            actions.append("retry_with_fix")
+        if allow_degraded and has_partial and "degrade" not in actions:
+            actions.append("degrade")
+
+        deduped: List[str] = []
+        for item in actions:
+            if item in RECOVERY_ACTIONS and item not in deduped:
+                deduped.append(item)
+        return deduped
+
+    def _build_split_followup() -> List[Dict[str, Any]]:
+        return [
+            {
+                "origin_subtask_id": subtask.get("subtask_id", ""),
+                "origin_subtask_number": subtask["number"],
+                "name": f"Derive a smaller recovery step for Task {subtask['number']}",
+                "goal": "Create the next smaller recovery slice for the unfinished subtask",
+                "description": "Narrow scope or rewrite the execution brief so the next attempt is materially safer than the failed one",
+                "kind": "diagnose",
+                "owner": "main",
+                "depends_on": [subtask["number"]],
+                "acceptance_criteria": ["Smaller recovery step defined"],
+            }
+        ]
+
     fallback_record = subtask.get("fallback_record", {}) or {}
     reason_code = str(fallback_record.get("reason_code", "")).strip()
     state = str(
@@ -879,6 +951,7 @@ def _build_recovery_decision(
         or subtask.get("status", "pending")
     ).strip()
     retry_count = int(fallback_record.get("retry_count", 0) or 0)
+    retryable = bool(fallback_record.get("retryable", True))
     partial_artifacts = fallback_record.get("partial_artifacts", [])
     has_partial_value = bool(partial_artifacts) or state == "partial"
     preserve_artifacts = list(partial_artifacts)
@@ -888,8 +961,13 @@ def _build_recovery_decision(
     can_resume_in_place = True
     needs_derived_recovery_subtask = False
 
-    primary_action = "retry_with_fix"
-    recommended_actions = ["retry_with_fix", "split", "execution_handoff"]
+    primary_action = _pick_primary_action(fallback_record, retryable)
+    recommended_actions = _recommended_actions_for(
+        primary=primary_action,
+        retryable_value=retryable,
+        allow_degraded=allowed_degraded_delivery,
+        has_partial=has_partial_value,
+    )
     decision_level = "auto"
     rationale = "Prefer recovering the original subtask in place before deriving new recovery work."
     next_subtasks: List[Dict[str, Any]] = []
@@ -897,122 +975,37 @@ def _build_recovery_decision(
 
     if reason_code == "dependency_unmet":
         primary_action = "resolve_dependency"
-        recommended_actions = ["resolve_dependency", "pause", "split"]
         rationale = "Dependencies are not satisfied yet, so the original subtask should wait or have prerequisites resolved first."
         resume_condition = "All prerequisite subtasks are completed."
-    elif reason_code in {"tool_error", "tool_invocation_error", "execution_environment_error"}:
-        primary_action = "retry_with_fix"
-        recommended_actions = ["retry_with_fix", "split"]
-        rationale = "Execution failures should first try the smallest safe in-place correction before deriving extra recovery tasks."
-        resume_condition = "Apply the targeted fix and retry the original subtask."
-    elif reason_code == "validation_failed":
-        primary_action = "repair"
-        recommended_actions = ["repair", "retry", "verify", "split"]
-        rationale = "Validation failure usually means the original subtask should be repaired in place and then re-checked."
-        suggested_owner = subtask.get("owner") or "main"
-        resume_condition = "Repair the original subtask and verify the corrected result."
-    elif reason_code in {"missing_context", "waiting_user_input"}:
+    elif reason_code == "waiting_user_input":
         primary_action = "wait_user"
-        recommended_actions = ["wait_user", "decision_handoff"]
         decision_level = "user_confirm"
         rationale = "The original subtask is blocked on missing information and should resume only after the input arrives."
         escalation_reason = "Missing input changes how the task should proceed."
         suggested_owner = "user"
         stop_auto_recovery = True
         resume_condition = "Required user input is provided."
-    elif reason_code == "partial_progress":
-        primary_action = "repair"
-        recommended_actions = ["repair", "retry", "split"]
-        rationale = "Partial value exists, so the best next step is to finish the original subtask in place."
-        resume_condition = "Use the existing partial output to complete the original subtask."
     elif reason_code == "budget_exhausted" or state == "timed_out":
         can_resume_in_place = False
-        needs_derived_recovery_subtask = True
-        if allowed_degraded_delivery and has_partial_value and not is_on_critical_path:
-            primary_action = "degrade"
-            recommended_actions = ["degrade", "split", "abandon"]
+        needs_derived_recovery_subtask = primary_action not in {"degrade", "fallback_path", "abandon"}
+        if primary_action in {"degrade", "fallback_path", "abandon"} and allowed_degraded_delivery and has_partial_value:
             decision_level = "agent_decide"
-            rationale = "The budget is exhausted, but partial value exists and may be deliverable."
+            rationale = "The budget is exhausted, and partial value exists, so the next step should explicitly decide whether degraded delivery is acceptable."
             escalation_reason = "Degraded delivery changes the completion promise."
-            next_subtasks = []
+            resume_condition = "Degraded delivery is explicitly accepted."
         else:
             primary_action = "split"
-            recommended_actions = ["split", "degrade", "abandon"]
+            needs_derived_recovery_subtask = True
             decision_level = "agent_decide"
             rationale = "Budget is exhausted, so recovery should shrink scope into smaller derived work."
             escalation_reason = "Further recovery needs explicit tradeoff handling."
-            next_subtasks = [
-                {
-                    "origin_subtask_id": subtask.get("subtask_id", ""),
-                    "origin_subtask_number": subtask["number"],
-                    "name": f"Split recovery path for Task {subtask['number']}",
-                    "goal": "Break the unfinished subtask into a smaller recovery step",
-                    "description": "Design the smallest derived task that can safely advance the original subtask",
-                    "kind": "diagnose",
-                    "owner": "main",
-                    "depends_on": [subtask["number"]],
-                    "acceptance_criteria": ["Smaller recovery step defined"],
-                }
-            ]
+            next_subtasks = _build_split_followup()
+            resume_condition = "A smaller derived recovery step is defined."
         stop_auto_recovery = True
-        resume_condition = "A smaller derived recovery step is ready, or degraded delivery is explicitly accepted."
-    elif reason_code == "subagent_empty_result":
-        can_resume_in_place = False
-        needs_derived_recovery_subtask = True
-        primary_action = "split"
-        recommended_actions = ["split", "retry_with_fix", "execution_handoff"]
-        rationale = "An empty sub-agent result usually means the brief should be narrowed before retrying."
-        next_subtasks = [
-            {
-                "origin_subtask_id": subtask.get("subtask_id", ""),
-                "origin_subtask_number": subtask["number"],
-                "name": f"Rewrite sub-agent brief for Task {subtask['number']}",
-                "goal": "Create a narrower, more actionable instruction set for the failed sub-agent task",
-                "description": "Shrink scope and make the expected output explicit before re-dispatching",
-                "kind": "diagnose",
-                "owner": "main",
-                "depends_on": [subtask["number"]],
-                "acceptance_criteria": ["Updated sub-agent brief prepared"],
-            },
-            {
-                "origin_subtask_id": subtask.get("subtask_id", ""),
-                "origin_subtask_number": subtask["number"],
-                "name": f"Re-dispatch Task {subtask['number']} to a narrowed sub-agent task",
-                "goal": "Retry the failed sub-agent path with a smaller objective",
-                "description": "Run the task again with the narrowed brief",
-                "kind": "handoff",
-                "owner": "subagent:general",
-                "depends_on": ["diagnose:rewrite-brief"],
-                "acceptance_criteria": ["New sub-agent result recorded"],
-            },
-        ]
-        resume_condition = "A narrowed sub-agent retry has been prepared."
-    elif reason_code == "subagent_execution_error":
-        can_resume_in_place = False
-        needs_derived_recovery_subtask = True
-        primary_action = "execution_handoff"
-        recommended_actions = ["execution_handoff", "retry_with_fix", "split"]
-        rationale = "The current executor is likely a poor fit for the failure mode, so responsibility should move first."
-        suggested_owner = "main"
-        next_subtasks = [
-            {
-                "origin_subtask_id": subtask.get("subtask_id", ""),
-                "origin_subtask_number": subtask["number"],
-                "name": f"Review sub-agent execution error for Task {subtask['number']}",
-                "goal": "Determine whether the failure came from role mismatch, context loss, or task size",
-                "description": "Inspect the sub-agent error and choose a safer execution owner",
-                "kind": "diagnose",
-                "owner": "main",
-                "depends_on": [subtask["number"]],
-                "acceptance_criteria": ["New execution owner selected"],
-            }
-        ]
-        resume_condition = "A safer execution owner has been selected."
     elif reason_code == "orphan_subtask_unbound":
         can_resume_in_place = False
         needs_derived_recovery_subtask = False
         primary_action = "decision_handoff"
-        recommended_actions = ["decision_handoff", "pause"]
         decision_level = "agent_decide"
         rationale = "Runtime could not attribute the failure to a concrete subtask, so execution should not continue automatically."
         escalation_reason = "A concrete subtask must be bound before recovery can proceed."
@@ -1020,27 +1013,50 @@ def _build_recovery_decision(
         stop_auto_recovery = True
         next_subtasks = []
         resume_condition = "Select or create the correct subtask before resuming work."
+    else:
+        can_resume_in_place = primary_action in IN_PLACE_RECOVERY_ACTIONS
+        needs_derived_recovery_subtask = primary_action in {"split", "execution_handoff"}
+        if primary_action == "wait_user":
+            decision_level = "user_confirm"
+            suggested_owner = "user"
+            stop_auto_recovery = True
+            escalation_reason = "The next step depends on external input."
+            rationale = "The recovery assessment indicates the task should pause for additional input before continuing."
+            resume_condition = "Required external input is provided."
+        elif primary_action == "resolve_dependency":
+            rationale = "The recovery assessment indicates prerequisite work should be completed before retrying the original subtask."
+            resume_condition = "Dependencies are resolved."
+        elif primary_action in {"split", "execution_handoff"}:
+            can_resume_in_place = False
+            needs_derived_recovery_subtask = True
+            decision_level = "agent_decide"
+            stop_auto_recovery = True
+            if primary_action == "split":
+                rationale = "The recovery assessment recommends narrowing scope before the next attempt."
+                next_subtasks = _build_split_followup()
+                resume_condition = "A smaller recovery slice is defined."
+            else:
+                rationale = "The recovery assessment recommends changing the executor before continuing."
+                resume_condition = "A safer execution owner is selected."
+                escalation_reason = "Recovery requires choosing a different execution owner."
+        elif primary_action in {"degrade", "fallback_path", "abandon"}:
+            can_resume_in_place = False
+            decision_level = "agent_decide"
+            stop_auto_recovery = True
+            rationale = "The recovery assessment recommends changing the delivery path rather than continuing the original subtask unchanged."
+            resume_condition = "The alternative delivery path is explicitly accepted."
+        else:
+            suggested_owner = subtask.get("owner") or "main"
+            rationale = "The recovery assessment recommends a targeted in-place correction before introducing new recovery work."
+            resume_condition = "Apply the targeted fix and retry the original subtask."
 
     if retry_budget_remaining <= 0 or retry_count >= 2:
         if can_resume_in_place and primary_action in {"retry", "retry_with_fix", "repair"}:
             can_resume_in_place = False
             needs_derived_recovery_subtask = True
             primary_action = "split"
-            recommended_actions = ["split", "execution_handoff", "abandon"]
             rationale = "Automatic retry budget is exhausted, so recovery should derive a smaller or different path."
-            next_subtasks = [
-                {
-                    "origin_subtask_id": subtask.get("subtask_id", ""),
-                    "origin_subtask_number": subtask["number"],
-                    "name": f"Derive a smaller recovery step for Task {subtask['number']}",
-                    "goal": "Create a safer recovery step after retry budget exhaustion",
-                    "description": "Decide how to shrink or hand off the original subtask after repeated failed attempts",
-                    "kind": "diagnose",
-                    "owner": "main",
-                    "depends_on": [subtask["number"]],
-                    "acceptance_criteria": ["Recovery split or handoff selected"],
-                }
-            ]
+            next_subtasks = _build_split_followup()
             resume_condition = "A smaller derived recovery step is defined."
         decision_level = "agent_decide"
         stop_auto_recovery = True
@@ -1053,6 +1069,13 @@ def _build_recovery_decision(
 
     if decision_level not in RECOVERY_DECISION_LEVELS:
         decision_level = "agent_decide"
+
+    recommended_actions = _recommended_actions_for(
+        primary=primary_action,
+        retryable_value=retryable,
+        allow_degraded=allowed_degraded_delivery,
+        has_partial=has_partial_value,
+    )
 
     return {
         "todo_id": task_data.get("metadata", {}).get("Todo ID", ""),
@@ -1391,6 +1414,9 @@ def record_task_fallback(
     owner: str = "",
     retry_count: int = 0,
     retry_budget_remaining: int = 2,
+    failure_facts: Optional[Dict[str, Any]] = None,
+    failure_interpretation: Optional[Dict[str, Any]] = None,
+    retry_guidance: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Record structured fallback metadata for an unfinished subtask."""
     task_data = _get_task_by_todo_id(todo_id)
@@ -1412,6 +1438,9 @@ def record_task_fallback(
                 "owner": owner or "main",
                 "retry_count": retry_count,
                 "retry_budget_remaining": retry_budget_remaining,
+                "failure_facts": failure_facts or {},
+                "failure_interpretation": failure_interpretation or {},
+                "retry_guidance": retry_guidance or [],
             }
         )
     except ValueError as exc:

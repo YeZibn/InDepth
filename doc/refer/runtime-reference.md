@@ -1,6 +1,6 @@
 # InDepth Runtime 参考
 
-更新时间：2026-04-17
+更新时间：2026-04-18
 
 ## 1. 定位
 
@@ -12,7 +12,7 @@
 3. 维护 active todo / active subtask 执行上下文
 4. 当 run 正常收敛或失败退出时，进入统一的结束处理
 5. 若存在 todo 且 run 未完成，则自动触发 fallback 与 recovery 链路
-6. recovery 链路中先生成 rule decision，再可选触发一次独立的 LLM recovery planner 调用
+6. recovery 链路中会先调用单次 `LLM recovery assessment`，再由 guardrails 落地恢复决策
 7. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
 8. 关闭当前 run 的活跃 todo 绑定并完成收尾
 
@@ -342,9 +342,11 @@ Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 
 自动顺序为：
 1. `record_task_fallback`
-2. `update_task_status`
-3. `plan_task_recovery`
-4. 若 `needs_derived_recovery_subtask=true && decision_level=auto && stop_auto_recovery=false`，则 `append_followup_subtasks`
+2. 单次 `LLM recovery assessment`
+3. 回写 `failure_interpretation / retry_guidance`
+4. `update_task_status`
+5. `plan_task_recovery`
+6. 若 `needs_derived_recovery_subtask=true && decision_level=auto && stop_auto_recovery=false`，则 `append_followup_subtasks`
 
 #### 4.5.3 自动恢复结果
 

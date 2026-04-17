@@ -443,6 +443,9 @@ record_task_fallback(
     owner: str = "",
     retry_count: int = 0,
     retry_budget_remaining: int = 2,
+    failure_facts: Optional[Dict[str, Any]] = None,
+    failure_interpretation: Optional[Dict[str, Any]] = None,
+    retry_guidance: Optional[List[str]] = None,
 ) -> Dict
 
 # 规划恢复动作
@@ -494,10 +497,12 @@ pending ──▶ in-progress ──▶ completed
 ```
 record_task_fallback()
     ├──▶ 持久化 fallback_record（不直接覆盖 subtask status）
+    ├──▶ 单次 LLM recovery assessment
+    │       └──▶ 产出 failure_interpretation / retry_guidance / recovery_decision
     ├──▶ update_task_status()
     │       └──▶ 基于 failure_state/reason_code 单独更新 subtask 状态
     ├──▶ plan_task_recovery()
-    │       └──▶ 先判断 can_resume_in_place / needs_derived_recovery_subtask
+    │       └──▶ 在 guardrails 内稳定产出 can_resume_in_place / needs_derived_recovery_subtask
     └──▶ append_followup_subtasks()
             └──▶ 仅在需要派生 recovery subtask 时才自动追加
 ```
@@ -507,6 +512,7 @@ record_task_fallback()
 2. Todo 编排默认先调用 `plan_task`，由其内部决定 `mode=create/update` 并执行对应路径
 3. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
    - 调 `record_task_fallback`
+   - 调单次 `LLM recovery assessment`
    - 调 `update_task_status`
    - 调 `plan_task_recovery`
    - 仅对 `needs_derived_recovery_subtask=true` 且 `decision_level=auto` 的恢复决策追加 follow-up subtasks

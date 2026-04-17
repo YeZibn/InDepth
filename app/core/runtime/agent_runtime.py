@@ -663,7 +663,32 @@ class AgentRuntime:
 
     def _build_system_prompt(self) -> str:
         parts = [p for p in [self.system_prompt, self.skill_prompt] if p]
+        retry_guidance = self._build_retry_guidance_prompt()
+        if retry_guidance:
+            parts.append(retry_guidance)
         return "\n\n".join(parts)
+
+    def _build_retry_guidance_prompt(self) -> str:
+        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
+        todo_id = str(ctx.get("todo_id", "") or "").strip()
+        subtask_number = ctx.get("active_subtask_number")
+        guidance = ctx.get("active_retry_guidance", [])
+        if isinstance(guidance, str):
+            guidance = [guidance]
+        if not todo_id or subtask_number in (None, "") or not isinstance(guidance, list):
+            return ""
+        guidance_items = [str(item).strip() for item in guidance if str(item).strip()]
+        if not guidance_items:
+            return ""
+        lines = [
+            "Retry Guidance:",
+            f"- Active todo: {todo_id}",
+            f"- Active subtask: {subtask_number}",
+            "- The current attempt is a retry/resume path. Follow these constraints when executing:",
+        ]
+        lines.extend([f"- {item}" for item in guidance_items])
+        lines.append("- Do not repeat the previous failed execution pattern if these constraints conflict with it.")
+        return "\n".join(lines)
 
     def _handle_native_tool_calls(
         self,

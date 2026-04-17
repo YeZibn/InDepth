@@ -10,6 +10,22 @@ DECISION_LEVEL_ORDER = {
     "user_confirm": 2,
 }
 
+FAILURE_INTERPRETATION_REASON_CODES = {
+    "waiting_user_input",
+    "budget_exhausted",
+    "tool_invocation_error",
+    "execution_environment_error",
+    "missing_context",
+    "validation_failed",
+    "partial_progress",
+    "dependency_unmet",
+    "subagent_empty_result",
+    "subagent_execution_error",
+    "orphan_subtask_unbound",
+    "oversized_generation_request",
+    "transient_model_backend_failure",
+}
+
 
 def build_rule_recovery_guardrails(
     fallback_record: Dict[str, Any],
@@ -35,28 +51,122 @@ def build_rule_recovery_guardrails(
     }
 
 
-def generate_recovery_decision_llm(
+def build_default_failure_interpretation(
+    fallback_record: Dict[str, Any],
+    preview: Callable[[str, int], str],
+) -> Dict[str, Any]:
+    fallback_record = fallback_record if isinstance(fallback_record, dict) else {}
+    reason_code = str(fallback_record.get("reason_code", "") or "").strip() or "execution_environment_error"
+    detail = preview(str(fallback_record.get("reason_detail", "") or "").strip(), 320)
+    evidence = fallback_record.get("evidence", [])
+    if not isinstance(evidence, list):
+        evidence = [str(evidence)]
+    label_map = {
+        "waiting_user_input": "awaiting_user_input",
+        "budget_exhausted": "budget_exhausted",
+        "tool_invocation_error": "tool_invocation_error",
+        "execution_environment_error": "execution_environment_error",
+        "missing_context": "missing_context",
+        "validation_failed": "validation_failed",
+        "partial_progress": "partial_progress",
+        "dependency_unmet": "dependency_unmet",
+        "subagent_empty_result": "subagent_empty_result",
+        "subagent_execution_error": "subagent_execution_error",
+        "orphan_subtask_unbound": "orphan_subtask_unbound",
+        "oversized_generation_request": "generation_overload",
+        "transient_model_backend_failure": "transient_backend_failure",
+    }
+    interpretation = {
+        "failure_label": label_map.get(reason_code, reason_code),
+        "reason_code": reason_code,
+        "reason_detail": detail,
+        "confidence": 0.35,
+        "retryable": bool(fallback_record.get("retryable", True)),
+        "evidence": [preview(str(item or "").strip(), 160) for item in evidence[:5] if str(item or "").strip()],
+        "suspected_root_causes": [],
+        "recovery_risks": [],
+        "classification_source": "rule",
+    }
+    if detail:
+        interpretation["suspected_root_causes"] = [detail]
+    return interpretation
+
+
+def normalize_failure_interpretation(
+    candidate: Dict[str, Any],
+    fallback: Dict[str, Any],
+    preview: Callable[[str, int], str],
+) -> Dict[str, Any]:
+    out = dict(fallback if isinstance(fallback, dict) else {})
+    if not isinstance(candidate, dict) or not candidate:
+        out["classification_source"] = str(out.get("classification_source", "") or "rule")
+        return out
+
+    failure_label = preview(str(candidate.get("failure_label", "") or "").strip(), 80)
+    if failure_label:
+        out["failure_label"] = failure_label
+
+    reason_code = preview(str(candidate.get("reason_code", "") or "").strip(), 80)
+    if reason_code and reason_code in FAILURE_INTERPRETATION_REASON_CODES:
+        out["reason_code"] = reason_code
+
+    reason_detail = preview(str(candidate.get("reason_detail", "") or "").strip(), 320)
+    if reason_detail:
+        out["reason_detail"] = reason_detail
+
+    try:
+        confidence = float(candidate.get("confidence", out.get("confidence", 0.35)) or 0.35)
+    except Exception:
+        confidence = float(out.get("confidence", 0.35) or 0.35)
+    out["confidence"] = max(0.0, min(confidence, 1.0))
+    out["retryable"] = bool(candidate.get("retryable", out.get("retryable", True)))
+
+    for key in ["evidence", "suspected_root_causes", "recovery_risks"]:
+        value = candidate.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            continue
+        out[key] = [preview(str(item or "").strip(), 180) for item in value[:6] if str(item or "").strip()]
+
+    out["classification_source"] = "llm"
+    return out
+
+
+def generate_recovery_assessment_llm(
     model_provider: ModelProvider,
     enabled: bool,
     build_config: Callable[[], GenerationConfig],
     parse_json_dict: Callable[[str], Dict[str, Any]],
     recovery_context: Dict[str, Any],
+    fallback_interpretation: Dict[str, Any],
     fallback_decision: Dict[str, Any],
     guardrails: Dict[str, Any],
 ) -> Dict[str, Any]:
     if not enabled:
         return {}
     payload = {
-        "task": "recovery_planner",
+        "task": "recovery_assessment",
         "instruction": (
-            "You are an independent recovery planner called after runtime failure facts are recorded. "
+            "You are an independent failure-and-recovery assessor called after runtime failure facts are recorded. "
             "Return strict JSON only. Stay inside the rule guardrails. "
             "Do not change todo binding, do not create a new todo cycle, and do not invent success."
         ),
         "recovery_context": recovery_context,
+        "fallback_interpretation": fallback_interpretation,
         "fallback_rule_decision": fallback_decision,
         "guardrails": guardrails,
         "output_schema": {
+            "failure_label": "string",
+            "reason_code": "string",
+            "reason_detail": "string",
+            "confidence": "number",
+            "retryable": "boolean",
+            "evidence": ["string"],
+            "suspected_root_causes": ["string"],
+            "recovery_risks": ["string"],
             "can_resume_in_place": "boolean",
             "needs_derived_recovery_subtask": "boolean",
             "primary_action": "string",
@@ -64,6 +174,7 @@ def generate_recovery_decision_llm(
             "decision_level": "auto|agent_decide|user_confirm",
             "rationale": "string",
             "resume_condition": "string",
+            "retry_guidance": ["string"],
             "stop_auto_recovery": "boolean",
             "suggested_owner": "string",
             "next_subtasks": [
@@ -84,7 +195,7 @@ def generate_recovery_decision_llm(
             messages=[
                 {
                     "role": "system",
-                    "content": "You generate recovery planner JSON. Output JSON only.",
+                    "content": "You generate failure and recovery assessment JSON. Output JSON only.",
                 },
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
@@ -96,20 +207,26 @@ def generate_recovery_decision_llm(
     return parse_json_dict(str(getattr(output, "content", "") or ""))
 
 
-def normalize_llm_recovery_decision(
+def normalize_llm_recovery_assessment(
     candidate: Dict[str, Any],
-    fallback: Dict[str, Any],
+    fallback_interpretation: Dict[str, Any],
+    fallback_decision: Dict[str, Any],
     guardrails: Dict[str, Any],
     current_subtask_id: str,
     current_subtask_number: int,
     preview: Callable[[str, int], str],
 ) -> Dict[str, Any]:
+    interpretation = normalize_failure_interpretation(
+        candidate=candidate,
+        fallback=fallback_interpretation,
+        preview=preview,
+    )
     if not isinstance(candidate, dict) or not candidate:
-        out = dict(fallback)
+        out = dict(fallback_decision)
         out["planner_source"] = "rule"
-        return out
+        return {"failure_interpretation": interpretation, "recovery_decision": out}
 
-    out = dict(fallback)
+    out = dict(fallback_decision)
     allowed_actions = [
         str(item or "").strip()
         for item in (guardrails.get("allowed_primary_actions", []) or [])
@@ -158,6 +275,14 @@ def normalize_llm_recovery_decision(
     suggested_owner = preview(str(candidate.get("suggested_owner", "") or "").strip(), 80)
     if suggested_owner:
         out["suggested_owner"] = suggested_owner
+    retry_guidance = candidate.get("retry_guidance")
+    if retry_guidance is not None:
+        if isinstance(retry_guidance, str):
+            retry_guidance = [retry_guidance]
+        if isinstance(retry_guidance, list):
+            normalized_guidance = [preview(str(item or "").strip(), 180) for item in retry_guidance[:6] if str(item or "").strip()]
+            if normalized_guidance:
+                out["retry_guidance"] = normalized_guidance
 
     if out.get("needs_derived_recovery_subtask"):
         out["next_subtasks"] = normalize_recovery_subtasks(
@@ -171,7 +296,7 @@ def normalize_llm_recovery_decision(
         out["next_subtasks"] = []
 
     out["planner_source"] = "llm"
-    return out
+    return {"failure_interpretation": interpretation, "recovery_decision": out}
 
 
 def normalize_recovery_subtasks(

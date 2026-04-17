@@ -127,6 +127,9 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     owner="main",
                     retry_count=1,
                     retry_budget_remaining=1,
+                    failure_facts={"stop_reason": "tool_failed_before_stop", "signal_tags": ["timeout"]},
+                    failure_interpretation={"reason_code": "execution_environment_error", "confidence": 0.8},
+                    retry_guidance=["retry with smaller batch"],
                 )
 
             self.assertTrue(result["success"])
@@ -136,6 +139,9 @@ class TodoRecoveryFlowTests(unittest.TestCase):
             self.assertEqual(fallback["reason_code"], "tool_error")
             self.assertEqual(fallback["retry_count"], 1)
             self.assertEqual(fallback["required_input"], ["stderr log"])
+            self.assertEqual(fallback["failure_facts"]["stop_reason"], "tool_failed_before_stop")
+            self.assertEqual(fallback["failure_interpretation"]["reason_code"], "execution_environment_error")
+            self.assertEqual(fallback["retry_guidance"], ["retry with smaller batch"])
 
     def test_plan_task_recovery_returns_structured_followups(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -158,7 +164,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     reason_detail="Tests failed after implementation",
                     impact_scope="Blocks delivery of the feature",
                     retryable=True,
-                    suggested_next_action="split",
+                    suggested_next_action="repair",
                     evidence=["tests/output.txt"],
                     owner="subagent:builder",
                 )
@@ -179,6 +185,50 @@ class TodoRecoveryFlowTests(unittest.TestCase):
             self.assertEqual(payload["primary_action"], "repair")
             self.assertEqual(payload["decision_level"], "auto")
             self.assertEqual(payload["next_subtasks"], [])
+
+    def test_plan_task_recovery_prefers_llm_suggested_next_action_for_generic_failures(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000003a_demo"),
+            ):
+                created = create_task.entrypoint(
+                    task_name="Demo Task",
+                    context="Plan recovery from LLM guidance",
+                    split_reason="Need LLM-suggested action to drive recovery.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                record_task_fallback.entrypoint(
+                    todo_id=created["todo_id"],
+                    subtask_number=1,
+                    state="failed",
+                    reason_code="tool_invocation_error",
+                    reason_detail="Command exited with a recoverable error",
+                    impact_scope="Only this subtask is blocked",
+                    retryable=True,
+                    suggested_next_action="split",
+                    evidence=["stderr.txt"],
+                    owner="main",
+                    retry_count=1,
+                    retry_budget_remaining=1,
+                )
+                decision = plan_task_recovery.entrypoint(
+                    todo_id=created["todo_id"],
+                    subtask_number=1,
+                    retry_budget_remaining=1,
+                    time_budget_remaining="10m",
+                    available_roles=["builder"],
+                    allowed_degraded_delivery=False,
+                    is_on_critical_path=False,
+                )
+
+            self.assertTrue(decision["success"])
+            payload = decision["recovery_decision"]
+            self.assertEqual(payload["primary_action"], "split")
+            self.assertFalse(payload["can_resume_in_place"])
+            self.assertTrue(payload["needs_derived_recovery_subtask"])
+            self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
 
     def test_append_followup_subtasks_adds_new_recovery_steps(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -255,6 +305,51 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     todo_id=created["todo_id"],
                     subtask_number=1,
                     retry_budget_remaining=0,
+                    time_budget_remaining="",
+                    available_roles=["builder"],
+                    allowed_degraded_delivery=False,
+                    is_on_critical_path=False,
+                )
+
+            self.assertTrue(decision["success"])
+            payload = decision["recovery_decision"]
+            self.assertFalse(payload["can_resume_in_place"])
+            self.assertTrue(payload["needs_derived_recovery_subtask"])
+            self.assertEqual(payload["primary_action"], "split")
+            self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
+            self.assertEqual(payload["next_subtasks"][0]["kind"], "diagnose")
+
+    def test_plan_task_recovery_treats_oversized_generation_request_as_split(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000006_demo"),
+            ):
+                created = create_task.entrypoint(
+                    task_name="Long-form Writing",
+                    context="Plan recovery for oversized generation",
+                    split_reason="Need explicit split recovery for large generation tasks.",
+                    subtasks=[{"name": "Draft full paper", "description": "Generate the whole paper body"}],
+                )
+                record_task_fallback.entrypoint(
+                    todo_id=created["todo_id"],
+                    subtask_number=1,
+                    state="failed",
+                    reason_code="oversized_generation_request",
+                    reason_detail="Long-form generation overloaded a single model request",
+                    impact_scope="Original writing step should be narrowed",
+                    retryable=True,
+                    suggested_next_action="split",
+                    evidence=["HTTP 504", "long-form generation in one shot"],
+                    owner="main",
+                    retry_count=1,
+                    retry_budget_remaining=1,
+                )
+                decision = plan_task_recovery.entrypoint(
+                    todo_id=created["todo_id"],
+                    subtask_number=1,
+                    retry_budget_remaining=1,
                     time_budget_remaining="",
                     available_roles=["builder"],
                     allowed_degraded_delivery=False,

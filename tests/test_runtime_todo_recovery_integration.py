@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.core.memory.sqlite_memory_store import SQLiteMemoryStore
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
+from app.core.runtime.todo_runtime_lifecycle import update_active_todo_context
 from app.core.tools.adapters import register_tool_functions
 from app.core.tools.registry import ToolRegistry, ToolSpec
 from app.eval.schema import RunJudgement
@@ -18,6 +19,45 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         provider = MockModelProvider(scripted_outputs=[])
         runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry())
         self.assertFalse(runtime.enable_llm_recovery_planner)
+
+    def test_update_active_todo_context_preserves_retry_guidance_across_reopen(self):
+        ctx = update_active_todo_context(
+            current_context={},
+            executions=[
+                {
+                    "tool": "record_task_fallback",
+                    "args": {
+                        "todo_id": "todo_1",
+                        "subtask_number": 1,
+                        "retry_guidance": ["Generate one section at a time."],
+                    },
+                    "success": True,
+                    "payload": {"subtask_id": "st_1", "fallback_record": {"retry_guidance": ["Generate one section at a time."]}},
+                },
+                {
+                    "tool": "reopen_subtask",
+                    "args": {"todo_id": "todo_1", "subtask_number": 1},
+                    "success": True,
+                    "payload": {"todo_id": "todo_1", "subtask_id": "st_1", "subtask_number": 1},
+                },
+            ],
+        )
+        self.assertEqual(ctx.get("active_retry_guidance"), ["Generate one section at a time."])
+        self.assertEqual(ctx.get("execution_phase"), "executing")
+
+    def test_system_prompt_includes_retry_guidance_for_active_subtask(self):
+        runtime = AgentRuntime(model_provider=MockModelProvider(scripted_outputs=[]), tool_registry=ToolRegistry())
+        runtime._active_todo_context = {
+            "todo_id": "todo_1",
+            "active_subtask_number": 2,
+            "active_retry_guidance": ["Generate one section at a time.", "Write each section before continuing."],
+        }
+        prompt = runtime._build_system_prompt()
+        self.assertIn("Retry Guidance:", prompt)
+        self.assertIn("Active todo: todo_1", prompt)
+        self.assertIn("Active subtask: 2", prompt)
+        self.assertIn("Generate one section at a time.", prompt)
+        self.assertIn("Write each section before continuing.", prompt)
 
     def test_runtime_rejects_duplicate_create_task_when_active_todo_is_bound(self):
         provider = MockModelProvider(
@@ -782,6 +822,14 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                 },
                 json.dumps(
                     {
+                        "failure_label": "tool_failure_needing_split",
+                        "reason_code": "tool_invocation_error",
+                        "reason_detail": "The tool failure looks like a narrow execution issue that should be diagnosed before retrying.",
+                        "confidence": 0.76,
+                        "retryable": True,
+                        "evidence": ["always_fail returned a forced failure", "original task can be retried after diagnosis"],
+                        "suspected_root_causes": ["tool invocation needs narrower correction"],
+                        "recovery_risks": ["retrying without diagnosis will likely repeat the same failure"],
                         "can_resume_in_place": True,
                         "needs_derived_recovery_subtask": True,
                         "primary_action": "split",
@@ -802,6 +850,7 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                                 "acceptance_criteria": ["Minimal fix path identified"],
                             }
                         ],
+                        "retry_guidance": ["Narrow the failing step before retrying the original execution path."],
                     },
                     ensure_ascii=False,
                 ),
@@ -829,6 +878,9 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
             max_steps=4,
             enable_verification_handoff_llm=False,
             enable_llm_recovery_planner=True,
+            enable_memory_recall_reranker=False,
+            enable_memory_card_metadata_llm=False,
+            enable_llm_clarification_judge=False,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -848,9 +900,14 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
             self.assertEqual(parsed["subtasks"][1]["origin_subtask_number"], "1")
             self.assertEqual(parsed["subtasks"][1]["origin_subtask_id"], parsed["subtasks"][0]["subtask_id"])
             self.assertEqual(runtime._latest_todo_recovery["recovery_decision"]["planner_source"], "llm")
+            self.assertEqual(runtime._latest_todo_recovery["failure_interpretation"]["classification_source"], "llm")
+            self.assertEqual(
+                runtime._latest_todo_recovery["recovery_decision"]["retry_guidance"],
+                ["Narrow the failing step before retrying the original execution path."],
+            )
             self.assertGreaterEqual(len(provider.requests), 5)
             self.assertTrue(
-                any("recovery_planner" in req["messages"][1]["content"] for req in provider.requests if len(req["messages"]) > 1)
+                any("recovery_assessment" in req["messages"][1]["content"] for req in provider.requests if len(req["messages"]) > 1)
             )
 
     def test_runtime_recovery_planner_falls_back_to_rule_when_llm_output_is_invalid(self):
@@ -985,7 +1042,159 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
             parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
             self.assertEqual(len(parsed["subtasks"]), 1)
             self.assertEqual(runtime._latest_todo_recovery["recovery_decision"]["planner_source"], "rule")
+            self.assertEqual(runtime._latest_todo_recovery["failure_interpretation"]["classification_source"], "rule")
             self.assertGreaterEqual(len(provider.requests), 5)
+
+    def test_runtime_failure_interpreter_can_reclassify_model_504_into_oversized_generation_request(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Long-form Writing","context":"Generate a long paper section",'
+                                                    '"split_reason":"Need tracked writing subtasks",'
+                                                    '"subtasks":[{"name":"Draft full paper","description":"Generate the whole paper body"}]}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_activate",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "update_task_status",
+                                                "arguments": '{"todo_id":"20260416_999999_demo","subtask_number":1,"status":"in-progress"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                "__RAISE_504__",
+                json.dumps(
+                    {
+                        "failure_label": "generation_overload",
+                        "reason_code": "oversized_generation_request",
+                        "reason_detail": "The request likely failed because the task was trying to generate too much long-form content in a single attempt.",
+                        "confidence": 0.9,
+                        "retryable": True,
+                        "evidence": ["stop_reason=model_failed", "error contains HTTP 504", "task context asks for long-form generation"],
+                        "suspected_root_causes": ["single request too large for long-form output"],
+                        "recovery_risks": ["retrying unchanged will likely hit the same 504 again"],
+                        "can_resume_in_place": False,
+                        "needs_derived_recovery_subtask": True,
+                        "primary_action": "split",
+                        "recommended_actions": ["split", "retry_with_fix"],
+                        "decision_level": "auto",
+                        "rationale": "The long-form generation task should be split into smaller writing slices before retrying.",
+                        "resume_condition": "A smaller writing slice is prepared.",
+                        "retry_guidance": ["Generate one section at a time.", "Write each section to markdown before continuing."],
+                        "stop_auto_recovery": False,
+                        "suggested_owner": "main",
+                        "next_subtasks": [
+                            {
+                                "name": "Draft only the introduction",
+                                "goal": "Reduce the generation load by starting with one section",
+                                "description": "Generate the introduction section only and write it before proceeding to later sections.",
+                                "kind": "diagnose",
+                                "owner": "main",
+                                "depends_on": [1],
+                                "acceptance_criteria": ["Introduction section generated"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        original_generate = provider.generate
+
+        def _generate_with_error(messages, tools, config=None):
+            if provider._outputs and provider._outputs[0] == "__RAISE_504__":
+                provider.requests.append(
+                    {
+                        "messages": [dict(m) for m in messages],
+                        "tools": [dict(t) for t in tools],
+                        "config": config,
+                    }
+                )
+                provider._outputs.pop(0)
+                raise RuntimeError(
+                    'Model request failed after retries: HTTP 504 error: {"error":{"message":"openai_error","type":"bad_response_status_code","param":"","code":"bad_response_status_code"}}'
+                )
+            return original_generate(messages, tools, config)
+
+        provider.generate = _generate_with_error
+
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=registry,
+            max_steps=4,
+            enable_verification_handoff_llm=False,
+            enable_llm_recovery_planner=True,
+            enable_memory_recall_reranker=False,
+            enable_memory_card_metadata_llm=False,
+            enable_llm_clarification_judge=False,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_999999_demo"),
+            ):
+                final = runtime.run(
+                    "Write the whole paper in one go.",
+                    task_id="runtime_todo_oversized_generation_task",
+                    run_id="runtime_todo_oversized_generation_run",
+                )
+
+            self.assertIn("next: split / auto", final)
+            parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
+            self.assertEqual(parsed["subtasks"][0]["fallback_record"]["reason_code"], "oversized_generation_request")
+            self.assertEqual(
+                parsed["subtasks"][0]["fallback_record"]["failure_interpretation"]["classification_source"],
+                "llm",
+            )
+            self.assertEqual(runtime._latest_todo_recovery["failure_interpretation"]["reason_code"], "oversized_generation_request")
+            self.assertEqual(runtime._latest_todo_recovery["fallback_record"]["reason_code"], "oversized_generation_request")
+            self.assertEqual(runtime._latest_todo_recovery["recovery_decision"]["primary_action"], "split")
+            self.assertEqual(
+                runtime._latest_todo_recovery["recovery_decision"]["retry_guidance"],
+                ["Generate one section at a time.", "Write each section to markdown before continuing."],
+            )
+            self.assertGreaterEqual(len(parsed["subtasks"]), 1)
 
 
 if __name__ == "__main__":

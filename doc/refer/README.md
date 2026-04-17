@@ -1,13 +1,13 @@
 # InDepth 参考文档总索引
 
-更新时间：2026-04-17
+更新时间：2026-04-18
 
 `doc/refer/` 目标：把"实现事实"沉淀为可查、可维护、可验证的工程参考，而不是概念说明。
 
 如果从整体运行逻辑理解这组参考文档，当前系统可以先抓一条主线：
 1. Runtime 建立当前 task 的执行循环
 2. 工具调用推动业务执行、todo 绑定和状态流转，其中 Todo 编排默认先经 `plan_task`
-3. 若进入失败出口，Runtime 自动补齐 fallback 与 recovery
+3. 若进入失败出口，Runtime 自动补齐 fallback，并触发单次 `LLM recovery assessment` 后再落地 recovery
 4. 恢复优先围绕原 subtask 展开，必要时才派生 recovery subtasks
 5. 结束时恢复信息继续外溢到 handoff、评估、观测和 postmortem
 
