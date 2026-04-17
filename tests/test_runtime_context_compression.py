@@ -95,7 +95,6 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                         "constraints": [{"id": "c_1", "rule": "必须遵守审批流程", "source": "system", "immutable": True}],
                         "artifacts": [{"id": "a_1", "type": "file", "ref": "work/a.py", "summary": "已完成修改", "turn": 1}],
                         "open_questions": [],
-                        "anchors": [{"msg_id": 1, "turn": 1, "role": "assistant", "reason": "decision"}],
                     }
                 )
             ]
@@ -178,7 +177,6 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                         "constraints": [],
                         "artifacts": [],
                         "open_questions": [],
-                        "anchors": [],
                     }
                 )
             ]
@@ -226,7 +224,6 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                                 ],
                                 "artifacts": [],
                                 "open_questions": [],
-                                "anchors": [],
                             },
                             ensure_ascii=False,
                         ),
@@ -381,7 +378,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             self.assertEqual(row[0], "v1")
             summary = json.loads(row[1])
             self.assertEqual(summary.get("version"), "v1")
-            self.assertTrue(summary.get("anchors"))
+            self.assertNotIn("anchors", summary)
 
             recent = store.get_recent_messages(task_id, limit=20)
             self.assertTrue(recent)

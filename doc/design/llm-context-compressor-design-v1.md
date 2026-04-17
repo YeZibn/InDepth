@@ -6,7 +6,7 @@
 ## 1. 背景与问题
 
 当前 Runtime 上下文压缩主要由本地规则压缩器完成：
-1. `ContextCompressor.merge_summary(...)` 基于启发式规则提取 `task_state / decisions / constraints / artifacts / open_questions / anchors`。
+1. `ContextCompressor.merge_summary(...)` 基于启发式规则提取 `task_state / decisions / constraints / artifacts / open_questions`。
 2. `event` 路径只做最近工具链消息替换，不进入结构化摘要。
 3. `midrun/finalize` 路径都会把旧消息压成 `summary_json`，并在后续作为 system 摘要注入。
 
@@ -137,8 +137,7 @@ LLM 应只输出 JSON，对齐当前 summary 结构：
   "decisions": [],
   "constraints": [],
   "artifacts": [],
-  "open_questions": [],
-  "anchors": []
+  "open_questions": []
 }
 ```
 

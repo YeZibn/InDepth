@@ -49,7 +49,6 @@ class ContextCompressor:
                 self._extract_open_questions(messages),
                 key="id",
             ),
-            "anchors": self._merge_list(prev.get("anchors"), self._extract_anchors(messages), key="msg_id"),
             "compression_meta": {
                 "mode": mode,
                 "trigger": trigger,
@@ -66,7 +65,6 @@ class ContextCompressor:
         merged["constraints"] = merged["constraints"][-30:]
         merged["artifacts"] = merged["artifacts"][-50:]
         merged["open_questions"] = merged["open_questions"][-20:]
-        merged["anchors"] = merged["anchors"][-60:]
         return merged
 
     def validate_consistency(self, previous: Optional[Dict[str, Any]], current: Dict[str, Any]) -> bool:
@@ -290,29 +288,6 @@ class ContextCompressor:
                     }
                 )
         return out[-12:]
-
-    def _extract_anchors(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for msg in messages:
-            msg_id = int(msg.get("id") or 0)
-            role = str(msg.get("role", "")).strip().lower()
-            content = str(msg.get("content", "")).strip()
-            reason = "history"
-            if role == "system" or self._contains_immutable_keyword(content):
-                reason = "constraint"
-            elif role == "tool":
-                reason = "artifact"
-            elif role == "assistant":
-                reason = "decision"
-            out.append(
-                {
-                    "msg_id": msg_id,
-                    "turn": int(msg.get("turn") or 0),
-                    "role": role,
-                    "reason": reason,
-                }
-            )
-        return out
 
     def _contains_immutable_keyword(self, text: str) -> bool:
         lower = text.lower()

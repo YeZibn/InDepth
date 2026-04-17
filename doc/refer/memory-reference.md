@@ -589,14 +589,6 @@ compact_mid_run(trigger="event")
       "status": "open"         // open 或 resolved
     }
   ],
-  "anchors": [
-    {
-      "msg_id": 12,
-      "turn": 6,
-      "role": "assistant",
-      "reason": "decision"     // constraint / artifact / decision / history
-    }
-  ],
   "compression_meta": {
     "mode": "light",
     "trigger": "token",
@@ -712,19 +704,6 @@ def _extract_artifacts(self, messages):
 
 **限制**：最多保留 12 条（最后 12 条）
 
-#### anchors（锚点）
-
-**定义**：所有消息的元数据映射，用于追溯
-
-**reason 分类**：
-| role | 条件 | reason |
-|------|------|--------|
-| system | - | constraint |
-| user | 包含 immutable keyword | constraint |
-| tool | - | artifact |
-| assistant | - | decision |
-| 其他 | - | history |
-
 ### 5.3 合并规则（merge_summary）
 
 ```python
@@ -742,7 +721,7 @@ def merge_summary(
 
 **合并策略**：
 1. `task_state`：`previous` + `messages` 混合更新
-2. 列表字段（decisions/constraints/artifacts/open_questions/anchors）：
+2. 列表字段（decisions/constraints/artifacts/open_questions）：
    - 先追加 previous 中不重复的项
    - 再追加从 messages 提取的新项
    - 按 ID 去重
@@ -756,7 +735,6 @@ def merge_summary(
 | constraints | 30 |
 | artifacts | 50 |
 | open_questions | 20 |
-| anchors | 60 |
 
 ### 5.4 渲染提示（render_summary_prompt）
 

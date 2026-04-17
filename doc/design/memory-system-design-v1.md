@@ -61,7 +61,6 @@
 - `constraints`（含 immutable）
 - `artifacts`
 - `open_questions`
-- `anchors`（msg_id/turn/role/reason）
 - `compression_meta`（mode/trigger/规模变化/immutable命中）
 
 ## 6. 一致性守护

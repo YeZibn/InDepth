@@ -429,9 +429,6 @@ compact_mid_run(conversation_id, trigger, mode)
   ],
   "open_questions": [
     {"id": "q1", "content": "未解决的问题"}
-  ],
-  "anchors": [
-    {"msg_id": "xxx", "type": "constraint", "reason": "原因"}
   ]
 }
 ```

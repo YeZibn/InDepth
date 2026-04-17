@@ -123,7 +123,6 @@ class LLMContextCompressor(ContextCompressor):
                 "constraints": [{"id": "", "rule": "", "source": "", "immutable": True}],
                 "artifacts": [{"id": "", "type": "", "ref": "", "summary": "", "turn": 0}],
                 "open_questions": [{"id": "", "question": "", "owner": "main", "status": "open"}],
-                "anchors": [{"msg_id": 0, "turn": 0, "role": "", "reason": ""}],
             },
             "rules": [
                 "Return a single JSON object only.",
@@ -163,7 +162,6 @@ class LLMContextCompressor(ContextCompressor):
             "constraints": self._normalize_list(raw.get("constraints"), key="id", limit=30),
             "artifacts": self._normalize_list(raw.get("artifacts"), key="id", limit=50),
             "open_questions": self._normalize_list(raw.get("open_questions"), key="id", limit=20),
-            "anchors": self._normalize_list(raw.get("anchors"), key="msg_id", limit=60),
         }
         return out
 

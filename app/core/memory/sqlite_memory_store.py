@@ -285,7 +285,6 @@ class SQLiteMemoryStore:
                     "constraints": [],
                     "artifacts": [],
                     "open_questions": [],
-                    "anchors": [],
                 }
 
             old_messages = self._rows_to_compaction_messages(old_rows)
