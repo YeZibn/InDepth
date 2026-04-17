@@ -2,7 +2,7 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-17T00:13:29+08:00
+- updated_at: 2026-04-17T00:45:51+08:00
 - enabled: true
 
 ## preferences
@@ -27,6 +27,13 @@ meta:
 - confidence: 0.98
 - updated_at: 2026-04-16T00:36:16+08:00
 - note: evidence=我是一名程序员
+
+### language_preference
+- value: python
+- source: llm_extract_v1
+- confidence: 0.98
+- updated_at: 2026-04-17T00:45:51+08:00
+- note: evidence=写一个功能齐全的python计算器
 
 ### response_style
 - value: 整合成一起

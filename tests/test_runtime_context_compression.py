@@ -108,7 +108,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 summarize_threshold=3,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.3,
-                min_keep_messages=2,
+                min_keep_turns=1,
                 compressor=compressor,
             )
             task_id = "llm_compress_task"
@@ -143,7 +143,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 summarize_threshold=3,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.3,
-                min_keep_messages=2,
+                min_keep_turns=1,
                 compressor=compressor,
             )
             task_id = "llm_fallback_task"
@@ -191,7 +191,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 summarize_threshold=3,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.3,
-                min_keep_messages=2,
+                min_keep_turns=1,
                 compressor=compressor,
             )
             task_id = "llm_consistency_task"
@@ -276,7 +276,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 summarize_threshold=3,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.35,
-                min_keep_messages=3,
+                min_keep_turns=2,
             )
             task_id = "turn_task"
 
@@ -356,7 +356,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 summarize_threshold=3,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.3,
-                min_keep_messages=2,
+                min_keep_turns=1,
             )
             task_id = "compress_task"
 
@@ -396,7 +396,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 summarize_threshold=3,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.35,
-                min_keep_messages=2,
+                min_keep_turns=1,
             )
             task_id = "turn_budget_task"
 
@@ -424,6 +424,47 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             self.assertTrue(rows)
             self.assertIn("turn3 latest", rows[0][1])
 
+    def test_compact_final_keeps_at_least_min_keep_turns(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_turn_guard.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.05,
+                min_keep_turns=3,
+            )
+            task_id = "turn_guard_task"
+
+            store.append_message(task_id, "user", "turn1 " + ("a " * 40))
+            store.append_message(task_id, "assistant", "ack1 " + ("b " * 20))
+            store.append_message(task_id, "user", "turn2 " + ("c " * 40))
+            store.append_message(task_id, "assistant", "ack2 " + ("d " * 20))
+            store.append_message(task_id, "user", "turn3 " + ("e " * 40))
+            store.append_message(task_id, "assistant", "ack3 " + ("f " * 20))
+            store.append_message(task_id, "user", "turn4 latest " + ("g " * 40))
+            store.append_message(task_id, "assistant", "ack4 " + ("h " * 20))
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+            self.assertEqual(result.get("cut_adjustment_reason"), "min_keep_guard")
+
+            with store._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT role, content
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+
+            self.assertEqual(len(rows), 6)
+            self.assertIn("turn2", rows[0][1])
+            self.assertIn("turn4 latest", rows[-2][1])
+
     def test_event_compaction_replaces_tool_chain_without_summary(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "runtime_memory_event_replace.db")
@@ -431,7 +472,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 db_file=db_path,
                 summarize_threshold=3,
                 context_window_tokens=16000,
-                min_keep_messages=2,
+                min_keep_turns=1,
                 keep_recent_event_tool_pairs=0,
             )
             task_id = "event_replace_task"
@@ -590,7 +631,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             consistency_guard=True,
             target_keep_ratio_midrun=0.35,
             target_keep_ratio_finalize=0.50,
-            min_keep_messages=6,
+            min_keep_turns=3,
             compressor_kind="auto",
             compressor_llm_max_tokens=800,
         )
@@ -620,7 +661,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 consistency_guard=True,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.3,
-                min_keep_messages=2,
+                min_keep_turns=1,
             )
             guarded.append_message(task_id, "system", "必须遵守审批流程")
             guarded.append_message(task_id, "user", "任务A")
@@ -638,7 +679,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                 consistency_guard=False,
                 context_window_tokens=120,
                 target_keep_ratio_finalize=0.3,
-                min_keep_messages=2,
+                min_keep_turns=1,
             )
             unguarded.append_message(task_id, "system", "必须遵守审批流程")
             unguarded.append_message(task_id, "user", "任务A")

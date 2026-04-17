@@ -146,6 +146,7 @@ InDepth 的设计遵循以下原则：
 | `COMPACTION_CONSISTENCY_GUARD` | `True` | 一致性守护开关 |
 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN` | `0.40` | midrun 压缩后目标保留比例 |
 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `0.40` | finalize 压缩后目标保留比例 |
+| `COMPACTION_MIN_KEEP_TURNS` | `3` | 压缩后至少保留最近 3 轮原文 |
 | `COMPACTION_COMPRESSOR_KIND` | `auto` | 压缩器类型：`auto / rule / llm` |
 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` | `1200` | LLM 压缩摘要生成 token 上限 |
 

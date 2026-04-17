@@ -589,7 +589,7 @@ class RuntimeCompressionConfig:
     consistency_guard: bool = True        # 一致性守护
     target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
-    min_keep_messages: int = 6
+    min_keep_turns: int = 3
     compressor_kind: str = "auto"
     compressor_llm_max_tokens: int = 1200
 ```

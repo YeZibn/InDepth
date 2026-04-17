@@ -119,7 +119,7 @@ class RuntimeModelConfig:
 | `COMPACTION_CONSISTENCY_GUARD` | `consistency_guard` | `True` | 是否启用一致性守护 |
 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN` | `target_keep_ratio_midrun` | `0.40` | midrun 压缩保留比例（0~1，兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `target_keep_ratio_finalize` | `0.40` | finalize 压缩保留比例（0~1） |
-| `COMPACTION_MIN_KEEP_MESSAGES` | `min_keep_messages` | `6` | 最小保留消息数（最小 1） |
+| `COMPACTION_MIN_KEEP_TURNS` | `min_keep_turns` | `3` | 最小保留轮次数（最小 1） |
 | `COMPACTION_COMPRESSOR_KIND` | `compressor_kind` | `auto` | 压缩器类型：`auto / rule / llm` |
 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` | `compressor_llm_max_tokens` | `1200` | LLM 压缩器生成摘要时的 `max_tokens` |
 
@@ -137,10 +137,13 @@ class RuntimeCompressionConfig:
     consistency_guard: bool = True
     target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
-    min_keep_messages: int = 6
+    min_keep_turns: int = 3
     compressor_kind: str = "auto"
     compressor_llm_max_tokens: int = 1200
 ```
+
+补充说明：
+- `COMPACTION_MIN_KEEP_TURNS` 表示压缩后至少保留最近多少轮原文上下文
 
 ### 4.2.1 压缩器选择规则
 

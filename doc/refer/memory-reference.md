@@ -298,7 +298,7 @@ append_message(conversation_id, role, content, ...)
 | `tool_burst_threshold` | 5 | `COMPACTION_TOOL_BURST_THRESHOLD` |
 | `target_keep_ratio_midrun` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN`（兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `target_keep_ratio_finalize` | 0.40 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` |
-| `min_keep_messages` | 6 | `COMPACTION_MIN_KEEP_MESSAGES` |
+| `min_keep_turns` | 3 | `COMPACTION_MIN_KEEP_TURNS` |
 | `compressor_kind` | `auto` | `COMPACTION_COMPRESSOR_KIND` |
 | `compressor_llm_max_tokens` | 1200 | `COMPACTION_COMPRESSOR_LLM_MAX_TOKENS` |
 
@@ -364,7 +364,7 @@ _compact_impl(conversation_id, mode, trigger, force, min_total)
 │                                                                      │
 │    target_keep_tokens = context_window_tokens * keep_ratio(mode)    │
 │    cut_idx = _compute_token_budget_cut_index(                        │
-│        all_messages, target_keep_tokens, min_keep_messages          │
+│        all_messages, target_keep_tokens, min_keep_turns             │
 │    )                                                                 │
 │                                                                      │
 │    turn 定义：相邻 user 消息之间为一轮（无 user 时按 assistant 分段）    │
@@ -439,7 +439,7 @@ def _compute_token_budget_cut_index(
     self,
     rows: List[MessageRow],
     target_keep_tokens: int,
-    min_keep_messages: int,
+    min_keep_turns: int,
 ) -> int:
     """按最新 turn 向前累计 token，返回需要裁剪的前缀边界。"""
     if target_keep_tokens <= 0 or not rows:
@@ -461,10 +461,15 @@ def _compute_token_budget_cut_index(
         keep_from = start
         kept_tokens += turn_tokens
 
-    # 最小保留条数 + tool pair 保护
-    keep_from = adjust_for_min_keep_and_tool_pair(rows, keep_from, min_keep_messages)
+    # 最小保留轮次 + tool pair 保护
+    keep_from = adjust_for_min_keep_and_tool_pair(rows, keep_from, min_keep_turns)
     return keep_from
 ```
+
+补充说明：
+- 当前压缩下限已按“轮次”保护，而不是按消息条数保护
+- `min_keep_turns=3` 表示无论 token 预算多小，都至少保留最近 3 轮原文
+- 轮次定义沿用当前实现：有 `user` 时按相邻 `user` 分段；无 `user` 时按 `assistant` 分段
 
 ### 4.3 Event 工具链替换压缩
 

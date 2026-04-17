@@ -44,7 +44,7 @@ class SQLiteMemoryStore:
         context_window_tokens: int = 16000,
         target_keep_ratio_midrun: float = 0.40,
         target_keep_ratio_finalize: float = 0.40,
-        min_keep_messages: int = 6,
+        min_keep_turns: int = 3,
         keep_recent_event_tool_pairs: int = 1,
         event_stateful_tools: Optional[List[str]] = None,
         compressor: Optional[ContextCompressor] = None,
@@ -56,7 +56,7 @@ class SQLiteMemoryStore:
         self.context_window_tokens = max(int(context_window_tokens), 64)
         self.target_keep_ratio_midrun = max(0.0, min(float(target_keep_ratio_midrun), 1.0))
         self.target_keep_ratio_finalize = max(0.0, min(float(target_keep_ratio_finalize), 1.0))
-        self.min_keep_messages = max(int(min_keep_messages), 1)
+        self.min_keep_turns = max(int(min_keep_turns), 1)
         self.keep_recent_event_tool_pairs = max(int(keep_recent_event_tool_pairs), 0)
         default_stateful_tools = [
             "create_task",
@@ -256,7 +256,7 @@ class SQLiteMemoryStore:
             cut_idx, cut_adjustment_reason = self._compute_token_budget_cut_index(
                 rows=all_rows,
                 target_keep_tokens=target_keep_tokens,
-                min_keep_messages=self.min_keep_messages,
+                min_keep_turns=self.min_keep_turns,
             )
             if target_keep_tokens <= 0:
                 # Fallback for invalid token budget config.
@@ -452,35 +452,37 @@ class SQLiteMemoryStore:
         self,
         rows: List[_MessageRow],
         target_keep_tokens: int,
-        min_keep_messages: int,
+        min_keep_turns: int,
     ) -> Tuple[int, str]:
         if target_keep_tokens <= 0 or not rows:
             return 0, "budget_unavailable"
-        if len(rows) <= max(min_keep_messages, 1):
-            return 0, "below_min_keep_messages"
-
         turn_ranges = self._split_turn_ranges(rows)
         if not turn_ranges:
             return 0, "empty_turns"
+        if len(turn_ranges) <= max(min_keep_turns, 1):
+            return 0, "below_min_keep_turns"
 
         keep_from = len(rows)
         kept_tokens = 0
+        kept_turns = 0
         for idx in range(len(turn_ranges) - 1, -1, -1):
             start, end = turn_ranges[idx]
             turn_tokens = self._estimate_rows_tokens(rows[start:end])
             if keep_from == len(rows):
                 keep_from = start
                 kept_tokens = turn_tokens
+                kept_turns = 1
                 continue
             if kept_tokens + turn_tokens > target_keep_tokens:
                 break
             keep_from = start
             kept_tokens += turn_tokens
+            kept_turns += 1
 
         cut_adjustment_reason = ""
-        min_keep = max(min_keep_messages, 1)
-        if len(rows) - keep_from < min_keep:
-            keep_from = max(0, len(rows) - min_keep)
+        min_keep = max(min_keep_turns, 1)
+        if kept_turns < min_keep:
+            keep_from = turn_ranges[-min_keep][0]
             cut_adjustment_reason = "min_keep_guard"
 
         keep_from, pair_adjustment = self._adjust_cut_for_tool_pairing(rows, keep_from)
