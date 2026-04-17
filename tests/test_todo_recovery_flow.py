@@ -7,15 +7,76 @@ from app.tool.todo_tool.todo_tool import (
     _parse_task_file,
     append_followup_subtasks,
     create_task,
+    plan_task,
     plan_task_recovery,
     record_task_fallback,
     reopen_subtask,
+    update_task,
     update_subtask,
     update_task_status,
 )
 
 
 class TodoRecoveryFlowTests(unittest.TestCase):
+    def test_plan_task_normalizes_create_style_envelope(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_plan_create_demo"),
+            ):
+                result = plan_task.entrypoint(
+                    task_name="Draft Paper",
+                    context="Write the next section based on approved outline",
+                    split_reason="Need tracked writing steps for the next phase.",
+                    subtasks=[
+                        {
+                            "title": "Draft introduction",
+                            "description": "Write the introduction section",
+                            "acceptance_criteria": ["Introduction saved"],
+                        }
+                    ],
+                )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["mode"], "create")
+            self.assertEqual(result["subtask_count"], 1)
+            self.assertEqual(result["task_plan"]["subtasks"][0]["name"], "Draft introduction")
+            self.assertEqual(result["execution_result"]["todo_id"], "20260416_plan_create_demo")
+
+    def test_plan_task_switches_to_update_mode_when_active_todo_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+            ):
+                create_task.entrypoint(
+                    task_name="Base Task",
+                    context="Create the original tracked todo",
+                    split_reason="Need a shared todo first.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                result = plan_task.entrypoint(
+                    task_name="Continue Paper",
+                    context="Extend the existing tracked todo with the next steps",
+                    split_reason="Need the next structured writing steps.",
+                    subtasks=[
+                        {
+                            "name": "Draft analysis",
+                            "description": "Write the analysis section",
+                            "acceptance_criteria": ["Analysis saved"],
+                        }
+                    ],
+                    active_todo_id="todo_123",
+                )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["mode"], "update")
+            self.assertEqual(result["active_todo_id"], "todo_123")
+            self.assertEqual(result["execution_result"]["todo_id"], "todo_123")
+            self.assertEqual(result["execution_result"]["results"][0]["type"], "append_subtasks")
+
     def test_update_task_status_accepts_richer_unfinished_states(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
@@ -207,6 +268,65 @@ class TodoRecoveryFlowTests(unittest.TestCase):
             self.assertEqual(payload["primary_action"], "split")
             self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
             self.assertEqual(payload["next_subtasks"][0]["kind"], "diagnose")
+
+    def test_update_task_appends_create_style_subtasks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000005a_demo"),
+            ):
+                created = create_task.entrypoint(
+                    task_name="Demo Task",
+                    context="Update todo with new structured work",
+                    split_reason="Need a shared tracked todo.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                result = update_task.entrypoint(
+                    todo_id=created["todo_id"],
+                    update_reason="Add the next planned writing steps",
+                    operations=[
+                        {
+                            "type": "append_subtasks",
+                            "subtasks": [
+                                {
+                                    "title": "Draft introduction",
+                                    "description": "Write the introduction section",
+                                    "dependencies": [1],
+                                    "acceptance_criteria": ["Introduction saved"],
+                                }
+                            ],
+                        }
+                    ],
+                )
+
+            self.assertTrue(result["success"])
+            parsed = _parse_task_file(Path(created["filepath"]))
+            self.assertEqual(len(parsed["subtasks"]), 2)
+            self.assertEqual(parsed["subtasks"][1]["name"], "Draft introduction")
+            self.assertEqual(parsed["subtasks"][1]["dependencies"], ["1"])
+
+    def test_update_task_rejects_incomplete_operations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000005b_demo"),
+            ):
+                created = create_task.entrypoint(
+                    task_name="Demo Task",
+                    context="Update todo safely",
+                    split_reason="Need strict update validation.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                result = update_task.entrypoint(
+                    todo_id=created["todo_id"],
+                    update_reason="Try an invalid update",
+                    operations=[{"subtask_number": 1}],
+                )
+
+            self.assertFalse(result["success"])
+            self.assertIn("missing required field: type", result["error"])
 
     def test_update_subtask_patches_by_subtask_id(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -187,7 +187,7 @@ InDepth.md               # 运行协议
 | 基础执行 | `bash`、`read_file`、`write_file`、`get_current_time` | 命令执行与文件操作 |
 | 检索门禁 | `init_search_guard`、`guarded_ddg_search`、`update_search_progress`、`build_search_conclusion` | 受控检索与预算治理 |
 | 子代理协同 | `create_sub_agent`、`run_sub_agent`、`run_sub_agents_parallel` | 角色化并行执行 |
-| Todo 编排 | `create_task`、`update_task_status`、`record_task_fallback`、`plan_task_recovery`、`append_followup_subtasks`、`get_next_task`、`generate_task_report` | 子任务管理、失败恢复、恢复子任务追加与进度跟踪 |
+| Todo 编排 | `plan_task`、`update_task_status`、`record_task_fallback`、`plan_task_recovery`、`append_followup_subtasks`、`get_next_task`、`generate_task_report` | 以 `plan_task` 作为对外主入口的子任务管理、失败恢复与进度跟踪 |
 | 记忆工具 | `capture_runtime_memory_candidate`、`search_memory_cards` | 经验捕获与检索 |
 
 ### 4.6 观测与产物落点

@@ -14,6 +14,7 @@ class ToolFunction:
     requires_confirmation: bool = False
     cache_results: bool = False
     strict: bool = False
+    hidden: bool = False
 
 
 def _infer_parameters(fn: Callable[..., Any]) -> Dict[str, Any]:
@@ -88,6 +89,7 @@ def tool(
     requires_confirmation: bool = False,
     cache_results: bool = False,
     strict: bool = False,
+    hidden: bool = False,
     parameters: Optional[Dict[str, Any]] = None,
     tool_hooks: Optional[List[Callable[..., Any]]] = None,
 ):
@@ -102,6 +104,7 @@ def tool(
             requires_confirmation=requires_confirmation,
             cache_results=cache_results,
             strict=strict,
+            hidden=hidden,
         )
 
     return decorator

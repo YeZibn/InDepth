@@ -643,6 +643,155 @@ def _normalize_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+def _normalize_plan_envelope(
+    task_name: Any,
+    context: Any,
+    split_reason: Any,
+    subtasks: Any,
+) -> Dict[str, Any]:
+    task_name_str = str(task_name or "").strip()
+    context_str = str(context or "").strip()
+    split_reason_str = str(split_reason or "").strip()
+    if not task_name_str:
+        raise ValueError("task_name must be a non-empty string")
+    if not context_str:
+        raise ValueError("context must be a non-empty string")
+    if not split_reason_str:
+        raise ValueError("split_reason must be a non-empty string")
+    normalized_subtasks = _normalize_subtasks(subtasks)
+    return {
+        "task_name": task_name_str,
+        "context": context_str,
+        "split_reason": split_reason_str,
+        "subtasks": normalized_subtasks,
+    }
+
+
+def _append_create_style_subtasks(
+    filepath: str,
+    existing_subtasks: List[Dict[str, Any]],
+    new_items: List[Dict[str, Any]],
+    rationale_prefix: str,
+) -> List[Dict[str, Any]]:
+    subtasks = list(existing_subtasks or [])
+    next_number = _next_subtask_number(subtasks)
+    appended: List[Dict[str, Any]] = []
+    for item in new_items:
+        cloned = dict(item)
+        cloned["number"] = str(next_number)
+        if not str(cloned.get("split_rationale", "")).strip():
+            cloned["split_rationale"] = f"{rationale_prefix} Added through structured todo update."
+        subtasks.append(cloned)
+        appended.append(cloned)
+        next_number += 1
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+    rendered_blocks = "\n\n".join(_render_subtask(item) for item in appended)
+    content = re.sub(
+        r"(\n## Dependencies)",
+        "\n\n" + rendered_blocks + r"\1",
+        content,
+        count=1,
+    )
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+    _rewrite_task_file(filepath, subtasks)
+    return appended
+
+
+def _apply_update_task_operation(task_data: Dict[str, Any], operation: Dict[str, Any]) -> Dict[str, Any]:
+    op = operation if isinstance(operation, dict) else {}
+    op_type = str(op.get("type", "") or "").strip()
+    todo_id = str(task_data.get("metadata", {}).get("Todo ID", task_data.get("metadata", {}).get("ID", "")) or "").strip()
+    if not todo_id:
+        todo_id = str(task_data.get("todo_id", "") or "").strip()
+
+    if op_type == "update_subtask":
+        fields_to_update = op.get("fields_to_update")
+        if not isinstance(fields_to_update, dict) or not fields_to_update:
+            raise ValueError("update_subtask operation requires a non-empty fields_to_update object")
+        subtask_id = str(op.get("subtask_id", "") or "").strip()
+        subtask_number = int(op.get("subtask_number") or 0)
+        if not subtask_id and not subtask_number:
+            raise ValueError("update_subtask operation requires subtask_id or subtask_number")
+        result = update_subtask.entrypoint(
+            todo_id=todo_id,
+            subtask_id=subtask_id,
+            subtask_number=subtask_number,
+            fields_to_update=fields_to_update,
+            update_reason=str(op.get("update_reason", "") or "").strip(),
+        )
+        if not result.get("success"):
+            raise ValueError(str(result.get("error", "update_subtask failed")))
+        return {
+            "type": op_type,
+            "subtask_id": result.get("subtask_id", ""),
+            "subtask_number": result.get("subtask_number", ""),
+            "updated_fields": result.get("updated_fields", []),
+        }
+
+    if op_type == "append_subtasks":
+        subtasks = op.get("subtasks")
+        normalized_subtasks = _normalize_subtasks(subtasks)
+        appended = _append_create_style_subtasks(
+            filepath=str(task_data["filepath"]),
+            existing_subtasks=task_data.get("subtasks", []),
+            new_items=normalized_subtasks,
+            rationale_prefix="Structured update append.",
+        )
+        return {
+            "type": op_type,
+            "added_subtask_numbers": [item.get("number", "") for item in appended],
+            "added_subtask_ids": [item.get("subtask_id", "") for item in appended],
+            "count": len(appended),
+        }
+
+    if op_type == "reopen_subtask":
+        subtask_id = str(op.get("subtask_id", "") or "").strip()
+        subtask_number = int(op.get("subtask_number") or 0)
+        if not subtask_id and not subtask_number:
+            raise ValueError("reopen_subtask operation requires subtask_id or subtask_number")
+        result = reopen_subtask.entrypoint(
+            todo_id=todo_id,
+            subtask_id=subtask_id,
+            subtask_number=subtask_number,
+            reason=str(op.get("reason", "") or "").strip(),
+        )
+        if not result.get("success"):
+            raise ValueError(str(result.get("error", "reopen_subtask failed")))
+        return {
+            "type": op_type,
+            "subtask_id": result.get("subtask_id", ""),
+            "subtask_number": result.get("subtask_number", ""),
+            "status": "in-progress",
+        }
+
+    raise ValueError(f"Unsupported update operation type: {op_type}")
+
+
+def _create_todo_from_plan(envelope: Dict[str, Any], force_new_cycle: bool = False) -> Dict[str, Any]:
+    return create_task.entrypoint(
+        task_name=str(envelope.get("task_name", "") or "").strip(),
+        context=str(envelope.get("context", "") or "").strip(),
+        split_reason=str(envelope.get("split_reason", "") or "").strip(),
+        subtasks=envelope.get("subtasks", []),
+        force_new_cycle=bool(force_new_cycle),
+    )
+
+
+def _update_todo_from_plan(active_todo_id: str, envelope: Dict[str, Any]) -> Dict[str, Any]:
+    return update_task.entrypoint(
+        todo_id=str(active_todo_id or "").strip(),
+        update_reason=str(envelope.get("split_reason", "") or "").strip(),
+        operations=[
+            {
+                "type": "append_subtasks",
+                "subtasks": envelope.get("subtasks", []),
+            }
+        ],
+    )
+
+
 def _default_split_rationale(subtask: Dict[str, Any], task_index: int, total: int) -> str:
     deps = subtask.get("dependencies", [])
     if deps:
@@ -928,11 +1077,79 @@ def _build_recovery_decision(
 
 
 @tool(
-    name="create_task",
-    description="Create a new task with structured subtasks and dependency metadata, subtasks is must be provided.",
+    name="plan_task",
+    description=(
+        "Validate and normalize a structured task plan before create_task or update_task. "
+        "This tool is the planning prerequisite for both paths and decides mode=create/update based on active todo state."
+    ),
     stop_after_tool_call=False,
     requires_confirmation=False,
     cache_results=False,
+    parameters={
+        "type": "object",
+        "properties": {
+            "task_name": {"type": "string"},
+            "context": {"type": "string"},
+            "split_reason": {"type": "string"},
+            "subtasks": {"type": "array", "items": {"type": "object"}},
+            "active_todo_id": {"type": "string"},
+        },
+        "required": ["task_name", "context", "split_reason", "subtasks"],
+    },
+)
+def plan_task(
+    task_name: str,
+    context: str,
+    split_reason: str,
+    subtasks: List[Dict[str, Any]],
+    active_todo_id: str = "",
+) -> Dict[str, Any]:
+    """Normalize a task plan, decide mode, and execute the internal create/update path."""
+    try:
+        envelope = _normalize_plan_envelope(
+            task_name=task_name,
+            context=context,
+            split_reason=split_reason,
+            subtasks=subtasks,
+        )
+        active_todo_id = str(active_todo_id or "").strip()
+        mode = "update" if active_todo_id else "create"
+        execution_result = (
+            _update_todo_from_plan(active_todo_id=active_todo_id, envelope=envelope)
+            if mode == "update"
+            else _create_todo_from_plan(envelope=envelope)
+        )
+        if not execution_result.get("success"):
+            return {
+                "success": False,
+                "mode": mode,
+                "active_todo_id": active_todo_id,
+                "task_plan": envelope,
+                "error": str(execution_result.get("error", "plan execution failed")),
+                "execution_result": execution_result,
+            }
+        return {
+            "success": True,
+            "mode": mode,
+            "active_todo_id": active_todo_id,
+            "task_plan": envelope,
+            "execution_result": execution_result,
+            "subtask_count": len(envelope["subtasks"]),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool(
+    name="create_task",
+    description=(
+        "Create a new tracked todo from a strict task plan. "
+        "Use plan_task first to validate the envelope, then call create_task only when there is no active todo."
+    ),
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+    hidden=True,
     parameters={
         "type": "object",
         "properties": {
@@ -954,16 +1171,18 @@ def create_task(
 ) -> Dict[str, Any]:
     """Create a markdown task file with structured subtasks and dependency metadata."""
     try:
-        if not isinstance(split_reason, str) or not split_reason.strip():
-            raise ValueError("split_reason must be a non-empty string")
-
-        normalized_subtasks = _normalize_subtasks(subtasks)
+        envelope = _normalize_plan_envelope(
+            task_name=task_name,
+            context=context,
+            split_reason=split_reason,
+            subtasks=subtasks,
+        )
         _ensure_todo_dir()
-        todo_id = _generate_todo_id(task_name)
+        todo_id = _generate_todo_id(envelope["task_name"])
         filepath = os.path.join(_get_todo_dir(), f"{todo_id}.md")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        metadata = f"""# Task: {task_name}
+        metadata = f"""# Task: {envelope['task_name']}
 
 ## Metadata
 - **Todo ID**: {todo_id}
@@ -971,22 +1190,22 @@ def create_task(
 - **Priority**: high
 - **Created**: {now}
 - **Updated**: {now}
-- **Progress**: 0/{len(normalized_subtasks)} (0%)
+- **Progress**: 0/{len(envelope['subtasks'])} (0%)
 """
         context_section = f"""
 ## Context
-**Goal**: {context}
-**Split Reason**: {split_reason.strip()}
+**Goal**: {envelope['context']}
+**Split Reason**: {envelope['split_reason']}
 
 **Acceptance Criteria**:
 - Task completion criteria will be defined during execution
 """
 
         subtask_blocks: List[str] = []
-        for index, subtask in enumerate(normalized_subtasks, 1):
+        for index, subtask in enumerate(envelope["subtasks"], 1):
             subtask["number"] = str(index)
             if not str(subtask.get("split_rationale", "")).strip():
-                subtask["split_rationale"] = _default_split_rationale(subtask, index, len(normalized_subtasks))
+                subtask["split_rationale"] = _default_split_rationale(subtask, index, len(envelope["subtasks"]))
             subtask_blocks.append(_render_subtask(subtask))
         subtasks_section = "\n## Subtasks\n\n" + "\n\n".join(subtask_blocks) + "\n"
 
@@ -1017,19 +1236,19 @@ Task created automatically. Update as needed during execution.
             event_type="task_started",
             payload={
                 "tool": "create_task",
-                "task_name": task_name,
-                "subtask_count": len(normalized_subtasks),
+                "task_name": envelope["task_name"],
+                "subtask_count": len(envelope["subtasks"]),
                 "filepath": filepath,
                 "todo_id": todo_id,
-                "split_reason": split_reason.strip(),
+                "split_reason": envelope["split_reason"],
             },
         )
         return {
             "success": True,
             "filepath": filepath,
             "todo_id": todo_id,
-            "subtask_count": len(normalized_subtasks),
-            "subtask_ids": [item.get("subtask_id", "") for item in normalized_subtasks],
+            "subtask_count": len(envelope["subtasks"]),
+            "subtask_ids": [item.get("subtask_id", "") for item in envelope["subtasks"]],
             "todo_bound_at": now,
         }
     except Exception as e:
@@ -1216,6 +1435,74 @@ def record_task_fallback(
         },
     )
     return {"success": True, "fallback_record": fallback_record, "subtask_id": subtask.get("subtask_id", "")}
+
+
+@tool(
+    name="update_task",
+    description=(
+        "Apply a strict, structured update package to an existing todo. "
+        "Use this tool only when a todo already exists; operations must be explicit and complete."
+    ),
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+    hidden=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "todo_id": {"type": "string"},
+            "update_reason": {"type": "string"},
+            "operations": {"type": "array", "items": {"type": "object"}},
+        },
+        "required": ["todo_id", "update_reason", "operations"],
+    },
+)
+def update_task(todo_id: str, update_reason: str, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Apply strict structured operations to an existing todo."""
+    task_data = _get_task_by_todo_id(todo_id)
+    if not task_data:
+        return {"success": False, "error": f"Todo not found: {todo_id}"}
+    if not isinstance(update_reason, str) or not update_reason.strip():
+        return {"success": False, "error": "update_reason must be a non-empty string"}
+    if not isinstance(operations, list) or not operations:
+        return {"success": False, "error": "operations must be a non-empty array"}
+
+    results: List[Dict[str, Any]] = []
+    for idx, operation in enumerate(operations, 1):
+        if not isinstance(operation, dict):
+            return {"success": False, "error": f"operations[{idx}] must be an object"}
+        op_type = str(operation.get("type", "") or "").strip()
+        if not op_type:
+            return {"success": False, "error": f"operations[{idx}] missing required field: type"}
+        try:
+            current_task_data = _get_task_by_todo_id(todo_id)
+            if not current_task_data:
+                return {"success": False, "error": f"Todo not found during update: {todo_id}"}
+            result = _apply_update_task_operation(current_task_data, operation)
+            results.append(result)
+        except Exception as exc:
+            return {"success": False, "error": f"operations[{idx}] failed: {str(exc)}"}
+
+    refreshed = _get_task_by_todo_id(todo_id) or task_data
+    subtasks = refreshed.get("subtasks", [])
+    _emit_obs(
+        todo_id=todo_id,
+        event_type="task_updated",
+        payload={
+            "tool": "update_task",
+            "todo_id": todo_id,
+            "update_reason": update_reason.strip(),
+            "operation_types": [str(item.get("type", "")) for item in operations],
+            "operation_count": len(results),
+        },
+    )
+    return {
+        "success": True,
+        "todo_id": todo_id,
+        "update_reason": update_reason.strip(),
+        "results": results,
+        "subtask_count": len(subtasks),
+    }
 
 
 @tool(
@@ -1594,7 +1881,9 @@ class TodoTools:
     @staticmethod
     def get_tools():
         return [
+            plan_task,
             create_task,
+            update_task,
             update_task_status,
             reopen_subtask,
             update_subtask,
@@ -1610,7 +1899,9 @@ class TodoTools:
     @staticmethod
     def get_tool_names():
         return [
+            "plan_task",
             "create_task",
+            "update_task",
             "update_task_status",
             "reopen_subtask",
             "update_subtask",

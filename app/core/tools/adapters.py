@@ -17,6 +17,7 @@ def register_tool_functions(registry: ToolRegistry, functions: Iterable[Any]) ->
                 description=getattr(fn, "description", "") or "",
                 handler=handler,
                 parameters=getattr(fn, "parameters", None),
+                hidden=bool(getattr(fn, "hidden", False)),
             )
         )
 

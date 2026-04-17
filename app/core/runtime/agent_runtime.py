@@ -44,9 +44,11 @@ from app.core.runtime.runtime_finalization import (
 from app.core.runtime.todo_runtime_lifecycle import (
     append_recovery_summary_for_user,
     auto_manage_todo_recovery,
+    build_create_task_arg_error,
     build_duplicate_todo_binding_error,
     finalize_active_todo_context,
     maybe_emit_todo_binding_warning,
+    restore_active_todo_context_from_history,
     update_active_todo_context,
 )
 from app.core.runtime.user_preference_lifecycle import (
@@ -76,7 +78,9 @@ class AgentRuntime:
     START_RECALL_CANDIDATE_POOL = 50
     TODO_BINDING_GUARD_MODE = "warn"
     TODO_BINDING_EXEMPT_TOOLS = {
+        "plan_task",
         "create_task",
+        "update_task",
         "list_tasks",
         "get_next_task",
         "get_task_progress",
@@ -184,6 +188,7 @@ class AgentRuntime:
         self._active_todo_context = {}
         self._latest_todo_recovery = {}
         history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
+        self._active_todo_context = restore_active_todo_context_from_history(history)
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
             {"role": "user", "content": user_input}
         ]
@@ -676,8 +681,48 @@ class AgentRuntime:
             tool_args = parse_json_dict(raw_args) if isinstance(raw_args, str) else (raw_args or {})
             if not isinstance(tool_args, dict):
                 tool_args = {}
+            if tool_name == "plan_task":
+                active_todo_id = str(self._active_todo_context.get("todo_id", "") or "").strip()
+                binding_state = str(self._active_todo_context.get("binding_state", "") or "").strip()
+                if active_todo_id and binding_state == "bound" and not str(tool_args.get("active_todo_id", "") or "").strip():
+                    tool_args = dict(tool_args)
+                    tool_args["active_todo_id"] = active_todo_id
             current_todo_id = str(self._active_todo_context.get("todo_id", "") or "").strip()
             binding_state = str(self._active_todo_context.get("binding_state", "") or "unbound").strip()
+            if tool_name == "create_task":
+                create_task_arg_error = build_create_task_arg_error(tool_args, self._active_todo_context)
+                if create_task_arg_error:
+                    emit_event(
+                        task_id=task_id,
+                        run_id=run_id,
+                        actor="main",
+                        role="general",
+                        event_type="tool_failed",
+                        status="error",
+                        payload={"tool": tool_name, "error": str(create_task_arg_error.get("error", ""))},
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(call.get("id", "")),
+                            "content": '{"success": false, "error": "Invalid create_task arguments"}',
+                        }
+                    )
+                    failures.append({"tool": tool_name, "error": str(create_task_arg_error.get("error", ""))})
+                    executions.append(
+                        {
+                            "tool": tool_name,
+                            "args": tool_args,
+                            "success": False,
+                            "error": str(create_task_arg_error.get("error", "")),
+                            "payload": (
+                                create_task_arg_error.get("result", {})
+                                if isinstance(create_task_arg_error.get("result"), dict)
+                                else {}
+                            ),
+                        }
+                    )
+                    continue
             if tool_name == "create_task" and current_todo_id and binding_state == "bound" and not bool(tool_args.get("force_new_cycle")):
                 outcome = build_duplicate_todo_binding_error(self._active_todo_context)
                 emit_event(

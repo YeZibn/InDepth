@@ -181,7 +181,7 @@ class RuntimeCompressionConfig:
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `keep_recent_event_tool_pairs` | `1` | 保留最近 1 个工具单元原文 |
-| `event_stateful_tools` | `create_task,get_next_task,update_task_status,init_search_guard` | 状态工具不参与 event 替换压缩 |
+| `event_stateful_tools` | `plan_task,get_next_task,update_task_status,init_search_guard` | 状态工具不参与 event 替换压缩 |
 
 ### 4.3 解析规则
 

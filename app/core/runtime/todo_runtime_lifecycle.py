@@ -1,3 +1,4 @@
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from app.core.model.base import GenerationConfig, ModelProvider
@@ -14,10 +15,68 @@ def build_duplicate_todo_binding_error(todo_context: Dict[str, Any]) -> Dict[str
     todo_id = str(ctx.get("todo_id", "") or "").strip()
     return {
         "success": False,
-        "error": f"Active todo already bound for this task: {todo_id or 'unknown'}",
+        "error": (
+            f"Active todo already bound for this task: {todo_id or 'unknown'}. "
+            "Use update_task to continue the existing todo, or pass force_new_cycle=true only when intentionally starting a new task cycle."
+        ),
         "result": {
             "success": False,
-            "error": f"Active todo already bound for this task: {todo_id or 'unknown'}",
+            "error": (
+                f"Active todo already bound for this task: {todo_id or 'unknown'}. "
+                "Use update_task to continue the existing todo, or pass force_new_cycle=true only when intentionally starting a new task cycle."
+            ),
+            "active_todo_id": todo_id,
+        },
+    }
+
+
+def build_create_task_arg_error(tool_args: Dict[str, Any], todo_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    args = tool_args if isinstance(tool_args, dict) else {}
+    missing_fields: List[str] = []
+    for field in ["task_name", "context", "split_reason", "subtasks"]:
+        value = args.get(field)
+        if value is None:
+            missing_fields.append(field)
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing_fields.append(field)
+
+    subtasks = args.get("subtasks")
+    subtasks_invalid = False
+    if "subtasks" not in missing_fields:
+        if not isinstance(subtasks, list) or not subtasks:
+            subtasks_invalid = True
+
+    if not missing_fields and not subtasks_invalid:
+        return None
+
+    ctx = todo_context if isinstance(todo_context, dict) else {}
+    todo_id = str(ctx.get("todo_id", "") or "").strip()
+    details: List[str] = []
+    if missing_fields:
+        details.append(f"Missing required field(s): {', '.join(missing_fields)}")
+    if subtasks_invalid:
+        details.append("Field 'subtasks' must be a non-empty array of structured subtask objects.")
+
+    guidance = (
+        "create_task creates a tracked todo and requires a complete task envelope with "
+        "task_name, context, split_reason, and a non-empty subtasks array. "
+        "Validate or assemble that envelope with plan_task before calling create_task."
+    )
+    if todo_id:
+        guidance += f" Active todo already exists: {todo_id}. Use update_task to continue or extend the existing todo instead of calling create_task again."
+    else:
+        guidance += " Only call create_task when no active todo is currently bound."
+
+    error = f"Invalid create_task arguments. {' '.join(details)} {guidance}".strip()
+    return {
+        "success": False,
+        "error": error,
+        "result": {
+            "success": False,
+            "error": error,
+            "missing_fields": missing_fields,
+            "subtasks_invalid": subtasks_invalid,
             "active_todo_id": todo_id,
         },
     }
@@ -63,7 +122,33 @@ def update_active_todo_context(
         tool = str(execution.get("tool", "")).strip()
         args = execution.get("args", {}) if isinstance(execution.get("args"), dict) else {}
         payload = execution.get("payload", {}) if isinstance(execution.get("payload"), dict) else {}
-        if tool == "create_task" and execution.get("success"):
+        if tool == "plan_task" and execution.get("success"):
+            mode = str(payload.get("mode", "") or "").strip()
+            active_todo_id = str(payload.get("active_todo_id", "") or "").strip()
+            execution_result = payload.get("execution_result", {}) if isinstance(payload.get("execution_result"), dict) else {}
+            if mode == "create":
+                todo_id = str(execution_result.get("todo_id", "") or "").strip()
+                if todo_id:
+                    next_context = {
+                        "todo_id": todo_id,
+                        "active_subtask_id": None,
+                        "active_subtask_number": None,
+                        "execution_phase": "planning",
+                        "binding_required": True,
+                        "binding_state": "bound",
+                        "todo_bound_at": execution_result.get("todo_bound_at", ""),
+                    }
+            elif mode == "update" and active_todo_id:
+                next_context = {
+                    "todo_id": active_todo_id,
+                    "active_subtask_id": None,
+                    "active_subtask_number": None,
+                    "execution_phase": "planning",
+                    "binding_required": True,
+                    "binding_state": "bound",
+                    "todo_bound_at": next_context.get("todo_bound_at", ""),
+                }
+        elif tool == "create_task" and execution.get("success"):
             todo_id = str(payload.get("todo_id", "")).strip()
             if todo_id:
                 next_context = {
@@ -154,6 +239,66 @@ def update_active_todo_context(
                     "todo_bound_at": next_context.get("todo_bound_at", ""),
                 }
     return next_context
+
+
+def restore_active_todo_context_from_history(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(history, list) or not history:
+        return {}
+
+    tool_results_by_call_id: Dict[str, Dict[str, Any]] = {}
+    for msg in history:
+        if str(msg.get("role", "")).strip().lower() != "tool":
+            continue
+        call_id = str(msg.get("tool_call_id", "") or "").strip()
+        if not call_id:
+            continue
+        try:
+            parsed = json.loads(str(msg.get("content", "") or "").strip() or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            tool_results_by_call_id[call_id] = parsed
+
+    executions: List[Dict[str, Any]] = []
+    for msg in history:
+        if str(msg.get("role", "")).strip().lower() != "assistant":
+            continue
+        tool_calls = msg.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
+            continue
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id", "") or "").strip()
+            fn = call.get("function", {}) if isinstance(call.get("function"), dict) else {}
+            tool_name = str(fn.get("name", "") or "").strip()
+            if not call_id or not tool_name:
+                continue
+            tool_result = tool_results_by_call_id.get(call_id)
+            if not isinstance(tool_result, dict):
+                continue
+            raw_args = fn.get("arguments", "{}")
+            if isinstance(raw_args, str):
+                try:
+                    tool_args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    tool_args = {}
+            else:
+                tool_args = raw_args or {}
+            if not isinstance(tool_args, dict):
+                tool_args = {}
+            payload = tool_result.get("result", {}) if tool_result.get("success") else tool_result.get("result", {})
+            executions.append(
+                {
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "success": bool(tool_result.get("success")),
+                    "error": str(tool_result.get("error", "") or ""),
+                    "payload": payload if isinstance(payload, dict) else {},
+                }
+            )
+
+    return update_active_todo_context(current_context={}, executions=executions)
 
 
 def tool_requires_todo_binding(tool_name: str, exempt_tools: set[str]) -> bool:

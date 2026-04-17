@@ -504,7 +504,7 @@ compact_mid_run(trigger="event")
     ├──▶ 切分为工具单元（assistant(tool_calls)+其后 tool）
     │
     ├──▶ 过滤状态工具单元（默认不压缩）：
-    │      create_task / get_next_task / update_task_status / init_search_guard
+    │      plan_task / get_next_task / update_task_status / init_search_guard
     │
     ├──▶ 保留最近 N 个工具单元原文（默认 N=1）
     │

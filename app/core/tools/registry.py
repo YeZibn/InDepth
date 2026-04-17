@@ -11,6 +11,7 @@ class ToolSpec:
     description: str
     handler: Callable[..., Any]
     parameters: Optional[Dict[str, Any]] = None
+    hidden: bool = False
 
 
 class ToolRegistry:
@@ -29,7 +30,15 @@ class ToolRegistry:
             return {"success": False, "error": f"Unknown tool: {name}"}
         ok, errors = validate_args(spec.parameters or {}, args or {})
         if not ok:
-            return {"success": False, "error": "Tool args validation failed", "details": errors}
+            error = "Tool args validation failed"
+            details = errors
+            if name == "create_task":
+                error = (
+                    "Tool args validation failed: create_task requires task_name, context, split_reason, "
+                    "and a non-empty subtasks array because it creates a tracked todo. "
+                    "Use plan_task first to validate the task envelope, and use update_task instead when an active todo already exists."
+                )
+            return {"success": False, "error": error, "details": details}
         try:
             result = spec.handler(**(args or {}))
             if isinstance(result, str):
@@ -62,6 +71,8 @@ class ToolRegistry:
     def list_tool_schemas(self) -> List[Dict[str, Any]]:
         schemas = []
         for spec in self._tools.values():
+            if getattr(spec, "hidden", False):
+                continue
             schemas.append(
                 {
                     "name": spec.name,

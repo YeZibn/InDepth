@@ -29,7 +29,7 @@ Todo 编排层负责把复杂任务拆成可执行、可验证、可审计的最
 这意味着当前 todo 系统已经不只是“列清单”，而是形成了一套围绕 subtask 主线推进、失败恢复和任务边界管理的运行机制。
 
 这份文档重点回答五个问题：
-- 什么情况下必须创建 todo？
+- 什么情况下必须进入 Todo 编排？
 - subtask 应该如何设计，粒度多大才合适？
 - 当前 todo 工具真实支持哪些状态和数据结构？
 - 任务未完成时，fallback 与 recovery 现在是如何实现的？
@@ -86,7 +86,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 这个节点的作用是：
 - 确保本次 task 只围绕一个 todo 主线推进
 - 确保失败发生时，系统知道该挂回哪个 todo
-- 防止在同一 task 周期里重复 `create_task`
+- 防止在同一 task 周期里重复创建新 todo；常规路径由 `plan_task` 统一裁决
 
 如果这一步没绑定好，后面就容易掉进 `orphan failure`。
 
@@ -466,7 +466,7 @@ task 绑定 active_todo_id
 - LLM 在底盘内做更细的恢复策略判断
 - runtime 再决定是否自动落地
 
-## 3. 何时必须创建 Todo
+## 3. 何时必须进入 Todo 编排
 
 满足以下任一条件即必须创建 todo：
 - 至少 3 个可识别步骤。
@@ -474,11 +474,13 @@ task 绑定 active_todo_id
 - 预计执行超过 5 分钟。
 - 存在依赖关系或并行机会。
 
-调用 `create_task` 时必须提供：
+对外应先调用 `plan_task`。它必须提供：
 - `task_name`：主任务标题，必须体现“动作 + 对象”。
 - `context`：范围、边界、交付物、验收口径、时间基准。
 - `split_reason`：为什么需要拆分。
 - `subtasks`：结构化子任务数组。
+
+`plan_task` 会根据当前是否已有 active todo 自动决定 `mode=create/update`；当进入 `mode=create` 时，会在内部调用 hidden `create_task` 完成落盘。
 
 返回值中的 `todo_id` 是 todo 域唯一标识，后续状态更新、失败记录、恢复规划和报告生成都必须复用它。
 
@@ -486,7 +488,7 @@ task 绑定 active_todo_id
 
 ### 4.1 顶层结构
 
-`create_task` 会生成 `todo/<timestamp>_<sanitized_name>.md` 文件，主体结构包含：
+`plan_task` 在 `mode=create` 下会内部生成 `todo/<timestamp>_<sanitized_name>.md` 文件，主体结构包含：
 - `Metadata`
 - `Context`
 - `Subtasks`
@@ -515,7 +517,7 @@ task 绑定 active_todo_id
 - `Fallback Record`（可选）
 - 复选描述项
 
-`create_task` / `append_followup_subtasks` 支持的核心字段包括：
+`plan_task` 的 `subtasks` 输入以及 `append_followup_subtasks` 支持的核心字段包括：
 - `subtask_id`
 - `name` / `title`
 - `description`
@@ -968,7 +970,8 @@ follow-up subtask 的 `kind` 当前支持：
 - `todo_bound_at`
 
 上下文来源于工具执行结果，例如：
-- `create_task`
+- `plan_task`
+- `create_task`（internal/hidden）
 - `update_task_status`
 - `update_subtask`
 - `record_task_fallback`
@@ -976,8 +979,9 @@ follow-up subtask 的 `kind` 当前支持：
 - `get_next_task`
 
 当前语义：
-- `create_task` 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
-- `create_task` 默认会绑定当前 task 周期；若当前已有 `active_todo_id` 且未显式 `force_new_cycle`，runtime 会拒绝再次创建 todo
+- `plan_task` 是默认对外主入口；它先裁决 `mode=create/update`
+- `plan_task` 在 `mode=create` 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
+- hidden `create_task` 默认会绑定当前 task 周期；若当前已有 `active_todo_id` 且未显式 `force_new_cycle`，runtime 会拒绝再次创建 todo
 - `update_task_status(..., status="in-progress")` 后，runtime 会把该 subtask 视为当前 active subtask，并进入 `executing`
 - `update_subtask(...)` 后，runtime 会同步当前 active subtask 的 `subtask_id/subtask_number`
 - `record_task_fallback(...)` 后，runtime 会把该 subtask 视为恢复中的 subtask，并进入 `recovering`
@@ -1024,6 +1028,7 @@ follow-up subtask 的 `kind` 当前支持：
 runtime 会记录 `todo_binding_missing_warning` 观测事件。
 
 当前被视为“补救性/编排性”的工具包括：
+- `plan_task`
 - `create_task`
 - `list_tasks`
 - `get_next_task`

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.core.memory.sqlite_memory_store import SQLiteMemoryStore
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.tools.adapters import register_tool_functions
@@ -110,6 +111,196 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
             self.assertIn("create_task", final)
             parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
             self.assertEqual(len(parsed["subtasks"]), 1)
+
+    def test_runtime_restores_todo_binding_from_history_before_duplicate_create_task(self):
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "runtime_memory.db")
+            store = SQLiteMemoryStore(db_file=db_path, summarize_threshold=9999)
+
+            first_provider = MockModelProvider(
+                scripted_outputs=[
+                    {
+                        "content": "",
+                        "raw": {
+                            "choices": [
+                                {
+                                    "finish_reason": "tool_calls",
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "tool_calls": [
+                                            {
+                                                "id": "call_create_history",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "create_task",
+                                                    "arguments": (
+                                                        '{"task_name":"Demo Todo","context":"Create tracked work",'
+                                                        '"split_reason":"Need tracked todo recovery",'
+                                                        '"subtasks":[{"name":"Implement step","description":"Do the work"}]}'
+                                                    ),
+                                                },
+                                            }
+                                        ],
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "content": "todo created",
+                        "raw": {
+                            "choices": [
+                                {
+                                    "finish_reason": "stop",
+                                    "message": {"role": "assistant", "content": "todo created"},
+                                }
+                            ]
+                        },
+                    },
+                ]
+            )
+
+            second_provider = MockModelProvider(
+                scripted_outputs=[
+                    {
+                        "content": "",
+                        "raw": {
+                            "choices": [
+                                {
+                                    "finish_reason": "tool_calls",
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "tool_calls": [
+                                            {
+                                                "id": "call_create_again",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "create_task",
+                                                    "arguments": (
+                                                        '{"task_name":"Second Todo","context":"Should reuse history-bound todo",'
+                                                        '"split_reason":"Should not create another todo",'
+                                                        '"subtasks":[{"name":"Another step","description":"Do the other work"}]}'
+                                                    ),
+                                                },
+                                            }
+                                        ],
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "content": "",
+                        "raw": {
+                            "choices": [
+                                {
+                                    "finish_reason": "stop",
+                                    "message": {"role": "assistant", "content": ""},
+                                }
+                            ]
+                        },
+                    },
+                ]
+            )
+
+            first_runtime = AgentRuntime(
+                model_provider=first_provider,
+                tool_registry=registry,
+                memory_store=store,
+                max_steps=2,
+                enable_verification_handoff_llm=False,
+            )
+            second_runtime = AgentRuntime(
+                model_provider=second_provider,
+                tool_registry=registry,
+                memory_store=store,
+                max_steps=2,
+                enable_verification_handoff_llm=False,
+            )
+
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_999999_demo"),
+            ):
+                first_runtime.run(
+                    "Please create a tracked todo for this task.",
+                    task_id="runtime_cross_run_restore_task",
+                    run_id="runtime_cross_run_restore_run_1",
+                )
+                final = second_runtime.run(
+                    "Please continue the same task.",
+                    task_id="runtime_cross_run_restore_task",
+                    run_id="runtime_cross_run_restore_run_2",
+                )
+
+            self.assertIn("任务未完成", final)
+            self.assertIn("create_task", final)
+            self.assertIn("20260416_999999_demo", final)
+            parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
+            self.assertEqual(len(parsed["subtasks"]), 1)
+
+    def test_runtime_returns_strong_error_for_create_task_without_subtasks(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_create_invalid",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "create_task",
+                                                "arguments": (
+                                                    '{"task_name":"Demo Todo","context":"Missing subtasks envelope",'
+                                                    '"split_reason":"Still incomplete"}'
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": ""},
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(model_provider=provider, tool_registry=registry, max_steps=2, enable_verification_handoff_llm=False)
+
+        final = runtime.run(
+            "Please create a tracked todo.",
+            task_id="runtime_create_task_arg_guard_task",
+            run_id="runtime_create_task_arg_guard_run",
+        )
+
+        self.assertIn("任务未完成", final)
+        self.assertIn("create_task", final)
+        self.assertIn("subtasks", final)
 
     def test_runtime_reports_orphan_failure_when_todo_is_unbound(self):
         provider = MockModelProvider(
