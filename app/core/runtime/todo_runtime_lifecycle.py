@@ -59,13 +59,13 @@ def build_duplicate_todo_binding_error(todo_context: Dict[str, Any]) -> Dict[str
         "success": False,
         "error": (
             f"Active todo already bound for this task: {todo_id or 'unknown'}. "
-            "Use update_task to continue the existing todo, or pass force_new_cycle=true only when intentionally starting a new task cycle."
+            "Use plan_task with the active_todo_id to continue the existing todo instead of starting a new cycle."
         ),
         "result": {
             "success": False,
             "error": (
                 f"Active todo already bound for this task: {todo_id or 'unknown'}. "
-                "Use update_task to continue the existing todo, or pass force_new_cycle=true only when intentionally starting a new task cycle."
+                "Use plan_task with the active_todo_id to continue the existing todo instead of starting a new cycle."
             ),
             "active_todo_id": todo_id,
         },
@@ -101,16 +101,16 @@ def build_create_task_arg_error(tool_args: Dict[str, Any], todo_context: Dict[st
         details.append("Field 'subtasks' must be a non-empty array of structured subtask objects.")
 
     guidance = (
-        "create_task creates a tracked todo and requires a complete task envelope with "
+        "plan_task creates or updates tracked todo state and requires a complete task envelope with "
         "task_name, context, split_reason, and a non-empty subtasks array. "
-        "Validate or assemble that envelope with plan_task before calling create_task."
+        "Validate or assemble that envelope with prepare_task, then execute it with plan_task."
     )
     if todo_id:
-        guidance += f" Active todo already exists: {todo_id}. Use update_task to continue or extend the existing todo instead of calling create_task again."
+        guidance += f" Active todo already exists: {todo_id}. Pass active_todo_id into plan_task to continue or extend the existing todo."
     else:
-        guidance += " Only call create_task when no active todo is currently bound."
+        guidance += " Omit active_todo_id only when no active todo is currently bound."
 
-    error = f"Invalid create_task arguments. {' '.join(details)} {guidance}".strip()
+    error = f"Invalid plan_task arguments. {' '.join(details)} {guidance}".strip()
     return {
         "success": False,
         "error": error,
@@ -204,19 +204,6 @@ def update_active_todo_context(
                     "binding_required": True,
                     "binding_state": "bound",
                     "todo_bound_at": next_context.get("todo_bound_at", ""),
-                    "active_retry_guidance": [],
-                }
-        elif tool == "create_task" and execution.get("success"):
-            todo_id = str(payload.get("todo_id", "")).strip()
-            if todo_id:
-                next_context = {
-                    "todo_id": todo_id,
-                    "active_subtask_id": None,
-                    "active_subtask_number": None,
-                    "execution_phase": "planning",
-                    "binding_required": True,
-                    "binding_state": "bound",
-                    "todo_bound_at": payload.get("todo_bound_at", ""),
                     "active_retry_guidance": [],
                 }
         elif tool == "update_task_status":

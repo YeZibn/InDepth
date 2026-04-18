@@ -87,7 +87,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 这个节点的作用是：
 - 确保本次 task 只围绕一个 todo 主线推进
 - 确保失败发生时，系统知道该挂回哪个 todo
-- 防止在同一 task 周期里重复创建新 todo；常规路径先经 `prepare_task` 分流，再进入 `plan_task` 或 `update_task`
+- 防止在同一 task 周期里重复创建新 todo；常规路径先经 prepare phase，再统一进入 `plan_task`
 
 如果这一步没绑定好，后面就容易掉进 `orphan failure`。
 
@@ -476,22 +476,22 @@ task 绑定 active_todo_id
 - 存在依赖关系或并行机会。
 
 当前推荐链路不是让模型直接先调 `plan_task`，而是：
-- 先由 Runtime 强制执行 `prepare_task`
-- 无 active todo 时，自动走 `plan_task`
-- 有 active todo 时，自动走 `update_task`
+- 先由 Runtime 强制执行 prepare phase
+- 若需要 todo，统一自动走 `plan_task`
+- `plan_task` 内部根据是否已有 active todo 决定 create/update
 
 其中 create 路径下的 `plan_task` 仍要求：
 - `task_name`：主任务标题，必须体现“动作 + 对象”。
 - `context`：范围、边界、交付物、验收口径、时间基准。
 - `split_reason`：为什么需要拆分。
-- `subtasks`：结构化子任务数组。
+- `subtasks`：结构化子任务数组；建议每项至少包含 `name / description / split_rationale`，并可附带 `dependencies / acceptance_criteria`。
 
 返回值中的 `todo_id` 是 todo 域唯一标识，后续状态更新、失败记录、恢复规划和报告生成都必须复用它。
 
 当前实现中：
-- `plan_task` 负责 create 路径
-- `update_task` 负责已有 todo 的增量修改路径
-- `prepare_task` 只负责给出候选计划，不直接修改 todo
+- `plan_task` 是唯一对外落盘入口
+- create/update 是 `plan_task` 的内部执行路径
+- prepare phase 只负责给出候选计划，不直接修改 todo
 
 ## 4. 当前 Todo 数据模型
 
@@ -983,10 +983,7 @@ follow-up subtask 的 `kind` 当前支持：
 - `todo_bound_at`
 
 上下文来源于工具执行结果，例如：
-- `prepare_task`
 - `plan_task`
-- `update_task`
-- `create_task`（internal/hidden）
 - `update_task_status`
 - `update_subtask`
 - `record_task_fallback`
@@ -994,13 +991,13 @@ follow-up subtask 的 `kind` 当前支持：
 - `get_next_task`
 
 当前语义：
-- `run()` 会在首轮模型请求前强制执行一次 `prepare_task`
-- `prepare_task` 的结果会保存在 runtime 内部状态中
-- 若当前没有 active todo，prepare 会产出 `recommended_mode=create`，随后 runtime 自动调用 `plan_task`
-- 若当前已有 active todo，prepare 会产出 `recommended_mode=update`，随后 runtime 自动调用 `update_task`
+- `run()` 会在首轮模型请求前强制执行一次 prepare phase
+- prepare 结果会保存在 runtime 内部状态中
+- 若 prepare 判断需要 todo，runtime 会自动调用 `plan_task`
+- `plan_task` 内部根据当前 todo 上下文执行 create/update
 - 这些内部自动工具调用会被写回消息历史，便于恢复与审计
-- `plan_task` 在 create 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
-- hidden `create_task` 默认会绑定当前 task 周期；若当前已有 `active_todo_id` 且未显式 `force_new_cycle`，runtime 会拒绝再次创建 todo
+- Runtime 会在进入执行前打印 `[Prepare]` 摘要，展示顶层 `split_reason` 与完整子任务清单
+- `plan_task` 在 create 成功后，runtime 会记录 `todo_id`，并进入 `executing` 阶段
 - `update_task_status(..., status="in-progress")` 后，runtime 会把该 subtask 视为当前 active subtask，并进入 `executing`
 - `update_subtask(...)` 后，runtime 会同步当前 active subtask 的 `subtask_id/subtask_number`
 - `record_task_fallback(...)` 后，runtime 会把该 subtask 视为恢复中的 subtask，并进入 `recovering`
@@ -1015,8 +1012,6 @@ follow-up subtask 的 `kind` 当前支持：
 
 此外，planning 类工具现在还有一层 prepare guard：
 - `plan_task`
-- `create_task`
-- `update_task`
 
 若 prepare 尚未完成，Runtime 会直接拒绝这些工具调用。
 
@@ -1057,7 +1052,6 @@ runtime 会记录 `todo_binding_missing_warning` 观测事件。
 
 当前被视为“补救性/编排性”的工具包括：
 - `plan_task`
-- `create_task`
 - `list_tasks`
 - `get_next_task`
 - `get_task_progress`

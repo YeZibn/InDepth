@@ -53,19 +53,20 @@
 - 存在依赖或并行机会
 
 创建细则：
-1. MUST 先完成前置规划（`prepare_task`）再进入执行。
+1. MUST 先完成前置规划（prepare phase）再进入执行。
 2. 主任务标题 MUST 包含目标对象与动作，MUST NOT 使用空泛标题。
 3. 主任务描述 MUST 至少包含：范围边界、交付物、验收口径、时间基准（如有时效要求）。
-4. 若 `prepare_task` 判断当前应进入 todo 编排，则 Runtime MUST 按以下分流落盘：
-   - 无 active todo：调用 `plan_task`
-   - 有 active todo：调用 `update_task`
+4. 若 prepare phase 判断当前应进入 todo 编排，则 Runtime MUST 统一调用 `plan_task` 落盘。
+   - 无 active todo：`plan_task` 内部走 create
+   - 有 active todo：`plan_task` 内部走 update
 5. create 路径下调用 `plan_task` 时 MUST 提供顶层 `split_reason`（整体拆分理由），且写入 Context 区块。
 6. 创建后 MUST 保存返回的 `todo_id`，后续状态更新与查询 MUST 统一复用该 `todo_id`。
 
 子任务细则：
 1. 每个子任务 MUST 是“单一可验证动作”，建议粒度为 5-30 分钟可完成。
 2. 子任务描述 SHOULD 使用“动词 + 对象 + 产出”格式。
-3. 子任务 MUST 标注完成判据（至少一项：产物路径、命令结果、结构化结论）。
+3. 子任务 SHOULD 显式给出 `split_rationale`，说明为何这样拆分；若缺失，Runtime/plan_task 可以补默认值，但不应长期依赖默认补全。
+4. 子任务 MUST 标注完成判据（至少一项：产物路径、命令结果、结构化结论）。
 4. 存在先后关系时 MUST 写清依赖顺序；可并行项 SHOULD 显式标记可并行。
 5. 新建子任务默认状态 MUST 为 `pending`。
 
@@ -73,7 +74,7 @@
 1. 后续动作 MUST 以子任务清单为执行依据。
 2. 清单外动作 MUST 先补入子任务，再执行。
 3. MUST NOT 跳过规划直接做未登记动作。
-4. MUST NOT 在 prepare 未完成前直接调用 `plan_task`、`create_task` 或 `update_task`。
+4. MUST NOT 在 prepare 未完成前直接调用 `plan_task`。
 
 ### 2.2 SubAgent 模块
 
@@ -137,10 +138,11 @@
 
 Runtime 绑定现实：
 1. Runtime 当前会维护 `todo_id`、`active_subtask_number`、`execution_phase`、`binding_required`，并保存 `prepare_phase_completed`、`prepare_phase_result`。
-2. Runtime 会在首轮模型请求前强制执行一次 `prepare_task`。
-3. 若 prepare 结果已形成成熟计划，Runtime MAY 在首轮模型请求前自动完成 `plan_task` 或 `update_task` 落盘。
-4. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
-5. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
+2. Runtime 会在首轮模型请求前强制执行一次 prepare phase。
+3. 若 prepare 结果已形成成熟计划，Runtime MAY 在首轮模型请求前自动完成 `plan_task` 落盘。
+4. Runtime 会在进入执行前输出一段 `[Prepare]` 摘要，向用户展示任务目标、todo 决策、拆分理由与完整子任务清单。
+5. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
+6. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
 
 状态机约束：
 1. 初始状态：`pending`
@@ -159,6 +161,7 @@ Runtime 绑定现实：
 2. 任何 `completed` 子任务 MUST 具备可核验证据（产物路径、命令结果、关键结论之一）。
 3. 若执行结果与预期不一致，MUST 回写为 `blocked`、`failed`、`partial`、`awaiting_input`、`timed_out` 之一，MUST NOT 直接标记 `completed`。
 4. 调用 Todo 工具时，MUST 传 `todo_id`（例如 `update_task_status(todo_id=..., ...)`）。
+5. 若 Runtime 已在 CLI 中输出 `[Prepare]` 摘要，执行阶段 SHOULD 与该计划保持一致；若需要偏离，SHOULD 先更新 todo 或明确说明原因。
 
 收尾一致性：
 1. 交付前 MUST 扫描全部子任务状态，确认不存在“已完成交付但仍有关键子任务非 `completed/abandoned`”的冲突。

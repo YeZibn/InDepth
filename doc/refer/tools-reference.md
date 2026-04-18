@@ -170,12 +170,12 @@
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                       Todo 工具组                                 │   │
 │  │                                                                  │   │
-│  │  prepare_task ──▶ plan_task / update_task                         │   │
-│  │         │                    │                                   │   │
-│  │         │                    ├──▶ update_task_status              │   │
-│  │         │                    └──▶ reopen_subtask / update_subtask │   │
-│  │         ▼                                                        │   │
-│  │   (runtime preflight)                                            │   │
+│  │  prepare phase ──▶ plan_task                                      │   │
+│  │       │                │                                          │   │
+│  │       │                ├──▶ update_task_status                    │   │
+│  │       │                └──▶ reopen_subtask / update_subtask       │   │
+│  │       ▼                                                          │   │
+│  │   ([Prepare] CLI summary)                                         │   │
 │  │  list_tasks ──▶ get_next_task                                     │   │
 │  │       │                     │                                    │   │
 │  │       ▼                     ▼                                    │   │
@@ -392,16 +392,7 @@ plan_task(
     task_name: str,
     context: str,
     split_reason: str,  # 顶层拆分理由，必填
-    subtasks: List[Dict[str, Any]]  # [{name, description, split_reason?, dependencies?, priority?}] 必填
-) -> Dict
-
-# 内部 create 能力（hidden，不作为模型主入口）
-create_task(
-    task_name: str,
-    context: str,
-    split_reason: str,
-    force_new_cycle: bool = False,  # 显式开启新 task 周期时才使用
-    subtasks: List[Dict[str, Any]]
+    subtasks: List[Dict[str, Any]]  # [{name, description, split_rationale?, dependencies?, acceptance_criteria?, priority?}] 必填
 ) -> Dict
 
 # 更新状态
@@ -479,8 +470,7 @@ generate_task_report(todo_id: str) -> str
 **标识规范**：
 - Todo 领域统一使用 `todo_id`
 - Subtask 领域统一使用 `subtask_id` 作为稳定内部锚点，`subtask_number` 保留为展示与兼容层
-- `plan_task` 在 `mode=create` 下会返回内部 create 的执行结果，包含 `todo_id`
-- `create_task` 为 hidden/internal tool，保留为内部执行能力
+- `plan_task` 是唯一对外 todo 落盘入口；create/update 由其内部决定
 - `list_tasks` 返回项包含 `todo_id`
 
 **状态机**：
@@ -510,21 +500,20 @@ record_task_fallback()
 
 **运行时接入**：
 1. Runtime 会跟踪当前活跃的 todo 执行上下文，包括 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at`
-2. Runtime 会在首轮模型请求前先调用 hidden `prepare_task`
-3. `prepare_task` 若产出成熟计划，会自动分流：
-   - 无 active todo -> `plan_task`
-   - 有 active todo -> `update_task`
-4. planning 类工具存在 prepare guard；若 prepare 未完成，`plan_task/create_task/update_task` 会被直接拒绝
-5. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
+2. Runtime 会在首轮模型请求前先执行 prepare phase
+3. prepare 若产出成熟计划，Runtime 会自动调用 `plan_task`
+4. `plan_task` 内部根据 active todo 情况决定 create/update
+5. prepare 完成后，CLI 会打印 `[Prepare]` 摘要，展示任务目标、todo 决策、顶层拆分理由和完整子任务清单
+6. planning 类工具存在 prepare guard；若 prepare 未完成，`plan_task` 会被直接拒绝
+7. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
    - 调 `record_task_fallback`
    - 调单次 `LLM recovery assessment`
    - 调 `update_task_status`
    - 调 `plan_task_recovery`
    - 仅对 `needs_derived_recovery_subtask=true` 且 `decision_level=auto` 的恢复决策追加 follow-up subtasks
-6. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
-7. `create_task` 若被直接调用，默认仍会要求完整 envelope，并且仅应在无 active todo 时使用；常规路径应交给 prepare + `plan_task`
-8. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
-9. 恢复信息会进一步进入：
+8. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
+9. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
+10. 恢复信息会进一步进入：
    - `verification_handoff.recovery`
    - `task_judged.payload.verification_handoff`
    - postmortem “交付内容”区块

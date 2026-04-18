@@ -64,7 +64,7 @@ class MainAgentTests(unittest.TestCase):
             )
 
         registry = agent.runtime.kwargs["tool_registry"]
-        self.assertTrue(registry.has("create_task"))
+        self.assertTrue(registry.has("plan_task"))
         self.assertTrue(registry.has("create_sub_agent"))
 
     def test_main_agent_registers_only_supplied_tools(self):
@@ -84,7 +84,7 @@ class MainAgentTests(unittest.TestCase):
 
         registry = agent.runtime.kwargs["tool_registry"]
         self.assertTrue(registry.has("dummy_tool"))
-        self.assertFalse(registry.has("create_task"))
+        self.assertFalse(registry.has("plan_task"))
         self.assertFalse(registry.has("non_existing_tool"))
 
     def test_chat_delegates_to_runtime_with_expected_task_and_run_id(self):

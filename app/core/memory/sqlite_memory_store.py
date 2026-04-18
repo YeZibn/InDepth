@@ -67,7 +67,7 @@ class SQLiteMemoryStore:
         self.min_keep_turns = max(int(min_keep_turns), 1)
         self.keep_recent_event_tool_pairs = max(int(keep_recent_event_tool_pairs), 0)
         default_stateful_tools = [
-            "create_task",
+            "plan_task",
             "get_next_task",
             "update_task_status",
             "init_search_guard",

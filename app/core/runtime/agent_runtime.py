@@ -45,8 +45,6 @@ from app.core.runtime.runtime_finalization import (
 from app.core.runtime.todo_runtime_lifecycle import (
     append_recovery_summary_for_user,
     auto_manage_todo_recovery,
-    build_create_task_arg_error,
-    build_duplicate_todo_binding_error,
     finalize_active_todo_context,
     maybe_emit_todo_binding_warning,
     restore_active_todo_context_from_history,
@@ -73,6 +71,66 @@ from app.core.tools.registry import ToolRegistry
 from app.observability.events import emit_event
 from app.observability.postmortem import generate_postmortem
 
+
+PREPARE_PLANNER_SYSTEM_PROMPT = """你是 Runtime 的前置 Todo 规划器。
+
+你的职责只有思考，不执行，不调用工具，不读取文件，不探索环境。
+
+请基于输入事实判断：
+1. 当前请求是否需要使用 todo 跟踪
+2. 如果需要，输出一份可直接交给 plan_task 的完整计划
+
+要求：
+1. 只输出 JSON
+2. 不要输出 markdown
+3. 不要请求调用任何工具
+4. 若 active_todo_exists=true，优先沿用 active_todo_id，不要重新开始新 todo
+5. 当 should_use_todo=true 时，必须一次性给出 task_name/context/split_reason/subtasks
+6. subtasks 至少 1 项，每项至少包含 name、description、split_rationale
+7. 若已有 active todo，可用一个“承接当前请求并继续推进”的 bootstrap 子任务作为最小更新骨架
+
+输出 JSON 结构：
+{
+  "should_use_todo": true,
+  "task_name": "string",
+  "context": "string",
+  "split_reason": "string",
+  "subtasks": [
+    {
+      "name": "string",
+      "description": "string",
+      "split_rationale": "string",
+      "dependencies": ["optional task number strings"],
+      "acceptance_criteria": ["optional string array"]
+    }
+  ],
+  "notes": ["string"]
+}
+"""
+
+PHASE_OVERLAY_PROMPTS = {
+    "preparing": (
+        "[Current Phase]\n"
+        "You are currently in preparing phase.\n"
+        "Primary goal: understand the task, decide whether todo tracking is needed, and shape the execution skeleton.\n"
+        "You may use lightweight observational abilities when genuinely helpful, such as checking time, reviewing history, and reading current runtime facts.\n"
+        "Do not expand into full execution, broad exploration, or deliver final artifacts in this phase."
+    ),
+    "executing": (
+        "[Current Phase]\n"
+        "You are currently in executing phase.\n"
+        "Primary goal: advance the task, use tools when needed, and complete the requested work.\n"
+        "Do not restart broad planning unless execution is genuinely blocked."
+    ),
+    "finalizing": (
+        "[Current Phase]\n"
+        "You are currently in finalizing phase.\n"
+        "Primary goal: evaluate existing results, summarize honestly, and close out this run.\n"
+        "Do not expand task scope during closeout."
+    ),
+}
+
+
 class AgentRuntime:
     START_RECALL_TOP_K = 5
     START_RECALL_MIN_SCORE = 0.65
@@ -80,8 +138,6 @@ class AgentRuntime:
     TODO_BINDING_GUARD_MODE = "warn"
     TODO_BINDING_EXEMPT_TOOLS = {
         "plan_task",
-        "create_task",
-        "update_task",
         "list_tasks",
         "get_next_task",
         "get_task_progress",
@@ -112,6 +168,7 @@ class AgentRuntime:
         enable_verification_handoff_llm: Optional[bool] = None,
         enable_llm_recovery_planner: Optional[bool] = None,
         enable_llm_clarification_judge: Optional[bool] = None,
+        enable_llm_todo_planner: Optional[bool] = None,
         clarification_judge_confidence_threshold: float = 0.60,
         enable_clarification_heuristic_fallback: bool = True,
         system_memory_store: Optional[SystemMemoryStore] = None,
@@ -166,6 +223,11 @@ class AgentRuntime:
             self.enable_llm_clarification_judge = self.model_provider.__class__.__name__ != "MockModelProvider"
         else:
             self.enable_llm_clarification_judge = bool(enable_llm_clarification_judge)
+        if enable_llm_todo_planner is None:
+            # Default on for real providers, off for deterministic test mock provider.
+            self.enable_llm_todo_planner = self.model_provider.__class__.__name__ != "MockModelProvider"
+        else:
+            self.enable_llm_todo_planner = bool(enable_llm_todo_planner)
         self.clarification_judge_confidence_threshold = clamp_float(clarification_judge_confidence_threshold, 0.6)
         self.enable_clarification_heuristic_fallback = bool(enable_clarification_heuristic_fallback)
         self.last_runtime_state = "idle"
@@ -176,29 +238,86 @@ class AgentRuntime:
         self._latest_todo_recovery: Dict[str, Any] = {}
         self._prepare_phase_completed = False
         self._prepare_phase_result: Dict[str, Any] = {}
+        self._runtime_phase = "preparing"
 
-    def _run_prepare_phase(self, user_input: str, task_id: str, run_id: str) -> Dict[str, Any]:
+    def _set_runtime_phase(self, phase: str, task_id: str = "", run_id: str = "") -> None:
+        phase_norm = str(phase or "").strip().lower() or "executing"
+        if phase_norm not in PHASE_OVERLAY_PROMPTS:
+            phase_norm = "executing"
+        previous = str(getattr(self, "_runtime_phase", "") or "").strip().lower()
+        if previous == phase_norm:
+            self._runtime_phase = phase_norm
+            return
+        if previous and task_id and run_id:
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="phase_completed",
+                payload={"phase": previous},
+            )
+        self._runtime_phase = phase_norm
+        if task_id and run_id:
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="phase_started",
+                payload={"phase": phase_norm},
+            )
+
+    def _build_prepare_planner_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        try:
+            model_cfg = load_runtime_model_config()
+            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
+            if mini_id:
+                options["model"] = mini_id
+        except Exception:
+            pass
+        return GenerationConfig(
+            temperature=0.0,
+            max_tokens=900,
+            provider_options=options,
+        )
+
+    def _load_active_todo_full_text(self, todo_id: str) -> str:
+        todo_id = str(todo_id or "").strip()
+        if not todo_id:
+            return ""
+        try:
+            from app.tool.todo_tool.todo_tool import _get_task_by_todo_id
+
+            task_data = _get_task_by_todo_id(todo_id)
+        except Exception:
+            task_data = None
+        if not isinstance(task_data, dict):
+            return ""
+        filepath = str(task_data.get("filepath", "") or "").strip()
+        if not filepath:
+            return ""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            return ""
+
+    def _run_prepare_phase_rule_fallback(self, args: Dict[str, Any], task_id: str, run_id: str) -> Dict[str, Any]:
         if not self.tool_registry.has("prepare_task"):
             self._prepare_phase_completed = False
             self._prepare_phase_result = {}
             return {}
-        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
-        todo_id = str(ctx.get("todo_id", "") or "").strip()
-        active_number = ctx.get("active_subtask_number")
-        if active_number in (None, ""):
-            active_number = 0
-        active_status = ""
-        if active_number:
-            active_status = "in-progress" if str(ctx.get("execution_phase", "") or "").strip() == "executing" else ""
-        args = {
-            "task_name": self._extract_title_topic(user_input),
-            "context": user_input,
-            "active_todo_id": todo_id,
-            "active_todo_exists": bool(todo_id),
-            "active_todo_summary": "",
-            "active_subtask_number": int(active_number or 0),
-            "active_subtask_status": active_status,
-            "execution_intent": "runtime_preflight",
+        fallback_args = {
+            "task_name": str(args.get("task_name", "") or "").strip(),
+            "context": str(args.get("context", "") or "").strip(),
+            "active_todo_id": str(args.get("active_todo_id", "") or "").strip(),
+            "active_todo_exists": bool(args.get("active_todo_exists")),
+            "active_todo_summary": str(args.get("active_todo_summary", "") or "").strip(),
+            "active_subtask_number": int(args.get("active_subtask_number") or 0),
+            "active_subtask_status": str(args.get("active_subtask_status", "") or "").strip(),
+            "execution_intent": str(args.get("execution_intent", "") or "").strip(),
         }
         emit_event(
             task_id=task_id,
@@ -206,9 +325,9 @@ class AgentRuntime:
             actor="main",
             role="general",
             event_type="tool_called",
-            payload={"tool": "prepare_task", "args": args},
+            payload={"tool": "prepare_task", "args": fallback_args, "source": "rule_fallback"},
         )
-        result = self.tool_registry.invoke("prepare_task", args)
+        result = self.tool_registry.invoke("prepare_task", fallback_args)
         if not result.get("success"):
             self._prepare_phase_completed = False
             self._prepare_phase_result = {}
@@ -219,7 +338,7 @@ class AgentRuntime:
                 role="general",
                 event_type="tool_failed",
                 status="error",
-                payload={"tool": "prepare_task", "error": str(result.get("error", ""))},
+                payload={"tool": "prepare_task", "error": str(result.get("error", "")), "source": "rule_fallback"},
             )
             return {}
         emit_event(
@@ -228,13 +347,129 @@ class AgentRuntime:
             actor="main",
             role="general",
             event_type="tool_succeeded",
-            payload={"tool": "prepare_task", "error": ""},
+            payload={"tool": "prepare_task", "error": "", "source": "rule_fallback"},
         )
         payload = result.get("result", {})
         prepared = payload if isinstance(payload, dict) else {}
+        prepared["planner_source"] = "rule_fallback"
         self._prepare_phase_completed = True
         self._prepare_phase_result = prepared
         return prepared
+
+    def _run_prepare_phase_llm(self, args: Dict[str, Any], task_id: str, run_id: str) -> Dict[str, Any]:
+        payload = {
+            "user_input": str(args.get("context", "") or "").strip(),
+            "active_todo_exists": bool(args.get("active_todo_exists")),
+            "active_todo_id": str(args.get("active_todo_id", "") or "").strip(),
+            "active_todo_full_text": str(args.get("active_todo_full_text", "") or "").strip(),
+            "active_subtask_number": int(args.get("active_subtask_number") or 0),
+            "execution_phase": str(args.get("execution_phase", "") or "planning").strip() or "planning",
+            "latest_recovery": args.get("latest_recovery", {}) if isinstance(args.get("latest_recovery"), dict) else {},
+        }
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="tool_called",
+            payload={"tool": "planning_llm_prepare", "args": payload},
+        )
+        output = self.model_provider.generate(
+            messages=[
+                {"role": "system", "content": PREPARE_PLANNER_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            tools=[],
+            config=self._build_prepare_planner_config(),
+        )
+        parsed = parse_json_dict(str(getattr(output, "content", "") or ""))
+        should_use_todo = bool(parsed.get("should_use_todo"))
+        notes = parsed.get("notes", [])
+        if not isinstance(notes, list):
+            notes = []
+        prepared = {
+            "success": True,
+            "should_use_todo": should_use_todo,
+            "task_name": str(parsed.get("task_name", "") or "").strip() or str(args.get("task_name", "") or "").strip(),
+            "context": str(parsed.get("context", "") or "").strip() or str(args.get("context", "") or "").strip(),
+            "split_reason": str(parsed.get("split_reason", "") or "").strip(),
+            "subtasks": self._normalize_prepare_subtasks(
+                parsed.get("subtasks", []) if isinstance(parsed.get("subtasks"), list) else [],
+                split_reason=str(parsed.get("split_reason", "") or "").strip(),
+            ),
+            "planning_confidence": "high" if should_use_todo else "low",
+            "active_todo_id": str(args.get("active_todo_id", "") or "").strip(),
+            "active_todo_summary": "",
+            "notes": [str(item).strip() for item in notes if str(item).strip()],
+            "planner_source": "llm",
+        }
+        if should_use_todo:
+            subtasks = prepared.get("subtasks", [])
+            if (
+                not prepared["task_name"]
+                or not prepared["context"]
+                or not prepared["split_reason"]
+                or not isinstance(subtasks, list)
+                or not subtasks
+            ):
+                raise ValueError("invalid_llm_prepare_output_missing_required_fields")
+            prepared["recommended_plan_task_args"] = {
+                "task_name": prepared["task_name"],
+                "context": prepared["context"],
+                "split_reason": prepared["split_reason"],
+                "subtasks": subtasks,
+                "active_todo_id": prepared["active_todo_id"],
+            }
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="tool_succeeded",
+            payload={"tool": "planning_llm_prepare", "error": ""},
+        )
+        self._prepare_phase_completed = True
+        self._prepare_phase_result = prepared
+        return prepared
+
+    def _run_prepare_phase(self, user_input: str, task_id: str, run_id: str) -> Dict[str, Any]:
+        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
+        todo_id = str(ctx.get("todo_id", "") or "").strip()
+        active_number = ctx.get("active_subtask_number")
+        if active_number in (None, ""):
+            active_number = 0
+        active_status = ""
+        execution_phase = str(ctx.get("execution_phase", "") or "planning").strip() or "planning"
+        if active_number:
+            active_status = "in-progress" if execution_phase == "executing" else ""
+        args = {
+            "task_name": self._extract_title_topic(user_input),
+            "context": user_input,
+            "active_todo_id": todo_id,
+            "active_todo_exists": bool(todo_id),
+            "active_todo_summary": "",
+            "active_todo_full_text": self._load_active_todo_full_text(todo_id),
+            "active_subtask_number": int(active_number or 0),
+            "active_subtask_status": active_status,
+            "execution_phase": execution_phase,
+            "latest_recovery": self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {},
+            "execution_intent": "runtime_preflight",
+        }
+        if not self.enable_llm_todo_planner:
+            return self._run_prepare_phase_rule_fallback(args=args, task_id=task_id, run_id=run_id)
+        try:
+            return self._run_prepare_phase_llm(args=args, task_id=task_id, run_id=run_id)
+        except Exception as e:
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="tool_failed",
+                status="error",
+                payload={"tool": "planning_llm_prepare", "error": str(e), "source": "llm_fallback_to_rule"},
+            )
+            return self._run_prepare_phase_rule_fallback(args=args, task_id=task_id, run_id=run_id)
 
     def _render_prepare_phase_message(self, prepared: Dict[str, Any]) -> str:
         if not isinstance(prepared, dict) or not prepared:
@@ -242,8 +477,6 @@ class AgentRuntime:
         lines = [
             "[Prepare Phase]",
             f"should_use_todo={bool(prepared.get('should_use_todo'))}",
-            f"plan_ready={bool(prepared.get('plan_ready'))}",
-            f"recommended_mode={str(prepared.get('recommended_mode', '') or '').strip() or 'unknown'}",
         ]
         active_todo_id = str(prepared.get("active_todo_id", "") or "").strip()
         if active_todo_id:
@@ -263,16 +496,116 @@ class AgentRuntime:
             lines.append(preview_json(suggested, max_len=800))
         return "\n".join(lines).strip()
 
+    def _render_prepare_cli_summary(self, user_input: str, prepared: Dict[str, Any]) -> str:
+        if not isinstance(prepared, dict) or not prepared:
+            return ""
+        task_goal = str(prepared.get("context", "") or "").strip() or str(user_input or "").strip()
+        task_goal = self._preview(task_goal, 120)
+        should_use_todo = bool(prepared.get("should_use_todo"))
+        active_todo_id = str(prepared.get("active_todo_id", "") or "").strip()
+        decision = "启用 todo" if should_use_todo else "不启用 todo"
+        if active_todo_id:
+            decision = f"沿用已有 todo（{active_todo_id}）" if should_use_todo else f"继续参考已有 todo（{active_todo_id}）"
+        next_phase = "executing"
+        subtasks = prepared.get("subtasks", [])
+        if not isinstance(subtasks, list):
+            subtasks = []
+        plan_summary = ""
+        if should_use_todo and subtasks:
+            names = [str(item.get("name", "")).strip() for item in subtasks if isinstance(item, dict) and str(item.get("name", "")).strip()]
+            if names:
+                plan_summary = " -> ".join(names[:3])
+        if not plan_summary:
+            notes = prepared.get("notes", [])
+            if isinstance(notes, list):
+                note_items = [str(item).strip() for item in notes if str(item).strip()]
+                if note_items:
+                    plan_summary = "；".join(note_items[:2])
+        if not plan_summary:
+            split_reason = str(prepared.get("split_reason", "") or "").strip()
+            if split_reason:
+                plan_summary = self._preview(split_reason, 80)
+        if not plan_summary:
+            plan_summary = "进入执行阶段"
+        split_reason = str(prepared.get("split_reason", "") or "").strip()
+        lines = [
+            "[Prepare]",
+            f"任务目标：{task_goal}",
+            f"决策：{decision}",
+            f"下一阶段：{next_phase}",
+            f"拆分理由：{self._preview(split_reason, 120) if split_reason else '未显式提供'}",
+            f"计划摘要：{plan_summary}",
+        ]
+        if subtasks:
+            lines.append("计划明细：")
+            for idx, item in enumerate(subtasks, 1):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "") or "").strip() or f"子任务 {idx}"
+                description = str(item.get("description", "") or "").strip()
+                split_rationale = str(item.get("split_rationale", "") or "").strip()
+                line = f"{idx}. {name}"
+                if description:
+                    line += f"：{self._preview(description, 120)}"
+                lines.append(line)
+                if split_rationale:
+                    lines.append(f"   拆分依据：{self._preview(split_rationale, 120)}")
+        return "\n".join(lines).strip()
+
+    def _normalize_prepare_subtasks(self, subtasks: Any, split_reason: str = "") -> List[Dict[str, Any]]:
+        if not isinstance(subtasks, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        total = len(subtasks)
+        for idx, item in enumerate(subtasks, 1):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "") or item.get("title", "") or "").strip()
+            description = str(item.get("description", "") or item.get("desc", "") or "").strip()
+            if not name or not description:
+                continue
+            split_rationale = str(
+                item.get("split_rationale")
+                or item.get("split_reason")
+                or item.get("rationale")
+                or item.get("reason")
+                or ""
+            ).strip()
+            if not split_rationale:
+                if total == 1:
+                    split_rationale = split_reason or "将任务先收敛为一个最小可执行步骤，便于进入执行阶段。"
+                elif idx == 1:
+                    split_rationale = "先完成首个基础步骤，建立后续执行所需的上下文。"
+                else:
+                    split_rationale = "将任务拆成更小步骤，降低执行复杂度并便于跟踪进度。"
+            normalized_item: Dict[str, Any] = {
+                "name": name,
+                "description": description,
+                "split_rationale": split_rationale,
+            }
+            dependencies = item.get("dependencies", [])
+            if isinstance(dependencies, list):
+                deps = [str(dep).strip() for dep in dependencies if str(dep).strip()]
+                if deps:
+                    normalized_item["dependencies"] = deps
+            acceptance_criteria = item.get("acceptance_criteria", [])
+            if isinstance(acceptance_criteria, list):
+                criteria = [str(entry).strip() for entry in acceptance_criteria if str(entry).strip()]
+                if criteria:
+                    normalized_item["acceptance_criteria"] = criteria
+            for key in ["owner", "kind", "origin_subtask_id", "origin_subtask_number", "subtask_id", "status", "priority"]:
+                value = str(item.get(key, "") or "").strip()
+                if value:
+                    normalized_item[key] = value
+            normalized.append(normalized_item)
+        return normalized
+
     def _build_prepare_phase_guard_error(self, tool_name: str) -> Dict[str, Any]:
         prepared = self._prepare_phase_result if isinstance(self._prepare_phase_result, dict) else {}
         guidance = (
             "Prepare phase must run before planning tools. "
             "Run prepare_task first, then call plan_task using the prepared result."
         )
-        if prepared:
-            recommended_mode = str(prepared.get("recommended_mode", "") or "").strip()
-            if recommended_mode:
-                guidance += f" Current prepare recommendation: {recommended_mode}."
         return {
             "success": False,
             "error": f"Prepare phase not completed before calling {tool_name}. {guidance}",
@@ -341,30 +674,15 @@ class AgentRuntime:
     ) -> Dict[str, Any]:
         if not isinstance(prepared, dict) or not prepared:
             return {}
-        if not bool(prepared.get("should_use_todo")) or not bool(prepared.get("plan_ready")):
+        if not bool(prepared.get("should_use_todo")):
             return {}
-        recommended_mode = str(prepared.get("recommended_mode", "") or "").strip()
-        suggested: Dict[str, Any] = {}
-        tool_name = ""
-        execution: Dict[str, Any] = {}
-        if recommended_mode == "create":
-            suggested = prepared.get("recommended_plan_task_args", {})
-            if not isinstance(suggested, dict) or not suggested:
-                return {}
-            subtasks = suggested.get("subtasks")
-            if not isinstance(subtasks, list) or not subtasks:
-                return {}
-            tool_name = "plan_task"
-        elif recommended_mode == "update":
-            suggested = prepared.get("recommended_update_task_args", {})
-            if not isinstance(suggested, dict) or not suggested:
-                return {}
-            operations = suggested.get("operations")
-            if not isinstance(operations, list) or not operations:
-                return {}
-            tool_name = "update_task"
-        else:
+        suggested = prepared.get("recommended_plan_task_args", {})
+        if not isinstance(suggested, dict) or not suggested:
             return {}
+        subtasks = suggested.get("subtasks")
+        if not isinstance(subtasks, list) or not subtasks:
+            return {}
+        tool_name = "plan_task"
         emit_event(
             task_id=task_id,
             run_id=run_id,
@@ -424,6 +742,8 @@ class AgentRuntime:
         self.last_task_id = task_id
         self.last_runtime_state = "running"
         self.last_stop_reason = ""
+        self._runtime_phase = ""
+        self._set_runtime_phase("preparing", task_id=task_id, run_id=run_id)
         self._active_todo_context = {}
         self._latest_todo_recovery = {}
         self._prepare_phase_completed = False
@@ -455,7 +775,16 @@ class AgentRuntime:
         prepare_message = self._render_prepare_phase_message(prepared)
         if prepare_message:
             messages.append({"role": "system", "content": prepare_message})
-        tools = self.tool_registry.list_tool_schemas()
+        prepare_cli_summary = self._render_prepare_cli_summary(user_input=user_input, prepared=prepared)
+        if prepare_cli_summary:
+            self._trace(prepare_cli_summary)
+        previous_base_system_prompt = self._build_system_prompt()
+        self._set_runtime_phase("executing", task_id=task_id, run_id=run_id)
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            messages[0]["content"] = self._refresh_first_system_prompt_preserving_dynamic_context(
+                current_content=str(messages[0].get("content", "") or ""),
+                previous_base_prompt=previous_base_system_prompt,
+            )
         if resume_from_waiting:
             emit_event(
                 task_id=task_id,
@@ -516,6 +845,7 @@ class AgentRuntime:
                 messages=messages,
                 consecutive_tool_calls=consecutive_tool_calls,
             )
+            tools = self.tool_registry.list_tool_schemas()
             self._trace(f"[step {step}] model_request")
             try:
                 model_output = self.model_provider.generate(
@@ -650,28 +980,7 @@ class AgentRuntime:
             if max_steps_outcome.get("should_build_handoff"):
                 _build_handoff_if_needed()
 
-        if runtime_state == "awaiting_user_input":
-            # clarification pause 属于编排层的“中间暂停收尾”，这里统一交给 finalization 模块处理。
-            paused_outcome = finalize_paused_run(
-                task_id=task_id,
-                run_id=run_id,
-                runtime_state=runtime_state,
-                stop_reason=stop_reason,
-                final_answer=final_answer,
-                last_tool_failures=last_tool_failures,
-                auto_manage_todo_recovery=self._auto_manage_todo_recovery,
-                append_recovery_summary_for_user=self._append_recovery_summary_for_user,
-                has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
-                preview=self._preview,
-                emit_event=emit_event,
-            )
-            final_answer = paused_outcome["final_answer"]
-            self.last_runtime_state = runtime_state
-            self.last_stop_reason = stop_reason
-            self._trace(paused_outcome["trace_message"])
-            return final_answer
-
-        completed_outcome = finalize_completed_run(
+        finalizing_outcome = self._run_finalizing_pipeline(
             task_id=task_id,
             run_id=run_id,
             user_input=user_input,
@@ -682,15 +991,15 @@ class AgentRuntime:
             last_tool_failures=last_tool_failures,
             verification_handoff=verification_handoff,
             handoff_source=handoff_source,
-            build_verification_handoff=self._build_verification_handoff,
-            auto_manage_todo_recovery=self._auto_manage_todo_recovery,
-            append_recovery_summary_for_user=self._append_recovery_summary_for_user,
-            has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
-            eval_orchestrator=self.eval_orchestrator,
-            emit_event=emit_event,
         )
-        final_answer = completed_outcome["final_answer"]
-        task_finished_status = completed_outcome["task_finished_status"]
+        final_answer = finalizing_outcome["final_answer"]
+        if finalizing_outcome.get("mode") == "paused":
+            self.last_runtime_state = runtime_state
+            self.last_stop_reason = stop_reason
+            self._trace(str(finalizing_outcome.get("trace_message", "") or ""))
+            return final_answer
+
+        task_finished_status = str(finalizing_outcome.get("task_finished_status", task_status) or task_status)
 
         self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
         self._run_parallel_completed_finalizers(
@@ -756,6 +1065,67 @@ class AgentRuntime:
             parse_json_dict=self._parse_json_dict,
             preview=self._preview,
         )
+
+    def _run_finalizing_pipeline(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        user_input: str,
+        final_answer: str,
+        stop_reason: str,
+        runtime_state: str,
+        task_status: str,
+        last_tool_failures: List[Dict[str, str]],
+        verification_handoff: Optional[Dict[str, Any]],
+        handoff_source: str,
+    ) -> Dict[str, Any]:
+        # finalizing 是单独的第三阶段：只基于已有结果收尾，不继续扩张执行范围。
+        self._set_runtime_phase("finalizing", task_id=task_id, run_id=run_id)
+        if runtime_state == "awaiting_user_input":
+            paused_outcome = finalize_paused_run(
+                task_id=task_id,
+                run_id=run_id,
+                runtime_state=runtime_state,
+                stop_reason=stop_reason,
+                final_answer=final_answer,
+                last_tool_failures=last_tool_failures,
+                auto_manage_todo_recovery=self._auto_manage_todo_recovery,
+                append_recovery_summary_for_user=self._append_recovery_summary_for_user,
+                has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
+                preview=self._preview,
+                emit_event=emit_event,
+            )
+            return {
+                "mode": "paused",
+                "final_answer": paused_outcome["final_answer"],
+                "trace_message": paused_outcome["trace_message"],
+                "task_finished_status": task_status,
+            }
+
+        completed_outcome = finalize_completed_run(
+            task_id=task_id,
+            run_id=run_id,
+            user_input=user_input,
+            final_answer=final_answer,
+            stop_reason=stop_reason,
+            runtime_state=runtime_state,
+            task_status=task_status,
+            last_tool_failures=last_tool_failures,
+            verification_handoff=verification_handoff,
+            handoff_source=handoff_source,
+            build_verification_handoff=self._build_verification_handoff,
+            auto_manage_todo_recovery=self._auto_manage_todo_recovery,
+            append_recovery_summary_for_user=self._append_recovery_summary_for_user,
+            has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
+            eval_orchestrator=self.eval_orchestrator,
+            emit_event=emit_event,
+        )
+        return {
+            "mode": "completed",
+            "final_answer": completed_outcome["final_answer"],
+            "task_finished_status": completed_outcome["task_finished_status"],
+        }
 
     def _finalize_task_memory(
         self,
@@ -917,10 +1287,32 @@ class AgentRuntime:
 
     def _build_system_prompt(self) -> str:
         parts = [p for p in [self.system_prompt, self.skill_prompt] if p]
+        phase_prompt = PHASE_OVERLAY_PROMPTS.get(self._runtime_phase, "")
+        if phase_prompt:
+            parts.append(phase_prompt)
         retry_guidance = self._build_retry_guidance_prompt()
         if retry_guidance:
             parts.append(retry_guidance)
         return "\n\n".join(parts)
+
+    def _refresh_first_system_prompt_preserving_dynamic_context(
+        self,
+        current_content: str,
+        previous_base_prompt: str,
+    ) -> str:
+        current_text = str(current_content or "")
+        previous_base = str(previous_base_prompt or "")
+        new_base = self._build_system_prompt()
+        if not current_text:
+            return new_base
+        if current_text == previous_base:
+            return new_base
+        if previous_base and current_text.startswith(previous_base):
+            suffix = current_text[len(previous_base) :].lstrip("\n")
+            if suffix:
+                return f"{new_base}\n\n{suffix}".strip()
+            return new_base
+        return current_text
 
     def _build_retry_guidance_prompt(self) -> str:
         ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
@@ -961,7 +1353,7 @@ class AgentRuntime:
             tool_args = parse_json_dict(raw_args) if isinstance(raw_args, str) else (raw_args or {})
             if not isinstance(tool_args, dict):
                 tool_args = {}
-            if tool_name in {"plan_task", "create_task", "update_task"} and not self._prepare_phase_completed:
+            if tool_name == "plan_task" and not self._prepare_phase_completed:
                 prepare_guard_error = self._build_prepare_phase_guard_error(tool_name)
                 emit_event(
                     task_id=task_id,
@@ -1000,71 +1392,6 @@ class AgentRuntime:
                 if active_todo_id and binding_state == "bound" and not str(tool_args.get("active_todo_id", "") or "").strip():
                     tool_args = dict(tool_args)
                     tool_args["active_todo_id"] = active_todo_id
-            current_todo_id = str(self._active_todo_context.get("todo_id", "") or "").strip()
-            binding_state = str(self._active_todo_context.get("binding_state", "") or "unbound").strip()
-            if tool_name == "create_task":
-                create_task_arg_error = build_create_task_arg_error(tool_args, self._active_todo_context)
-                if create_task_arg_error:
-                    emit_event(
-                        task_id=task_id,
-                        run_id=run_id,
-                        actor="main",
-                        role="general",
-                        event_type="tool_failed",
-                        status="error",
-                        payload={"tool": tool_name, "error": str(create_task_arg_error.get("error", ""))},
-                    )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": str(call.get("id", "")),
-                            "content": '{"success": false, "error": "Invalid create_task arguments"}',
-                        }
-                    )
-                    failures.append({"tool": tool_name, "error": str(create_task_arg_error.get("error", ""))})
-                    executions.append(
-                        {
-                            "tool": tool_name,
-                            "args": tool_args,
-                            "success": False,
-                            "error": str(create_task_arg_error.get("error", "")),
-                            "payload": (
-                                create_task_arg_error.get("result", {})
-                                if isinstance(create_task_arg_error.get("result"), dict)
-                                else {}
-                            ),
-                        }
-                    )
-                    continue
-            if tool_name == "create_task" and current_todo_id and binding_state == "bound" and not bool(tool_args.get("force_new_cycle")):
-                outcome = build_duplicate_todo_binding_error(self._active_todo_context)
-                emit_event(
-                    task_id=task_id,
-                    run_id=run_id,
-                    actor="main",
-                    role="general",
-                    event_type="tool_failed",
-                    status="error",
-                    payload={"tool": tool_name, "error": str(outcome.get("error", ""))},
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": str(call.get("id", "")),
-                        "content": '{"success": false, "error": "Active todo already bound for this task"}',
-                    }
-                )
-                failures.append({"tool": tool_name, "error": str(outcome.get("error", ""))})
-                executions.append(
-                    {
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "success": False,
-                        "error": str(outcome.get("error", "")),
-                        "payload": outcome.get("result", {}) if isinstance(outcome.get("result"), dict) else {},
-                    }
-                )
-                continue
             # todo guard 只做提醒，不阻断执行；这样既能保留观测信号，也不改变现有工具调用语义。
             maybe_emit_todo_binding_warning(
                 tool_name=tool_name,

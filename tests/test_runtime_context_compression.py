@@ -661,7 +661,7 @@ class RuntimeContextCompressionTests(unittest.TestCase):
                     {
                         "id": "call_1",
                         "type": "function",
-                        "function": {"name": "create_task", "arguments": "{\"task_name\":\"x\"}"},
+                        "function": {"name": "plan_task", "arguments": "{\"task_name\":\"x\"}"},
                     }
                 ],
             )

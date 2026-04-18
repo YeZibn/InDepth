@@ -50,6 +50,8 @@ class EventRecord:
 
 
 EVENT_TYPES = [
+    "phase_started",
+    "phase_completed",
     "task_started",
     "task_finished",
     "task_judged",

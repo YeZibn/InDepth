@@ -32,11 +32,11 @@ class ToolRegistry:
         if not ok:
             error = "Tool args validation failed"
             details = errors
-            if name == "create_task":
+            if name == "plan_task":
                 error = (
-                    "Tool args validation failed: create_task requires task_name, context, split_reason, "
-                    "and a non-empty subtasks array because it creates a tracked todo. "
-                    "Use plan_task first to validate the task envelope, and use update_task instead when an active todo already exists."
+                    "Tool args validation failed: plan_task requires task_name, context, split_reason, "
+                    "and a non-empty subtasks array because it is the single entry for todo creation/update. "
+                    "Run prepare_task first when you need a bootstrap plan, and pass active_todo_id when continuing an existing todo."
                 )
             return {"success": False, "error": error, "details": details}
         try:

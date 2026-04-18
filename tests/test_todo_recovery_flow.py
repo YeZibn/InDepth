@@ -6,16 +6,35 @@ from unittest.mock import patch
 from app.tool.todo_tool.todo_tool import (
     _parse_task_file,
     append_followup_subtasks,
-    create_task,
     plan_task,
-    prepare_task,
     plan_task_recovery,
+    prepare_task,
     record_task_fallback,
     reopen_subtask,
-    update_task,
     update_subtask,
     update_task_status,
 )
+
+
+def _create_todo(**kwargs):
+    result = plan_task.entrypoint(**kwargs)
+    assert result["success"], result
+    execution = result["execution_result"]
+    return {
+        "result": result,
+        "todo_id": execution["todo_id"],
+        "filepath": execution["filepath"],
+    }
+
+
+def _append_subtasks(todo_id: str, split_reason: str, subtasks):
+    return plan_task.entrypoint(
+        task_name="Follow-up Task",
+        context="Append structured work to the active todo",
+        split_reason=split_reason,
+        subtasks=subtasks,
+        active_todo_id=todo_id,
+    )
 
 
 class TodoRecoveryFlowTests(unittest.TestCase):
@@ -28,20 +47,19 @@ class TodoRecoveryFlowTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertTrue(result["should_use_todo"])
-        self.assertTrue(result["plan_ready"])
-        self.assertEqual(result["recommended_mode"], "create")
         self.assertEqual(len(result["subtasks"]), 1)
         self.assertIn("澄清上下文", result["subtasks"][0]["name"])
         self.assertIn("recommended_plan_task_args", result)
+        self.assertEqual(result["recommended_plan_task_args"]["active_todo_id"], "")
 
-    def test_prepare_task_prefers_update_when_active_todo_exists(self):
+    def test_prepare_task_prefers_plan_task_with_active_todo(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
                 patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
             ):
-                create_task.entrypoint(
+                _create_todo(
                     task_name="Base Task",
                     context="Create the original tracked todo",
                     split_reason="Need a shared todo first.",
@@ -58,13 +76,11 @@ class TodoRecoveryFlowTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertTrue(result["should_use_todo"])
-        self.assertTrue(result["plan_ready"])
-        self.assertEqual(result["recommended_mode"], "update")
         self.assertEqual(result["active_todo_id"], "todo_123")
         self.assertIn("todo_123", result["active_todo_summary"])
-        self.assertIn("recommended_update_task_args", result)
-        self.assertEqual(result["recommended_update_task_args"]["todo_id"], "todo_123")
-        self.assertTrue(result["recommended_update_task_args"]["operations"])
+        self.assertIn("recommended_plan_task_args", result)
+        self.assertEqual(result["recommended_plan_task_args"]["active_todo_id"], "todo_123")
+        self.assertTrue(result["recommended_plan_task_args"]["subtasks"])
 
     def test_plan_task_normalizes_create_style_envelope(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -86,11 +102,11 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     ],
                 )
 
-            self.assertTrue(result["success"])
-            self.assertEqual(result["mode"], "create")
-            self.assertEqual(result["subtask_count"], 1)
-            self.assertEqual(result["task_plan"]["subtasks"][0]["name"], "Draft introduction")
-            self.assertEqual(result["execution_result"]["todo_id"], "20260416_plan_create_demo")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["mode"], "create")
+        self.assertEqual(result["subtask_count"], 1)
+        self.assertEqual(result["task_plan"]["subtasks"][0]["name"], "Draft introduction")
+        self.assertEqual(result["execution_result"]["todo_id"], "20260416_plan_create_demo")
 
     def test_plan_task_switches_to_update_mode_when_active_todo_exists(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -99,7 +115,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
             ):
-                create_task.entrypoint(
+                _create_todo(
                     task_name="Base Task",
                     context="Create the original tracked todo",
                     split_reason="Need a shared todo first.",
@@ -119,11 +135,11 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     active_todo_id="todo_123",
                 )
 
-            self.assertTrue(result["success"])
-            self.assertEqual(result["mode"], "update")
-            self.assertEqual(result["active_todo_id"], "todo_123")
-            self.assertEqual(result["execution_result"]["todo_id"], "todo_123")
-            self.assertEqual(result["execution_result"]["results"][0]["type"], "append_subtasks")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["mode"], "update")
+        self.assertEqual(result["active_todo_id"], "todo_123")
+        self.assertEqual(result["execution_result"]["todo_id"], "todo_123")
+        self.assertEqual(result["execution_result"]["results"][0]["type"], "append_subtasks")
 
     def test_update_task_status_accepts_richer_unfinished_states(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -132,7 +148,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000001_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Exercise richer todo states",
                     split_reason="Need multiple states for unfinished work.",
@@ -144,9 +160,10 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     status="failed",
                 )
 
-            self.assertTrue(result["success"])
-            parsed = _parse_task_file(Path(created["filepath"]))
-            self.assertEqual(parsed["subtasks"][0]["status"], "failed")
+                parsed = _parse_task_file(Path(created["filepath"]))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(parsed["subtasks"][0]["status"], "failed")
 
     def test_record_task_fallback_persists_structured_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -155,7 +172,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000002_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Record fallback metadata",
                     split_reason="Need explicit recovery metadata.",
@@ -180,16 +197,17 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     retry_guidance=["retry with smaller batch"],
                 )
 
-            self.assertTrue(result["success"])
-            parsed = _parse_task_file(Path(created["filepath"]))
-            self.assertEqual(parsed["subtasks"][0]["status"], "pending")
-            fallback = parsed["subtasks"][0]["fallback_record"]
-            self.assertEqual(fallback["reason_code"], "tool_error")
-            self.assertEqual(fallback["retry_count"], 1)
-            self.assertEqual(fallback["required_input"], ["stderr log"])
-            self.assertEqual(fallback["failure_facts"]["stop_reason"], "tool_failed_before_stop")
-            self.assertEqual(fallback["failure_interpretation"]["reason_code"], "execution_environment_error")
-            self.assertEqual(fallback["retry_guidance"], ["retry with smaller batch"])
+                parsed = _parse_task_file(Path(created["filepath"]))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(parsed["subtasks"][0]["status"], "pending")
+        fallback = parsed["subtasks"][0]["fallback_record"]
+        self.assertEqual(fallback["reason_code"], "tool_error")
+        self.assertEqual(fallback["retry_count"], 1)
+        self.assertEqual(fallback["required_input"], ["stderr log"])
+        self.assertEqual(fallback["failure_facts"]["stop_reason"], "tool_failed_before_stop")
+        self.assertEqual(fallback["failure_interpretation"]["reason_code"], "execution_environment_error")
+        self.assertEqual(fallback["retry_guidance"], ["retry with smaller batch"])
 
     def test_plan_task_recovery_returns_structured_followups(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -198,7 +216,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000003_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Plan recovery for a failed task",
                     split_reason="Need a recovery plan.",
@@ -226,13 +244,13 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     is_on_critical_path=True,
                 )
 
-            self.assertTrue(decision["success"])
-            payload = decision["recovery_decision"]
-            self.assertTrue(payload["can_resume_in_place"])
-            self.assertFalse(payload["needs_derived_recovery_subtask"])
-            self.assertEqual(payload["primary_action"], "repair")
-            self.assertEqual(payload["decision_level"], "auto")
-            self.assertEqual(payload["next_subtasks"], [])
+        self.assertTrue(decision["success"])
+        payload = decision["recovery_decision"]
+        self.assertTrue(payload["can_resume_in_place"])
+        self.assertFalse(payload["needs_derived_recovery_subtask"])
+        self.assertEqual(payload["primary_action"], "repair")
+        self.assertEqual(payload["decision_level"], "auto")
+        self.assertEqual(payload["next_subtasks"], [])
 
     def test_plan_task_recovery_prefers_llm_suggested_next_action_for_generic_failures(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -241,7 +259,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000003a_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Plan recovery from LLM guidance",
                     split_reason="Need LLM-suggested action to drive recovery.",
@@ -271,12 +289,12 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     is_on_critical_path=False,
                 )
 
-            self.assertTrue(decision["success"])
-            payload = decision["recovery_decision"]
-            self.assertEqual(payload["primary_action"], "split")
-            self.assertFalse(payload["can_resume_in_place"])
-            self.assertTrue(payload["needs_derived_recovery_subtask"])
-            self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
+        self.assertTrue(decision["success"])
+        payload = decision["recovery_decision"]
+        self.assertEqual(payload["primary_action"], "split")
+        self.assertFalse(payload["can_resume_in_place"])
+        self.assertTrue(payload["needs_derived_recovery_subtask"])
+        self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
 
     def test_append_followup_subtasks_adds_new_recovery_steps(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -285,7 +303,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000004_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Append recovery steps",
                     split_reason="Need follow-up tasks after failure.",
@@ -315,12 +333,13 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     ],
                 )
 
-            self.assertTrue(appended["success"])
-            parsed = _parse_task_file(Path(created["filepath"]))
-            self.assertEqual(len(parsed["subtasks"]), 3)
-            self.assertEqual(parsed["subtasks"][1]["kind"], "diagnose")
-            self.assertEqual(parsed["subtasks"][2]["dependencies"], ["2"])
-            self.assertTrue(parsed["subtasks"][0]["subtask_id"].startswith("st_"))
+                parsed = _parse_task_file(Path(created["filepath"]))
+
+        self.assertTrue(appended["success"])
+        self.assertEqual(len(parsed["subtasks"]), 3)
+        self.assertEqual(parsed["subtasks"][1]["kind"], "diagnose")
+        self.assertEqual(parsed["subtasks"][2]["dependencies"], ["2"])
+        self.assertTrue(parsed["subtasks"][0]["subtask_id"].startswith("st_"))
 
     def test_plan_task_recovery_marks_budget_exhausted_as_derived_recovery(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -329,7 +348,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000005_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Plan recovery for budget exhaustion",
                     split_reason="Need explicit derived recovery.",
@@ -359,13 +378,13 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     is_on_critical_path=False,
                 )
 
-            self.assertTrue(decision["success"])
-            payload = decision["recovery_decision"]
-            self.assertFalse(payload["can_resume_in_place"])
-            self.assertTrue(payload["needs_derived_recovery_subtask"])
-            self.assertEqual(payload["primary_action"], "split")
-            self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
-            self.assertEqual(payload["next_subtasks"][0]["kind"], "diagnose")
+        self.assertTrue(decision["success"])
+        payload = decision["recovery_decision"]
+        self.assertFalse(payload["can_resume_in_place"])
+        self.assertTrue(payload["needs_derived_recovery_subtask"])
+        self.assertEqual(payload["primary_action"], "split")
+        self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
+        self.assertEqual(payload["next_subtasks"][0]["kind"], "diagnose")
 
     def test_plan_task_recovery_treats_oversized_generation_request_as_split(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -374,7 +393,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000006_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Long-form Writing",
                     context="Plan recovery for oversized generation",
                     split_reason="Need explicit split recovery for large generation tasks.",
@@ -404,72 +423,57 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     is_on_critical_path=False,
                 )
 
-            self.assertTrue(decision["success"])
-            payload = decision["recovery_decision"]
-            self.assertFalse(payload["can_resume_in_place"])
-            self.assertTrue(payload["needs_derived_recovery_subtask"])
-            self.assertEqual(payload["primary_action"], "split")
-            self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
-            self.assertEqual(payload["next_subtasks"][0]["kind"], "diagnose")
+        self.assertTrue(decision["success"])
+        payload = decision["recovery_decision"]
+        self.assertFalse(payload["can_resume_in_place"])
+        self.assertTrue(payload["needs_derived_recovery_subtask"])
+        self.assertEqual(payload["primary_action"], "split")
+        self.assertGreaterEqual(len(payload["next_subtasks"]), 1)
+        self.assertEqual(payload["next_subtasks"][0]["kind"], "diagnose")
 
-    def test_update_task_appends_create_style_subtasks(self):
+    def test_plan_task_appends_create_style_subtasks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
                 patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000005a_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Update todo with new structured work",
                     split_reason="Need a shared tracked todo.",
                     subtasks=[{"name": "Main step", "description": "Do the main thing"}],
                 )
-                result = update_task.entrypoint(
+                result = _append_subtasks(
                     todo_id=created["todo_id"],
-                    update_reason="Add the next planned writing steps",
-                    operations=[
+                    split_reason="Add the next planned writing steps",
+                    subtasks=[
                         {
-                            "type": "append_subtasks",
-                            "subtasks": [
-                                {
-                                    "title": "Draft introduction",
-                                    "description": "Write the introduction section",
-                                    "dependencies": [1],
-                                    "acceptance_criteria": ["Introduction saved"],
-                                }
-                            ],
+                            "title": "Draft introduction",
+                            "description": "Write the introduction section",
+                            "dependencies": [1],
+                            "acceptance_criteria": ["Introduction saved"],
                         }
                     ],
                 )
 
-            self.assertTrue(result["success"])
-            parsed = _parse_task_file(Path(created["filepath"]))
-            self.assertEqual(len(parsed["subtasks"]), 2)
-            self.assertEqual(parsed["subtasks"][1]["name"], "Draft introduction")
-            self.assertEqual(parsed["subtasks"][1]["dependencies"], ["1"])
+                parsed = _parse_task_file(Path(created["filepath"]))
 
-    def test_update_task_rejects_incomplete_operations(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with (
-                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
-                patch("app.tool.todo_tool.todo_tool._emit_obs"),
-                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000005b_demo"),
-            ):
-                created = create_task.entrypoint(
-                    task_name="Demo Task",
-                    context="Update todo safely",
-                    split_reason="Need strict update validation.",
-                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
-                )
-                result = update_task.entrypoint(
-                    todo_id=created["todo_id"],
-                    update_reason="Try an invalid update",
-                    operations=[{"subtask_number": 1}],
-                )
+        self.assertTrue(result["success"])
+        self.assertEqual(len(parsed["subtasks"]), 2)
+        self.assertEqual(parsed["subtasks"][1]["name"], "Draft introduction")
+        self.assertEqual(parsed["subtasks"][1]["dependencies"], ["1"])
 
-            self.assertFalse(result["success"])
-            self.assertIn("missing required field: type", result["error"])
+    def test_plan_task_rejects_incomplete_subtasks(self):
+        result = plan_task.entrypoint(
+            task_name="Demo Task",
+            context="Update todo safely",
+            split_reason="Need strict update validation.",
+            subtasks=[],
+        )
+
+        self.assertFalse(result["success"])
+        self.assertIn("subtasks", result["error"])
 
     def test_update_subtask_patches_by_subtask_id(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -478,7 +482,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000006_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Patch a subtask",
                     split_reason="Need structured update support.",
@@ -497,12 +501,13 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     update_reason="Refine execution details",
                 )
 
-            self.assertTrue(result["success"])
-            reparsed = _parse_task_file(Path(created["filepath"]))
-            self.assertEqual(reparsed["subtasks"][0]["subtask_id"], subtask_id)
-            self.assertEqual(reparsed["subtasks"][0]["description"], "Do the patched thing")
-            self.assertEqual(reparsed["subtasks"][0]["owner"], "main")
-            self.assertEqual(reparsed["subtasks"][0]["acceptance_criteria"], ["Patched output saved"])
+                reparsed = _parse_task_file(Path(created["filepath"]))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(reparsed["subtasks"][0]["subtask_id"], subtask_id)
+        self.assertEqual(reparsed["subtasks"][0]["description"], "Do the patched thing")
+        self.assertEqual(reparsed["subtasks"][0]["owner"], "main")
+        self.assertEqual(reparsed["subtasks"][0]["acceptance_criteria"], ["Patched output saved"])
 
     def test_reopen_subtask_marks_it_in_progress_again(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -511,7 +516,7 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                 patch("app.tool.todo_tool.todo_tool._emit_obs"),
                 patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000007_demo"),
             ):
-                created = create_task.entrypoint(
+                created = _create_todo(
                     task_name="Demo Task",
                     context="Reopen failed subtask",
                     split_reason="Need explicit reopen semantics.",
@@ -529,10 +534,10 @@ class TodoRecoveryFlowTests(unittest.TestCase):
                     subtask_id=subtask_id,
                     reason="Retry after targeted fix",
                 )
+                reparsed = _parse_task_file(Path(created["filepath"]))
 
-            self.assertTrue(result["success"])
-            reparsed = _parse_task_file(Path(created["filepath"]))
-            self.assertEqual(reparsed["subtasks"][0]["status"], "in-progress")
+        self.assertTrue(result["success"])
+        self.assertEqual(reparsed["subtasks"][0]["status"], "in-progress")
 
 
 if __name__ == "__main__":
