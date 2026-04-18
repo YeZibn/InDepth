@@ -637,6 +637,7 @@ class AgentRuntime:
                     final_answer=final_answer,
                     final_answer_written=final_answer_written,
                     memory_store=self.memory_store,
+                    enable_finalize_compaction=self.compression_config.enable_finalize_compaction,
                 ),
             ),
         ]
@@ -939,7 +940,7 @@ class AgentRuntime:
     def _estimate_context_usage(self, estimated_tokens: int) -> float:
         return estimate_context_usage(
             estimated_tokens=estimated_tokens,
-            context_window_tokens=self.compression_config.context_window_tokens,
+            context_window_tokens=self.compression_config.compression_trigger_window_tokens,
         )
 
     def _judge_clarification_request(

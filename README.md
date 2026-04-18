@@ -142,7 +142,10 @@ InDepth 的设计遵循以下原则：
 | `ENABLE_MID_RUN_COMPACTION` | `True` | 是否启用运行中压缩 |
 | `COMPACTION_MIDRUN_TOKEN_RATIO` | `0.82` | mid-run 压缩 token 阈值 |
 | `COMPACTION_TOOL_BURST_THRESHOLD` | `5` | 单次 `tool_calls` 条目触发阈值 |
-| `COMPACTION_CONTEXT_WINDOW_TOKENS` | `16000` | 上下文窗口 token 预算 |
+| `MODEL_CONTEXT_WINDOW_TOKENS` | `160000` | 模型理论上下文窗口 |
+| `COMPACTION_TRIGGER_WINDOW_TOKENS` | `120000` | Runtime 压缩触发预算窗口 |
+| `ENABLE_FINALIZE_COMPACTION` | `False` | 是否在任务结束后执行 destructive finalize 压缩 |
+| `COMPACTION_CONTEXT_WINDOW_TOKENS` | `-` | 兼容保留旧字段；未配置新字段时作为双窗口回退值 |
 | `COMPACTION_CONSISTENCY_GUARD` | `True` | 一致性守护开关 |
 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN` | `0.40` | midrun 压缩后目标保留比例 |
 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `0.40` | finalize 压缩后目标保留比例 |
@@ -157,6 +160,7 @@ InDepth 的设计遵循以下原则：
 - `rule`：始终使用现有规则压缩器
 - `llm`：优先使用 LLM 压缩；若模型报错、输出非 JSON 或一致性校验失败，则自动回退到规则压缩
 - `midrun/finalize` 路径使用 `COMPACTION_COMPRESSOR_*` 控制结构化摘要压缩
+- `MODEL_CONTEXT_WINDOW_TOKENS` 表示模型能力上限；`COMPACTION_TRIGGER_WINDOW_TOKENS` 表示 Runtime 何时开始认为“接近压缩风险”
 - `event` 路径使用独立的 `COMPACTION_EVENT_SUMMARIZER_*` 控制工具链替代摘要；真实运行时默认优先使用 mini 模型，失败回退规则摘要
 
 ### 4.4 关键目录

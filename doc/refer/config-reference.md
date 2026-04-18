@@ -113,10 +113,13 @@ class RuntimeModelConfig:
 | `ENABLE_MID_RUN_COMPACTION` | `enabled_mid_run` | `True` | 是否启用运行时压缩 |
 | `COMPACTION_ROUND_INTERVAL` | `round_interval` | `4` | 兼容保留配置（当前 mid-run 不使用 round 触发） |
 | `COMPACTION_MIDRUN_TOKEN_RATIO` | `midrun_token_ratio` | `0.82` | mid-run 压缩阈值（0~1，兼容旧 `COMPACTION_STRONG_TOKEN_RATIO`） |
-| `COMPACTION_CONTEXT_WINDOW_TOKENS` | `context_window_tokens` | `16000` | 上下文窗口大小（最小 1024） |
+| `MODEL_CONTEXT_WINDOW_TOKENS` | `model_context_window_tokens` | `160000` | 模型理论上下文窗口（最小 1024） |
+| `COMPACTION_TRIGGER_WINDOW_TOKENS` | `compression_trigger_window_tokens` | `120000` | Runtime 压缩触发预算窗口（最小 1024） |
+| `COMPACTION_CONTEXT_WINDOW_TOKENS` | legacy fallback | `-` | 兼容保留旧字段；未设置新字段时回退到该值 |
 | `COMPACTION_KEEP_RECENT_TURNS` | `keep_recent_turns` | `8` | 预算不可用时的轮次兜底（最小 1） |
 | `COMPACTION_TOOL_BURST_THRESHOLD` | `tool_burst_threshold` | `5` | 单次 `tool_calls` 条目阈值（最小 1） |
 | `COMPACTION_CONSISTENCY_GUARD` | `consistency_guard` | `True` | 是否启用一致性守护 |
+| `ENABLE_FINALIZE_COMPACTION` | `enable_finalize_compaction` | `False` | 是否启用结束阶段 destructive finalize 压缩 |
 | `COMPACTION_TARGET_KEEP_RATIO_MIDRUN` | `target_keep_ratio_midrun` | `0.40` | midrun 压缩保留比例（0~1，兼容旧 `COMPACTION_TARGET_KEEP_RATIO_STRONG`） |
 | `COMPACTION_TARGET_KEEP_RATIO_FINALIZE` | `target_keep_ratio_finalize` | `0.40` | finalize 压缩保留比例（0~1） |
 | `COMPACTION_MIN_KEEP_TURNS` | `min_keep_turns` | `3` | 最小保留轮次数（最小 1） |
@@ -133,10 +136,12 @@ class RuntimeCompressionConfig:
     enabled_mid_run: bool = True
     round_interval: int = 4
     midrun_token_ratio: float = 0.82
-    context_window_tokens: int = 16000
+    model_context_window_tokens: int = 160000
+    compression_trigger_window_tokens: int = 120000
     keep_recent_turns: int = 8
     tool_burst_threshold: int = 5
     consistency_guard: bool = True
+    enable_finalize_compaction: bool = False
     target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
     min_keep_turns: int = 3
@@ -148,6 +153,8 @@ class RuntimeCompressionConfig:
 
 补充说明：
 - `COMPACTION_MIN_KEEP_TURNS` 表示压缩后至少保留最近多少轮原文上下文
+- `model_context_window_tokens` 用于表达模型能力边界
+- `compression_trigger_window_tokens` 用于计算 Runtime 压缩触发的上下文占用率
 
 ### 4.2.1 压缩器选择规则
 

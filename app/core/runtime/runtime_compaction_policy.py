@@ -51,6 +51,8 @@ def maybe_compact_mid_run(
             "step": step - 1,
             "estimated_tokens": estimated_tokens,
             "context_usage_ratio": round(usage, 4),
+            "compression_trigger_window_tokens": compression_config.compression_trigger_window_tokens,
+            "model_context_window_tokens": compression_config.model_context_window_tokens,
         },
     )
     try:
@@ -89,7 +91,13 @@ def maybe_compact_mid_run(
         actor="main",
         role="general",
         event_type="context_compression_succeeded",
-        payload={"trigger": trigger, "mode": mode, "result": result},
+        payload={
+            "trigger": trigger,
+            "mode": mode,
+            "result": result,
+            "compression_trigger_window_tokens": compression_config.compression_trigger_window_tokens,
+            "model_context_window_tokens": compression_config.model_context_window_tokens,
+        },
     )
 
     if not result.get("applied"):
@@ -103,11 +111,14 @@ def finalize_memory_compaction(
     final_answer: str,
     final_answer_written: bool,
     memory_store: MemoryStore | None,
+    enable_finalize_compaction: bool = True,
 ) -> None:
     if not memory_store:
         return
     if not final_answer_written:
         memory_store.append_message(task_id, "assistant", final_answer)
+    if not enable_finalize_compaction:
+        return
     compact_final = getattr(memory_store, "compact_final", None)
     if callable(compact_final):
         compact_final(task_id)

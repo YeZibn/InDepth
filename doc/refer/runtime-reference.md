@@ -613,10 +613,12 @@ class RuntimeCompressionConfig:
     enabled_mid_run: bool = True
     round_interval: int = 4              # 兼容保留（当前 mid-run 不再使用 round 触发）
     midrun_token_ratio: float = 0.82      # 运行中压缩阈值
-    context_window_tokens: int = 16000    # 上下文窗口大小
+    model_context_window_tokens: int = 160000         # 模型理论上下文窗口
+    compression_trigger_window_tokens: int = 120000   # Runtime 压缩触发预算窗口
     keep_recent_turns: int = 8            # 仅在预算不可用时的兜底策略
     tool_burst_threshold: int = 5         # 单次 tool_calls 条目阈值
     consistency_guard: bool = True        # 一致性守护
+    enable_finalize_compaction: bool = False
     target_keep_ratio_midrun: float = 0.40
     target_keep_ratio_finalize: float = 0.40
     min_keep_turns: int = 3
@@ -630,6 +632,8 @@ class RuntimeCompressionConfig:
 - `auto`：真实模型走 LLM 压缩，`MockModelProvider` 自动使用规则压缩
 - `rule`：全程规则压缩
 - `llm`：优先走 LLM 压缩，失败时自动回退规则压缩
+- `compression_trigger_window_tokens` 用于计算 `context_usage_ratio`
+- `enable_finalize_compaction=False` 时，任务结束后不会自动执行 destructive `compact_final()`
 - `midrun/finalize` 路径由 `compressor_kind` 控制结构化摘要压缩
 - `event` 路径由独立的 `event_summarizer_kind` 控制工具链替代摘要；真实 provider 默认优先使用 mini 模型，失败时回退规则摘要
 

@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from app.config.runtime_config import RuntimeCompressionConfig
 from app.core.bootstrap import create_runtime
 
 
@@ -50,6 +51,39 @@ class BootstrapTests(unittest.TestCase):
         mock_builder.assert_called_once_with(["app/skills/skill-creator"], validate=False)
         mock_register.assert_called_once()
         self.assertEqual(runtime.kwargs["skill_prompt"], "SKILL-SYSTEM-PROMPT")
+
+    def test_create_runtime_wires_trigger_window_into_memory_store(self):
+        compression_config = RuntimeCompressionConfig(
+            enabled_mid_run=True,
+            round_interval=4,
+            midrun_token_ratio=0.82,
+            model_context_window_tokens=160000,
+            compression_trigger_window_tokens=120000,
+            keep_recent_turns=8,
+            tool_burst_threshold=5,
+            consistency_guard=True,
+            enable_finalize_compaction=False,
+            target_keep_ratio_midrun=0.40,
+            target_keep_ratio_finalize=0.40,
+            min_keep_turns=3,
+            compressor_kind="auto",
+            compressor_llm_max_tokens=1200,
+            event_summarizer_kind="auto",
+            event_summarizer_max_tokens=280,
+        )
+        with (
+            patch("app.core.bootstrap.AgentRuntime", _FakeRuntime),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.load_runtime_compression_config", return_value=compression_config),
+            patch(
+                "app.core.bootstrap.build_skills_manager",
+                return_value=_FakeSkillsManager("", has_skills=False),
+            ),
+        ):
+            runtime = create_runtime(system_prompt="hello", enable_llm_judge=False)
+
+        self.assertEqual(runtime.kwargs["compression_config"].model_context_window_tokens, 160000)
+        self.assertEqual(runtime.kwargs["memory_store"].context_window_tokens, 120000)
 
 
 if __name__ == "__main__":

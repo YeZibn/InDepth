@@ -1,17 +1,19 @@
 import json
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
-from app.config.runtime_config import RuntimeCompressionConfig
+from app.config.runtime_config import RuntimeCompressionConfig, load_runtime_compression_config
 from app.core.memory.compressor_factory import build_context_compressor
 from app.core.memory.context_compressor import ContextCompressor
 from app.core.memory.llm_context_compressor import LLMContextCompressor
 from app.core.memory.sqlite_memory_store import SQLiteMemoryStore
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
+from app.core.runtime.runtime_compaction_policy import finalize_memory_compaction
 from app.core.tools.registry import ToolRegistry, ToolSpec
 
 
@@ -19,6 +21,7 @@ class _InMemoryStore:
     def __init__(self):
         self.rows: List[Dict[str, Any]] = []
         self.compact_mid_run_calls = 0
+        self.compact_final_calls = 0
 
     def append_message(
         self,
@@ -69,10 +72,77 @@ class _InMemoryStore:
         return {"success": True, "applied": False, "trigger": trigger, "mode": mode}
 
     def compact_final(self, conversation_id: str) -> Dict[str, Any]:
+        self.compact_final_calls += 1
         return {"success": True, "applied": False}
 
 
 class RuntimeContextCompressionTests(unittest.TestCase):
+    def test_runtime_compression_config_loads_dual_window_defaults(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_runtime_compression_config()
+        self.assertEqual(config.model_context_window_tokens, 160000)
+        self.assertEqual(config.compression_trigger_window_tokens, 120000)
+        self.assertEqual(config.context_window_tokens, 120000)
+        self.assertFalse(config.enable_finalize_compaction)
+
+    def test_runtime_compression_config_falls_back_to_legacy_context_window(self):
+        with patch.dict(os.environ, {"COMPACTION_CONTEXT_WINDOW_TOKENS": "64000"}, clear=True):
+            config = load_runtime_compression_config()
+        self.assertEqual(config.model_context_window_tokens, 64000)
+        self.assertEqual(config.compression_trigger_window_tokens, 64000)
+        self.assertEqual(config.context_window_tokens, 64000)
+
+    def test_finalize_memory_compaction_skips_compact_final_when_disabled(self):
+        store = _InMemoryStore()
+        finalize_memory_compaction(
+            task_id="task_finalize_off",
+            final_answer="done",
+            final_answer_written=False,
+            memory_store=store,
+            enable_finalize_compaction=False,
+        )
+        self.assertEqual(store.compact_final_calls, 0)
+        self.assertEqual(len(store.rows), 1)
+        self.assertEqual(store.rows[0]["content"], "done")
+
+    def test_finalize_memory_compaction_calls_compact_final_when_enabled(self):
+        store = _InMemoryStore()
+        finalize_memory_compaction(
+            task_id="task_finalize_on",
+            final_answer="done",
+            final_answer_written=False,
+            memory_store=store,
+            enable_finalize_compaction=True,
+        )
+        self.assertEqual(store.compact_final_calls, 1)
+
+    def test_agent_runtime_estimate_context_usage_uses_trigger_window(self):
+        provider = MockModelProvider(scripted_outputs=[])
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=ToolRegistry(),
+            compression_config=RuntimeCompressionConfig(
+                enabled_mid_run=True,
+                round_interval=4,
+                midrun_token_ratio=0.82,
+                model_context_window_tokens=160000,
+                compression_trigger_window_tokens=1000,
+                keep_recent_turns=8,
+                tool_burst_threshold=5,
+                consistency_guard=True,
+                enable_finalize_compaction=False,
+                target_keep_ratio_midrun=0.40,
+                target_keep_ratio_finalize=0.40,
+                min_keep_turns=3,
+                compressor_kind="auto",
+                compressor_llm_max_tokens=800,
+                event_summarizer_kind="auto",
+                event_summarizer_max_tokens=280,
+            ),
+            enable_llm_judge=False,
+        )
+        self.assertAlmostEqual(runtime._estimate_context_usage(500), 500 / 1024)
+
     def test_compressor_factory_auto_falls_back_to_rule_for_mock_provider(self):
         provider = MockModelProvider(scripted_outputs=[])
         compressor = build_context_compressor(kind="auto", model_provider=provider, llm_max_tokens=800)
@@ -759,10 +829,12 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             enabled_mid_run=True,
             round_interval=4,
             midrun_token_ratio=0.99,
-            context_window_tokens=16000,
+            model_context_window_tokens=16000,
+            compression_trigger_window_tokens=100,
             keep_recent_turns=8,
             tool_burst_threshold=1,
             consistency_guard=True,
+            enable_finalize_compaction=False,
             target_keep_ratio_midrun=0.35,
             target_keep_ratio_finalize=0.50,
             min_keep_turns=3,

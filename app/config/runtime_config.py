@@ -16,10 +16,12 @@ class RuntimeCompressionConfig:
     enabled_mid_run: bool
     round_interval: int
     midrun_token_ratio: float
-    context_window_tokens: int
+    model_context_window_tokens: int
+    compression_trigger_window_tokens: int
     keep_recent_turns: int
     tool_burst_threshold: int
     consistency_guard: bool
+    enable_finalize_compaction: bool
     target_keep_ratio_midrun: float
     target_keep_ratio_finalize: float
     min_keep_turns: int
@@ -27,6 +29,11 @@ class RuntimeCompressionConfig:
     compressor_llm_max_tokens: int
     event_summarizer_kind: str
     event_summarizer_max_tokens: int
+
+    @property
+    def context_window_tokens(self) -> int:
+        # Legacy alias retained for gradual migration; maps to trigger budget semantics.
+        return self.compression_trigger_window_tokens
 
 
 @dataclass(frozen=True)
@@ -130,14 +137,27 @@ def _env_float_alias(
 
 
 def load_runtime_compression_config() -> RuntimeCompressionConfig:
+    legacy_context_window = _env_int("COMPACTION_CONTEXT_WINDOW_TOKENS", 0, min_value=1024)
+    model_context_window_tokens = _env_int(
+        "MODEL_CONTEXT_WINDOW_TOKENS",
+        legacy_context_window or 160000,
+        min_value=1024,
+    )
+    compression_trigger_window_tokens = _env_int(
+        "COMPACTION_TRIGGER_WINDOW_TOKENS",
+        legacy_context_window or 120000,
+        min_value=1024,
+    )
     return RuntimeCompressionConfig(
         enabled_mid_run=_env_bool("ENABLE_MID_RUN_COMPACTION", True),
         round_interval=_env_int("COMPACTION_ROUND_INTERVAL", 4, min_value=1),
         midrun_token_ratio=_env_float_alias("COMPACTION_MIDRUN_TOKEN_RATIO", "COMPACTION_STRONG_TOKEN_RATIO", 0.82),
-        context_window_tokens=_env_int("COMPACTION_CONTEXT_WINDOW_TOKENS", 16000, min_value=1024),
+        model_context_window_tokens=model_context_window_tokens,
+        compression_trigger_window_tokens=compression_trigger_window_tokens,
         keep_recent_turns=_env_int("COMPACTION_KEEP_RECENT_TURNS", 8, min_value=1),
         tool_burst_threshold=_env_int("COMPACTION_TOOL_BURST_THRESHOLD", 5, min_value=1),
         consistency_guard=_env_bool("COMPACTION_CONSISTENCY_GUARD", True),
+        enable_finalize_compaction=_env_bool("ENABLE_FINALIZE_COMPACTION", False),
         target_keep_ratio_midrun=_env_float_alias(
             "COMPACTION_TARGET_KEEP_RATIO_MIDRUN",
             "COMPACTION_TARGET_KEEP_RATIO_STRONG",

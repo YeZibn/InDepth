@@ -347,7 +347,10 @@ append_message(conversation_id, role, content, ...)
 
 `summary_json.compression_meta` 也会同步写入这些字段，便于后续排查“请求 LLM 但最终回退到规则压缩”的情况。
 | `keep_recent_turns` | 8 | `COMPACTION_KEEP_RECENT_TURNS`（预算不可用兜底） |
-| `context_window_tokens` | 16000 | `COMPACTION_CONTEXT_WINDOW_TOKENS` |
+| `model_context_window_tokens` | 160000 | `MODEL_CONTEXT_WINDOW_TOKENS` |
+| `compression_trigger_window_tokens` | 120000 | `COMPACTION_TRIGGER_WINDOW_TOKENS` |
+| `enable_finalize_compaction` | False | `ENABLE_FINALIZE_COMPACTION` |
+| `context_window_tokens` | trigger window alias | 内部兼容字段，等价于 `compression_trigger_window_tokens` |
 | `consistency_guard` | True | `COMPACTION_CONSISTENCY_GUARD` |
 
 ## 4. 压缩实现（_compact_impl）
@@ -384,7 +387,7 @@ _compact_impl(conversation_id, mode, trigger, force, min_total)
 ┌─────────────────────────────────────────────────────────────────────┐
 │ 2. 计算裁剪点（基于 token 预算）                                         │
 │                                                                      │
-│    target_keep_tokens = context_window_tokens * keep_ratio(mode)    │
+│ target_keep_tokens = compression_trigger_window_tokens * keep_ratio │
 │    cut_idx = _compute_token_budget_cut_index(                        │
 │        all_messages, target_keep_tokens, min_keep_turns             │
 │    )                                                                 │
