@@ -25,6 +25,7 @@ def register_tool_functions(registry: ToolRegistry, functions: Iterable[Any]) ->
 def build_default_registry() -> ToolRegistry:
     from app.tool.bash_tool import execute_bash_command
     from app.tool.get_current_time_tool import get_current_time
+    from app.tool.history_recall_tool import history_recall
     from app.tool.read_file_tool import read_file
     from app.tool.memory_query_tool import get_memory_card_by_id
     from app.tool.runtime_memory_harvest_tool import capture_runtime_memory_candidate
@@ -37,6 +38,7 @@ def build_default_registry() -> ToolRegistry:
     all_tools: List[Any] = [
         execute_bash_command,
         get_current_time,
+        history_recall,
         read_file,
         write_file,
         capture_runtime_memory_candidate,

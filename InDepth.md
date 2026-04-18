@@ -266,15 +266,13 @@ Runtime 绑定现实：
 
 禁止无结构堆叠。
 
-## 4. 能力路由与知识复用
+## 4. 记忆
 
-### 4.1 Skill 主动选择
+本章将记忆复用拆成两个并列模块：
+1. 系统经验记忆：解决“过去类似任务有什么可复用经验”
+2. 运行时历史回溯：解决“当前任务某一步到底发生了什么”
 
-1. 任务开始时，Agent MUST 主动判断所需能力，不等待用户提示。
-2. 复杂任务 SHOULD 组合多个能力模块。
-3. 关键能力决策 MUST 可追溯（为何调用/为何不调用）。
-
-### 4.2 系统记忆（Memory / Knowledge）
+### 4.1 系统经验记忆（Memory / Knowledge）
 
 最小目标：可检索、可触发、可评估。禁止文档堆积。
 
@@ -290,7 +288,45 @@ Runtime 绑定现实：
 3. 运行中可在 `pull_request/pre_release/postmortem` 阶段调用 `capture_runtime_memory_candidate`
 4. `task_finished` 后，框架 MUST 强制沉淀一次 `postmortem` 记忆
 5. 运行中 capture 当前保持 tool 显式调用，不做 Runtime 隐式自动写卡
+6. 当问题本质是“类似任务以前怎么做过/踩过什么坑/有哪些可复用经验”时，SHOULD 优先做经验搜索，而不是直接回看当前任务历史。
 
 观测与治理：
 1. 记忆链路 MUST 记录：`memory_triggered`、`memory_retrieved`、`memory_decision_made`
 2. 事件 MUST 入库，并周期跟踪：命中率、采纳率、噪音率、新鲜度、到期治理
+
+### 4.2 运行时历史回溯（Runtime History Recall）
+
+最小目标：让结构化摘要可回指执行现场，并让模型在需要时按 step 回看原始消息。
+
+基础索引：
+1. Runtime 会话消息 SHOULD 持久化 `run_id` 与 `step_id`。
+2. `run_id` 用于区分执行批次；`step_id` 用于区分单次 run 内部执行单元。
+3. 涉及原始执行现场回看时，MUST 优先使用 `run_id + step_id`，MUST NOT 依赖临时 `step` 计数或模糊“上一轮/前面那次”描述。
+
+Anchor 约定：
+1. 结构化摘要中的 `decision / constraint / artifact` MAY 携带 `source_anchor`。
+2. `source_anchor` 第一版仅索引：
+   - `run_id`
+   - `step_id`
+3. 当来源跨多个 step 或置信度不足时，SHOULD 省略 `source_anchor`，MUST NOT 为了覆盖率强行写错锚点。
+
+回溯工具：
+1. 运行时历史回溯 MUST 通过显式工具 `history_recall` 触发。
+2. `history_recall` 默认粒度 MUST 为 `step`。
+3. 调用时 SHOULD 直接传 `task_id + run_id + step_id`，或传结构化对象中的 `source_anchor`。
+4. Tool 返回结果 SHOULD 保留原始消息顺序，并包含基础定位信息（如 `message_id`、`role`、`tool_call_id`）。
+
+使用边界：
+1. 需要核对原始约束、失败现场、工具返回、关键决策来源时，SHOULD 使用 `history_recall`。
+2. Runtime 当前不做默认自动回溯；是否回看历史由 Agent 显式决策。
+3. 系统经验记忆（`memory_card`）与运行时历史回溯 MUST 分离：
+   - `memory_card` 解决跨任务经验复用
+   - `history_recall` 解决当前任务执行现场回看
+4. 当问题属于“当前任务这一步到底发生了什么”，MUST 优先使用 `history_recall`；当问题属于“过去类似任务有没有可复用经验”，SHOULD 优先使用经验搜索。
+5. 若当前任务现场与已知经验都可能相关，SHOULD 先回看当前 step 现场，再补充经验搜索，避免把跨任务经验误当成当前执行事实。
+
+## 5. Skill 能力路由
+
+1. 任务开始时，Agent MUST 主动判断所需能力，不等待用户提示。
+2. 复杂任务 SHOULD 组合多个能力模块。
+3. 关键能力决策 MUST 可追溯（为何调用/为何不调用）。

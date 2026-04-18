@@ -30,6 +30,8 @@ class _InMemoryStore:
         content: str,
         tool_call_id: str = "",
         tool_calls: Optional[List[Dict[str, Any]]] = None,
+        run_id: str = "",
+        step_id: str = "",
     ) -> None:
         self.rows.append(
             {
@@ -38,6 +40,8 @@ class _InMemoryStore:
                 "content": content,
                 "tool_call_id": tool_call_id,
                 "tool_calls": tool_calls or [],
+                "run_id": run_id,
+                "step_id": step_id,
             }
         )
 
@@ -142,6 +146,47 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             enable_llm_judge=False,
         )
         self.assertAlmostEqual(runtime._estimate_context_usage(500), 500 / 1024)
+
+    def test_sqlite_memory_store_persists_run_id_and_step_id_and_writes_source_anchor(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_anchor.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.3,
+                min_keep_turns=1,
+            )
+            task_id = "anchor_task"
+            store.append_message(task_id, "system", "必须遵守审批流程", run_id="run_1", step_id="1")
+            store.append_message(task_id, "user", "请完成任务A", run_id="run_1", step_id="1")
+            store.append_message(task_id, "assistant", "先读取文件", run_id="run_1", step_id="1")
+            store.append_message(task_id, "tool", "{\"success\": true}", tool_call_id="call_1", run_id="run_1", step_id="1")
+            store.append_message(task_id, "assistant", "已经修改完成", run_id="run_1", step_id="2")
+            store.append_message(task_id, "assistant", "准备验证", run_id="run_1", step_id="2")
+
+            recalled = store.get_messages_for_run_step(task_id, "run_1", "1")
+            self.assertEqual(len(recalled), 4)
+            self.assertEqual(recalled[0]["run_id"], "run_1")
+            self.assertEqual(recalled[0]["step_id"], "1")
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT summary_json FROM summaries WHERE conversation_id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            summary = json.loads(row[0])
+            decisions = summary.get("decisions") or []
+            constraints = summary.get("constraints") or []
+            artifacts = summary.get("artifacts") or []
+            anchored_items = decisions + constraints + artifacts
+            self.assertTrue(any((item.get("source_anchor") or {}).get("step_id") == "1" for item in anchored_items))
+            self.assertTrue(any((item.get("source_anchor") or {}).get("run_id") == "run_1" for item in anchored_items))
 
     def test_compressor_factory_auto_falls_back_to_rule_for_mock_provider(self):
         provider = MockModelProvider(scripted_outputs=[])
@@ -856,6 +901,9 @@ class RuntimeContextCompressionTests(unittest.TestCase):
         result = runtime.run("test mid run", task_id="task_compact", run_id="run_compact")
         self.assertEqual(result, "done")
         self.assertGreaterEqual(memory_store.compact_mid_run_calls, 1)
+        self.assertEqual(memory_store.rows[0]["run_id"], "run_compact")
+        self.assertEqual(memory_store.rows[0]["step_id"], "1")
+        self.assertTrue(any(row["role"] == "tool" and row["step_id"] == "1" for row in memory_store.rows))
 
     def test_consistency_guard_toggle_controls_blocking(self):
         with tempfile.TemporaryDirectory() as td:

@@ -18,6 +18,9 @@ class _MessageRow:
     content: str
     tool_call_id: str
     tool_calls_json: Optional[str]
+    run_id: str = ""
+    step_id: str = ""
+    created_at: str = ""
 
 
 @dataclass
@@ -121,6 +124,10 @@ class SQLiteMemoryStore:
             conn.execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT")
         if "tool_calls_json" not in cols:
             conn.execute("ALTER TABLE messages ADD COLUMN tool_calls_json TEXT")
+        if "run_id" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN run_id TEXT")
+        if "step_id" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN step_id TEXT")
 
     def _ensure_summary_columns(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(summaries)").fetchall()}
@@ -138,10 +145,14 @@ class SQLiteMemoryStore:
         content: str,
         tool_call_id: str = "",
         tool_calls: Optional[List[Dict[str, Any]]] = None,
+        run_id: str = "",
+        step_id: str = "",
     ) -> None:
         if not conversation_id.strip() or not role.strip():
             return
         tool_call_id_norm = (tool_call_id or "").strip() or None
+        run_id_norm = (run_id or "").strip() or None
+        step_id_norm = (step_id or "").strip() or None
         tool_calls_json = (
             json.dumps(tool_calls, ensure_ascii=False)
             if isinstance(tool_calls, list) and tool_calls
@@ -150,10 +161,10 @@ class SQLiteMemoryStore:
         with closing(self._connect()) as conn:
             conn.execute(
                 """
-                INSERT INTO messages (conversation_id, role, content, tool_call_id, tool_calls_json)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO messages (conversation_id, role, content, tool_call_id, tool_calls_json, run_id, step_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, role, content or "", tool_call_id_norm, tool_calls_json),
+                (conversation_id, role, content or "", tool_call_id_norm, tool_calls_json, run_id_norm, step_id_norm),
             )
             conn.commit()
 
@@ -174,7 +185,7 @@ class SQLiteMemoryStore:
 
             rows_raw = conn.execute(
                 """
-                SELECT role, content, tool_call_id, tool_calls_json FROM messages
+                SELECT role, content, tool_call_id, tool_calls_json, run_id, step_id, created_at FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id DESC
                 LIMIT ?
@@ -190,6 +201,9 @@ class SQLiteMemoryStore:
                     content=r[1] or "",
                     tool_call_id=str(r[2] or ""),
                     tool_calls_json=(r[3] if len(r) > 3 else None),
+                    run_id=str(r[4] or "") if len(r) > 4 else "",
+                    step_id=str(r[5] or "") if len(r) > 5 else "",
+                    created_at=str(r[6] or "") if len(r) > 6 else "",
                 )
                 for r in rows_raw
             ]
@@ -209,6 +223,43 @@ class SQLiteMemoryStore:
 
     def compact(self, conversation_id: str) -> None:
         self.compact_final(conversation_id)
+
+    def get_messages_for_run_step(
+        self,
+        conversation_id: str,
+        run_id: str,
+        step_id: str,
+    ) -> List[Dict[str, Any]]:
+        conversation_id_norm = str(conversation_id or "").strip()
+        run_id_norm = str(run_id or "").strip()
+        step_id_norm = str(step_id or "").strip()
+        if not conversation_id_norm or not run_id_norm or not step_id_norm:
+            return []
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, role, content, tool_call_id, tool_calls_json, run_id, step_id, created_at
+                FROM messages
+                WHERE conversation_id = ?
+                  AND run_id = ?
+                  AND step_id = ?
+                ORDER BY id ASC
+                """,
+                (conversation_id_norm, run_id_norm, step_id_norm),
+            ).fetchall()
+        return [
+            {
+                "message_id": int(r[0]),
+                "role": str(r[1] or ""),
+                "content": r[2] or "",
+                "tool_call_id": str(r[3] or ""),
+                "tool_calls": self._parse_tool_calls_json(r[4] if len(r) > 4 else None),
+                "run_id": str(r[5] or "") if len(r) > 5 else "",
+                "step_id": str(r[6] or "") if len(r) > 6 else "",
+                "created_at": str(r[7] or "") if len(r) > 7 else "",
+            }
+            for r in rows
+        ]
 
     def compact_mid_run(
         self,
@@ -403,6 +454,8 @@ class SQLiteMemoryStore:
                     "role": str(role or "").strip().lower(),
                     "content": content or "",
                     "tool_call_id": tool_call_id or "",
+                    "run_id": str(row.run_id or "").strip(),
+                    "step_id": str(row.step_id or "").strip(),
                 }
             )
         return messages
@@ -414,7 +467,7 @@ class SQLiteMemoryStore:
     ) -> List[_MessageRow]:
         rows = conn.execute(
             """
-            SELECT id, role, content, tool_call_id, tool_calls_json
+            SELECT id, role, content, tool_call_id, tool_calls_json, run_id, step_id, created_at
             FROM messages
             WHERE conversation_id = ?
             ORDER BY id ASC
@@ -428,6 +481,9 @@ class SQLiteMemoryStore:
                 content=r[2] or "",
                 tool_call_id=str(r[3] or ""),
                 tool_calls_json=(r[4] if len(r) > 4 else None),
+                run_id=str(r[5] or "") if len(r) > 5 else "",
+                step_id=str(r[6] or "") if len(r) > 6 else "",
+                created_at=str(r[7] or "") if len(r) > 7 else "",
             )
             for r in rows
         ]

@@ -9,6 +9,8 @@ class MemoryStore(Protocol):
         content: str,
         tool_call_id: str = "",
         tool_calls: Optional[List[Dict[str, Any]]] = None,
+        run_id: str = "",
+        step_id: str = "",
     ) -> None:
         ...
 

@@ -195,6 +195,7 @@ class ContextCompressor:
                         "rule": content[:300],
                         "source": "system" if role == "system" else "user",
                         "immutable": True,
+                        **self._anchor_fields(msg),
                     }
                 )
         return out
@@ -233,6 +234,7 @@ class ContextCompressor:
                     "why": "runtime progress",
                     "turn": int(msg.get("turn") or 0),
                     "confidence": "medium",
+                    **self._anchor_fields(msg),
                 }
             )
         return out[-12:]
@@ -253,6 +255,7 @@ class ContextCompressor:
                         "ref": str(msg.get("tool_call_id") or f"msg:{msg_id}"),
                         "summary": content[:180],
                         "turn": int(msg.get("turn") or 0),
+                        **self._anchor_fields(msg),
                     }
                 )
                 continue
@@ -264,6 +267,7 @@ class ContextCompressor:
                         "ref": f"msg:{msg_id}",
                         "summary": content[:180],
                         "turn": int(msg.get("turn") or 0),
+                        **self._anchor_fields(msg),
                     }
                 )
         return out[-15:]
@@ -327,3 +331,15 @@ class ContextCompressor:
             seen.add(k)
 
         return out
+
+    def _anchor_fields(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        run_id = str(msg.get("run_id") or "").strip()
+        step_id = str(msg.get("step_id") or "").strip()
+        if not run_id or not step_id:
+            return {}
+        return {
+            "source_anchor": {
+                "run_id": run_id,
+                "step_id": step_id,
+            }
+        }

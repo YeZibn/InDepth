@@ -56,7 +56,7 @@ from app.core.runtime.user_preference_lifecycle import (
     inject_user_preference_recall,
 )
 from app.core.runtime.tool_execution import (
-    enrich_capture_memory_tool_args,
+    enrich_runtime_tool_args,
     handle_native_tool_calls,
 )
 from app.eval.verification_handoff_service import (
@@ -230,7 +230,7 @@ class AgentRuntime:
             )
         self._trace(f"[runtime] task_started task_id={task_id} run_id={run_id}")
         if self.memory_store:
-            self.memory_store.append_message(task_id, "user", user_input)
+            self.memory_store.append_message(task_id, "user", user_input, run_id=run_id, step_id="1")
 
         final_answer: Optional[str] = None
         final_answer_written = False
@@ -325,8 +325,10 @@ class AgentRuntime:
                         "assistant",
                         raw_message.get("content", "") or "",
                         tool_calls=tool_calls,
+                        run_id=run_id,
+                        step_id=str(step),
                     )
-                tool_outcome = self._handle_native_tool_calls(tool_calls, messages, task_id, run_id)
+                tool_outcome = self._handle_native_tool_calls(tool_calls, messages, task_id, run_id, str(step))
                 last_tool_failures = tool_outcome.get("failures", [])
                 last_tool_executions = tool_outcome.get("executions", [])
                 continue
@@ -335,7 +337,7 @@ class AgentRuntime:
             if finish_reason == "stop":
                 messages.append({"role": "assistant", "content": content})
                 if self.memory_store:
-                    self.memory_store.append_message(task_id, "assistant", content)
+                    self.memory_store.append_message(task_id, "assistant", content, run_id=run_id, step_id=str(step))
                     final_answer_written = True
                 # stop 分支既可能是正常完成，也可能是“等待用户补充信息”或失败兜底。
                 # 这些收敛规则统一放在 stop policy，避免主循环继续堆分支细节。
@@ -362,7 +364,7 @@ class AgentRuntime:
 
             messages.append({"role": "assistant", "content": content})
             if self.memory_store:
-                self.memory_store.append_message(task_id, "assistant", content)
+                self.memory_store.append_message(task_id, "assistant", content, run_id=run_id, step_id=str(step))
                 final_answer_written = True
 
             # 对于非 stop 的 finish_reason，这里统一做“失败收敛”或“fallback 内容收敛”。
@@ -697,6 +699,7 @@ class AgentRuntime:
         messages: List[Dict[str, Any]],
         task_id: str,
         run_id: str,
+        step_id: str,
     ) -> Dict[str, Any]:
         failures: List[Dict[str, str]] = []
         executions: List[Dict[str, Any]] = []
@@ -793,9 +796,10 @@ class AgentRuntime:
                 messages=messages,
                 task_id=task_id,
                 run_id=run_id,
+                step_id=step_id,
                 tool_registry=self.tool_registry,
                 memory_store=self.memory_store,
-                enrich_capture_memory_tool_args=self._enrich_capture_memory_tool_args,
+                enrich_runtime_tool_args=self._enrich_runtime_tool_args,
                 emit_event=emit_event,
                 trace=self._trace,
                 preview_json=self._preview_json,
@@ -842,19 +846,25 @@ class AgentRuntime:
     def _append_recovery_summary_for_user(self, answer: str) -> str:
         return append_recovery_summary_for_user(answer=answer, recovery=self._latest_todo_recovery)
 
-    def _enrich_capture_memory_tool_args(
+    def _enrich_runtime_tool_args(
         self,
         tool_name: str,
         tool_args: Dict[str, Any],
         task_id: str,
         run_id: str,
+        step_id: str,
     ) -> Dict[str, Any]:
-        return enrich_capture_memory_tool_args(
+        db_file = ""
+        if self.memory_store is not None:
+            db_file = str(getattr(self.memory_store, "db_file", "") or "").strip()
+        return enrich_runtime_tool_args(
             tool_name=tool_name,
             tool_args=tool_args,
             task_id=task_id,
             run_id=run_id,
+            step_id=step_id,
             enable_memory_card_metadata_llm=self.enable_memory_card_metadata_llm,
+            memory_store_db_file=db_file,
             extract_title_topic=self._extract_title_topic,
             preview=self._preview,
             generate_memory_card_metadata_llm=self._generate_memory_card_metadata_llm,

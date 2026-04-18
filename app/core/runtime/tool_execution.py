@@ -10,9 +10,10 @@ def handle_native_tool_calls(
     messages: List[Dict[str, Any]],
     task_id: str,
     run_id: str,
+    step_id: str,
     tool_registry: ToolRegistry,
     memory_store: MemoryStore | None,
-    enrich_capture_memory_tool_args: Callable[[str, Dict[str, Any], str, str], Dict[str, Any]],
+    enrich_runtime_tool_args: Callable[[str, Dict[str, Any], str, str, str], Dict[str, Any]],
     emit_event: Callable[..., Dict[str, Any]],
     trace: Callable[[str], None],
     preview_json: Callable[[Any, int], str],
@@ -30,11 +31,12 @@ def handle_native_tool_calls(
                 tool_args = {}
         except Exception:
             tool_args = {}
-        tool_args = enrich_capture_memory_tool_args(
+        tool_args = enrich_runtime_tool_args(
             tool_name=tool_name,
             tool_args=tool_args,
             task_id=task_id,
             run_id=run_id,
+            step_id=step_id,
         )
         emit_event(
             task_id=task_id,
@@ -80,6 +82,8 @@ def handle_native_tool_calls(
                 "tool",
                 json.dumps(result, ensure_ascii=False),
                 tool_call_id=call_id,
+                run_id=run_id,
+                step_id=step_id,
             )
         executions.append(
             {
@@ -93,16 +97,27 @@ def handle_native_tool_calls(
     return {"failures": failures, "executions": executions}
 
 
-def enrich_capture_memory_tool_args(
+def enrich_runtime_tool_args(
     tool_name: str,
     tool_args: Dict[str, Any],
     task_id: str,
     run_id: str,
+    step_id: str,
     enable_memory_card_metadata_llm: bool,
+    memory_store_db_file: str,
     extract_title_topic: Callable[[str], str],
     preview: Callable[[str, int], str],
     generate_memory_card_metadata_llm: Callable[..., Dict[str, str]],
 ) -> Dict[str, Any]:
+    if tool_name == "history_recall":
+        out = dict(tool_args) if isinstance(tool_args, dict) else {}
+        if not str(out.get("task_id", "") or "").strip():
+            out["task_id"] = task_id
+        if not str(out.get("run_id", "") or "").strip():
+            out["run_id"] = run_id
+        if not str(out.get("db_file", "") or "").strip() and memory_store_db_file:
+            out["db_file"] = memory_store_db_file
+        return out
     if tool_name != "capture_runtime_memory_candidate":
         return tool_args
     if not enable_memory_card_metadata_llm:
