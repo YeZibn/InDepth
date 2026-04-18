@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
@@ -173,6 +174,244 @@ class AgentRuntime:
         self.last_task_id = ""
         self._active_todo_context: Dict[str, Any] = {}
         self._latest_todo_recovery: Dict[str, Any] = {}
+        self._prepare_phase_completed = False
+        self._prepare_phase_result: Dict[str, Any] = {}
+
+    def _run_prepare_phase(self, user_input: str, task_id: str, run_id: str) -> Dict[str, Any]:
+        if not self.tool_registry.has("prepare_task"):
+            self._prepare_phase_completed = False
+            self._prepare_phase_result = {}
+            return {}
+        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
+        todo_id = str(ctx.get("todo_id", "") or "").strip()
+        active_number = ctx.get("active_subtask_number")
+        if active_number in (None, ""):
+            active_number = 0
+        active_status = ""
+        if active_number:
+            active_status = "in-progress" if str(ctx.get("execution_phase", "") or "").strip() == "executing" else ""
+        args = {
+            "task_name": self._extract_title_topic(user_input),
+            "context": user_input,
+            "active_todo_id": todo_id,
+            "active_todo_exists": bool(todo_id),
+            "active_todo_summary": "",
+            "active_subtask_number": int(active_number or 0),
+            "active_subtask_status": active_status,
+            "execution_intent": "runtime_preflight",
+        }
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="tool_called",
+            payload={"tool": "prepare_task", "args": args},
+        )
+        result = self.tool_registry.invoke("prepare_task", args)
+        if not result.get("success"):
+            self._prepare_phase_completed = False
+            self._prepare_phase_result = {}
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="tool_failed",
+                status="error",
+                payload={"tool": "prepare_task", "error": str(result.get("error", ""))},
+            )
+            return {}
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="tool_succeeded",
+            payload={"tool": "prepare_task", "error": ""},
+        )
+        payload = result.get("result", {})
+        prepared = payload if isinstance(payload, dict) else {}
+        self._prepare_phase_completed = True
+        self._prepare_phase_result = prepared
+        return prepared
+
+    def _render_prepare_phase_message(self, prepared: Dict[str, Any]) -> str:
+        if not isinstance(prepared, dict) or not prepared:
+            return ""
+        lines = [
+            "[Prepare Phase]",
+            f"should_use_todo={bool(prepared.get('should_use_todo'))}",
+            f"plan_ready={bool(prepared.get('plan_ready'))}",
+            f"recommended_mode={str(prepared.get('recommended_mode', '') or '').strip() or 'unknown'}",
+        ]
+        active_todo_id = str(prepared.get("active_todo_id", "") or "").strip()
+        if active_todo_id:
+            lines.append(f"active_todo_id={active_todo_id}")
+        active_summary = str(prepared.get("active_todo_summary", "") or "").strip()
+        if active_summary:
+            lines.append(f"active_todo_summary={active_summary}")
+        notes = prepared.get("notes", [])
+        if isinstance(notes, list):
+            normalized_notes = [str(item).strip() for item in notes if str(item).strip()]
+            if normalized_notes:
+                lines.append("notes:")
+                lines.extend([f"- {item}" for item in normalized_notes[:4]])
+        suggested = prepared.get("recommended_plan_task_args", {})
+        if isinstance(suggested, dict) and suggested:
+            lines.append("If you decide to use todo tracking, prefer calling plan_task with these prepared fields instead of designing a new plan from scratch.")
+            lines.append(preview_json(suggested, max_len=800))
+        return "\n".join(lines).strip()
+
+    def _build_prepare_phase_guard_error(self, tool_name: str) -> Dict[str, Any]:
+        prepared = self._prepare_phase_result if isinstance(self._prepare_phase_result, dict) else {}
+        guidance = (
+            "Prepare phase must run before planning tools. "
+            "Run prepare_task first, then call plan_task using the prepared result."
+        )
+        if prepared:
+            recommended_mode = str(prepared.get("recommended_mode", "") or "").strip()
+            if recommended_mode:
+                guidance += f" Current prepare recommendation: {recommended_mode}."
+        return {
+            "success": False,
+            "error": f"Prepare phase not completed before calling {tool_name}. {guidance}",
+            "result": {
+                "success": False,
+                "error": f"Prepare phase not completed before calling {tool_name}.",
+                "prepare_completed": False,
+                "tool": tool_name,
+                "prepare_result": prepared,
+            },
+        }
+
+    def _append_internal_tool_execution_to_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        task_id: str,
+        run_id: str,
+        step_id: str,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        result: Dict[str, Any],
+        call_id: str,
+    ) -> None:
+        tool_call = [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(tool_args, ensure_ascii=False),
+                },
+            }
+        ]
+        messages.append({"role": "assistant", "content": "", "tool_calls": tool_call})
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": json.dumps(result, ensure_ascii=False),
+            }
+        )
+        if self.memory_store:
+            self.memory_store.append_message(
+                task_id,
+                "assistant",
+                "",
+                tool_calls=tool_call,
+                run_id=run_id,
+                step_id=step_id,
+            )
+            self.memory_store.append_message(
+                task_id,
+                "tool",
+                json.dumps(result, ensure_ascii=False),
+                tool_call_id=call_id,
+                run_id=run_id,
+                step_id=step_id,
+            )
+
+    def _maybe_apply_prepared_plan(
+        self,
+        prepared: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        task_id: str,
+        run_id: str,
+    ) -> Dict[str, Any]:
+        if not isinstance(prepared, dict) or not prepared:
+            return {}
+        if not bool(prepared.get("should_use_todo")) or not bool(prepared.get("plan_ready")):
+            return {}
+        recommended_mode = str(prepared.get("recommended_mode", "") or "").strip()
+        suggested: Dict[str, Any] = {}
+        tool_name = ""
+        execution: Dict[str, Any] = {}
+        if recommended_mode == "create":
+            suggested = prepared.get("recommended_plan_task_args", {})
+            if not isinstance(suggested, dict) or not suggested:
+                return {}
+            subtasks = suggested.get("subtasks")
+            if not isinstance(subtasks, list) or not subtasks:
+                return {}
+            tool_name = "plan_task"
+        elif recommended_mode == "update":
+            suggested = prepared.get("recommended_update_task_args", {})
+            if not isinstance(suggested, dict) or not suggested:
+                return {}
+            operations = suggested.get("operations")
+            if not isinstance(operations, list) or not operations:
+                return {}
+            tool_name = "update_task"
+        else:
+            return {}
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type="tool_called",
+            payload={"tool": tool_name, "args": suggested, "source": "prepare_phase_auto_apply"},
+        )
+        result = self.tool_registry.invoke(tool_name, suggested)
+        event_type = "tool_succeeded" if result.get("success") else "tool_failed"
+        emit_event(
+            task_id=task_id,
+            run_id=run_id,
+            actor="main",
+            role="general",
+            event_type=event_type,
+            status="ok" if result.get("success") else "error",
+            payload={"tool": tool_name, "error": str(result.get("error", "")), "source": "prepare_phase_auto_apply"},
+        )
+        self._append_internal_tool_execution_to_messages(
+            messages=messages,
+            task_id=task_id,
+            run_id=run_id,
+            step_id="prepare",
+            tool_name=tool_name,
+            tool_args=suggested,
+            result=result,
+            call_id=f"auto_prepare_{tool_name}_{self._slug(run_id)}",
+        )
+        execution_payload = result.get("result", {})
+        execution = {
+            "tool": tool_name,
+            "args": suggested,
+            "success": bool(result.get("success")),
+            "error": str(result.get("error", "")),
+            "payload": execution_payload if isinstance(execution_payload, dict) else {},
+        }
+        self._active_todo_context = update_active_todo_context(
+            current_context=self._active_todo_context,
+            executions=[execution],
+        )
+        if result.get("success"):
+            prepared = dict(prepared)
+            prepared["auto_plan_applied"] = True
+            prepared["auto_plan_tool"] = tool_name
+            self._prepare_phase_result = prepared
+        return result
 
     def run(
         self,
@@ -187,6 +426,8 @@ class AgentRuntime:
         self.last_stop_reason = ""
         self._active_todo_context = {}
         self._latest_todo_recovery = {}
+        self._prepare_phase_completed = False
+        self._prepare_phase_result = {}
         history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
         self._active_todo_context = restore_active_todo_context_from_history(history)
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
@@ -204,6 +445,16 @@ class AgentRuntime:
             user_input=user_input,
             messages=messages,
         )
+        prepared = self._run_prepare_phase(user_input=user_input, task_id=task_id, run_id=run_id)
+        self._maybe_apply_prepared_plan(
+            prepared=prepared,
+            messages=messages,
+            task_id=task_id,
+            run_id=run_id,
+        )
+        prepare_message = self._render_prepare_phase_message(prepared)
+        if prepare_message:
+            messages.append({"role": "system", "content": prepare_message})
         tools = self.tool_registry.list_tool_schemas()
         if resume_from_waiting:
             emit_event(
@@ -710,6 +961,39 @@ class AgentRuntime:
             tool_args = parse_json_dict(raw_args) if isinstance(raw_args, str) else (raw_args or {})
             if not isinstance(tool_args, dict):
                 tool_args = {}
+            if tool_name in {"plan_task", "create_task", "update_task"} and not self._prepare_phase_completed:
+                prepare_guard_error = self._build_prepare_phase_guard_error(tool_name)
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="tool_failed",
+                    status="error",
+                    payload={"tool": tool_name, "error": str(prepare_guard_error.get("error", ""))},
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(call.get("id", "")),
+                        "content": '{"success": false, "error": "Prepare phase not completed"}',
+                    }
+                )
+                failures.append({"tool": tool_name, "error": str(prepare_guard_error.get("error", ""))})
+                executions.append(
+                    {
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "success": False,
+                        "error": str(prepare_guard_error.get("error", "")),
+                        "payload": (
+                            prepare_guard_error.get("result", {})
+                            if isinstance(prepare_guard_error.get("result"), dict)
+                            else {}
+                        ),
+                    }
+                )
+                continue
             if tool_name == "plan_task":
                 active_todo_id = str(self._active_todo_context.get("todo_id", "") or "").strip()
                 binding_state = str(self._active_todo_context.get("binding_state", "") or "").strip()

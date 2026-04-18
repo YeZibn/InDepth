@@ -8,6 +8,7 @@ from app.tool.todo_tool.todo_tool import (
     append_followup_subtasks,
     create_task,
     plan_task,
+    prepare_task,
     plan_task_recovery,
     record_task_fallback,
     reopen_subtask,
@@ -18,6 +19,53 @@ from app.tool.todo_tool.todo_tool import (
 
 
 class TodoRecoveryFlowTests(unittest.TestCase):
+    def test_prepare_task_returns_bootstrap_plan_when_no_active_todo(self):
+        result = prepare_task.entrypoint(
+            task_name="Draft Paper",
+            context="Read the provided outline and write a structured paper draft.",
+            active_todo_exists=False,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["should_use_todo"])
+        self.assertTrue(result["plan_ready"])
+        self.assertEqual(result["recommended_mode"], "create")
+        self.assertEqual(len(result["subtasks"]), 1)
+        self.assertIn("澄清上下文", result["subtasks"][0]["name"])
+        self.assertIn("recommended_plan_task_args", result)
+
+    def test_prepare_task_prefers_update_when_active_todo_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+            ):
+                create_task.entrypoint(
+                    task_name="Base Task",
+                    context="Create the original tracked todo",
+                    split_reason="Need a shared todo first.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                result = prepare_task.entrypoint(
+                    task_name="Continue Paper",
+                    context="Extend the existing tracked todo with the next writing steps",
+                    active_todo_id="todo_123",
+                    active_todo_exists=True,
+                    active_subtask_number=1,
+                    active_subtask_status="in-progress",
+                )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["should_use_todo"])
+        self.assertTrue(result["plan_ready"])
+        self.assertEqual(result["recommended_mode"], "update")
+        self.assertEqual(result["active_todo_id"], "todo_123")
+        self.assertIn("todo_123", result["active_todo_summary"])
+        self.assertIn("recommended_update_task_args", result)
+        self.assertEqual(result["recommended_update_task_args"]["todo_id"], "todo_123")
+        self.assertTrue(result["recommended_update_task_args"]["operations"])
+
     def test_plan_task_normalizes_create_style_envelope(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (

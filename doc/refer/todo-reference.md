@@ -87,7 +87,7 @@ Todo 不是简单的待办清单，而是运行时编排层的事实源。
 这个节点的作用是：
 - 确保本次 task 只围绕一个 todo 主线推进
 - 确保失败发生时，系统知道该挂回哪个 todo
-- 防止在同一 task 周期里重复创建新 todo；常规路径由 `plan_task` 统一裁决
+- 防止在同一 task 周期里重复创建新 todo；常规路径先经 `prepare_task` 分流，再进入 `plan_task` 或 `update_task`
 
 如果这一步没绑定好，后面就容易掉进 `orphan failure`。
 
@@ -475,15 +475,23 @@ task 绑定 active_todo_id
 - 预计执行超过 5 分钟。
 - 存在依赖关系或并行机会。
 
-对外应先调用 `plan_task`。它必须提供：
+当前推荐链路不是让模型直接先调 `plan_task`，而是：
+- 先由 Runtime 强制执行 `prepare_task`
+- 无 active todo 时，自动走 `plan_task`
+- 有 active todo 时，自动走 `update_task`
+
+其中 create 路径下的 `plan_task` 仍要求：
 - `task_name`：主任务标题，必须体现“动作 + 对象”。
 - `context`：范围、边界、交付物、验收口径、时间基准。
 - `split_reason`：为什么需要拆分。
 - `subtasks`：结构化子任务数组。
 
-`plan_task` 会根据当前是否已有 active todo 自动决定 `mode=create/update`；当进入 `mode=create` 时，会在内部调用 hidden `create_task` 完成落盘。
-
 返回值中的 `todo_id` 是 todo 域唯一标识，后续状态更新、失败记录、恢复规划和报告生成都必须复用它。
+
+当前实现中：
+- `plan_task` 负责 create 路径
+- `update_task` 负责已有 todo 的增量修改路径
+- `prepare_task` 只负责给出候选计划，不直接修改 todo
 
 ## 4. 当前 Todo 数据模型
 
@@ -975,7 +983,9 @@ follow-up subtask 的 `kind` 当前支持：
 - `todo_bound_at`
 
 上下文来源于工具执行结果，例如：
+- `prepare_task`
 - `plan_task`
+- `update_task`
 - `create_task`（internal/hidden）
 - `update_task_status`
 - `update_subtask`
@@ -984,8 +994,12 @@ follow-up subtask 的 `kind` 当前支持：
 - `get_next_task`
 
 当前语义：
-- `plan_task` 是默认对外主入口；它先裁决 `mode=create/update`
-- `plan_task` 在 `mode=create` 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
+- `run()` 会在首轮模型请求前强制执行一次 `prepare_task`
+- `prepare_task` 的结果会保存在 runtime 内部状态中
+- 若当前没有 active todo，prepare 会产出 `recommended_mode=create`，随后 runtime 自动调用 `plan_task`
+- 若当前已有 active todo，prepare 会产出 `recommended_mode=update`，随后 runtime 自动调用 `update_task`
+- 这些内部自动工具调用会被写回消息历史，便于恢复与审计
+- `plan_task` 在 create 成功后，runtime 会记录 `todo_id`，并进入 `planning` 阶段
 - hidden `create_task` 默认会绑定当前 task 周期；若当前已有 `active_todo_id` 且未显式 `force_new_cycle`，runtime 会拒绝再次创建 todo
 - `update_task_status(..., status="in-progress")` 后，runtime 会把该 subtask 视为当前 active subtask，并进入 `executing`
 - `update_subtask(...)` 后，runtime 会同步当前 active subtask 的 `subtask_id/subtask_number`
@@ -998,6 +1012,13 @@ follow-up subtask 的 `kind` 当前支持：
 - 当前是否已经进入 todo 执行流
 - 当前是否已经绑定具体 subtask
 - 当前是在规划、执行，还是恢复阶段
+
+此外，planning 类工具现在还有一层 prepare guard：
+- `plan_task`
+- `create_task`
+- `update_task`
+
+若 prepare 尚未完成，Runtime 会直接拒绝这些工具调用。
 
 ### 10.2 自动触发点
 

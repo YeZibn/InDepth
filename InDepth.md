@@ -53,11 +53,14 @@
 - 存在依赖或并行机会
 
 创建细则：
-1. MUST 先创建 todo 主任务（`create_task`）再进入执行。
+1. MUST 先完成前置规划（`prepare_task`）再进入执行。
 2. 主任务标题 MUST 包含目标对象与动作，MUST NOT 使用空泛标题。
 3. 主任务描述 MUST 至少包含：范围边界、交付物、验收口径、时间基准（如有时效要求）。
-4. 调用 `create_task` 时 MUST 提供顶层 `split_reason`（整体拆分理由），且写入 Context 区块。
-5. 创建后 MUST 保存返回的 `todo_id`，后续状态更新与查询 MUST 统一复用该 `todo_id`。
+4. 若 `prepare_task` 判断当前应进入 todo 编排，则 Runtime MUST 按以下分流落盘：
+   - 无 active todo：调用 `plan_task`
+   - 有 active todo：调用 `update_task`
+5. create 路径下调用 `plan_task` 时 MUST 提供顶层 `split_reason`（整体拆分理由），且写入 Context 区块。
+6. 创建后 MUST 保存返回的 `todo_id`，后续状态更新与查询 MUST 统一复用该 `todo_id`。
 
 子任务细则：
 1. 每个子任务 MUST 是“单一可验证动作”，建议粒度为 5-30 分钟可完成。
@@ -70,6 +73,7 @@
 1. 后续动作 MUST 以子任务清单为执行依据。
 2. 清单外动作 MUST 先补入子任务，再执行。
 3. MUST NOT 跳过规划直接做未登记动作。
+4. MUST NOT 在 prepare 未完成前直接调用 `plan_task`、`create_task` 或 `update_task`。
 
 ### 2.2 SubAgent 模块
 
@@ -78,7 +82,7 @@
 - SubAgent：执行已分配子任务
 
 创建决策：
-1. 创建 todo 前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
+1. 进入 todo 落盘前，主 Agent MUST 先完成“是否创建 SubAgent”评估并记录。
 2. 是否使用 SubAgent SHOULD 按下述 MUST/SHOULD/SHOULD NOT 条件判断，不应机械默认开启。
 
 场景分层（优先按 MUST/SHOULD/SHOULD NOT 判定）：
@@ -132,9 +136,11 @@
 3. 执行过程中切换子任务时，MUST 先回写原子状态变更，再激活新子任务。
 
 Runtime 绑定现实：
-1. Runtime 当前会维护 `todo_id`、`active_subtask_number`、`execution_phase`、`binding_required`。
-2. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
-3. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
+1. Runtime 当前会维护 `todo_id`、`active_subtask_number`、`execution_phase`、`binding_required`，并保存 `prepare_phase_completed`、`prepare_phase_result`。
+2. Runtime 会在首轮模型请求前强制执行一次 `prepare_task`。
+3. 若 prepare 结果已形成成熟计划，Runtime MAY 在首轮模型请求前自动完成 `plan_task` 或 `update_task` 落盘。
+4. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
+5. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
 
 状态机约束：
 1. 初始状态：`pending`

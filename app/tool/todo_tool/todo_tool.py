@@ -683,6 +683,282 @@ def _normalize_plan_envelope(
     }
 
 
+def _preview_text(value: Any, max_len: int = 80) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "..."
+
+
+def _derive_prepare_task_name(task_name: Any, context: Any, active_todo_id: str = "") -> str:
+    explicit = str(task_name or "").strip()
+    if explicit:
+        return explicit
+    if active_todo_id:
+        return f"Continue {active_todo_id}"
+    summary = _preview_text(context, max_len=36)
+    if not summary:
+        return "Tracked Task"
+    return summary
+
+
+def _build_prepare_bootstrap_subtask(context: Any) -> Dict[str, Any]:
+    context_preview = _preview_text(context, max_len=120) or "当前任务请求"
+    return {
+        "name": "澄清上下文并细化执行计划",
+        "description": (
+            "先读取现有材料、确认约束与交付物，再补充为可执行子任务并推进首个明确步骤。"
+            f" 当前请求摘要：{context_preview}"
+        ),
+        "priority": "high",
+        "acceptance_criteria": [
+            "已形成首轮可执行拆分",
+            "已确认当前任务的主要约束与交付物",
+        ],
+        "split_rationale": "Prepare 阶段先建立稳定执行骨架，避免在 plan_task 中现场过度设计。",
+        "owner": "main",
+    }
+
+
+def _build_prepare_update_plan(
+    context: Any,
+    active_todo_id: str,
+    active_subtask_number: int = 0,
+    active_subtask_status: str = "",
+) -> Dict[str, Any]:
+    context_preview = _preview_text(context, max_len=160) or "当前任务请求"
+    todo_id = str(active_todo_id or "").strip()
+    active_number = int(active_subtask_number or 0)
+    active_status = str(active_subtask_status or "").strip()
+    update_reason = "根据最新请求细化已有 todo，避免重复 create。"
+    if active_number:
+        return {
+            "update_reason": update_reason,
+            "operations": [
+                {
+                    "type": "update_subtask",
+                    "subtask_number": active_number,
+                    "fields_to_update": {
+                        "description": (
+                            "继续沿当前子任务推进，并吸收本轮新增上下文。"
+                            f" 最新请求摘要：{context_preview}"
+                        ),
+                        "acceptance_criteria": [
+                            "当前子任务描述已反映最新请求",
+                            "已基于更新后的执行说明继续推进",
+                        ],
+                    },
+                    "update_reason": (
+                        f"Active todo={todo_id}，active subtask={active_number}[{active_status or 'unknown'}]，"
+                        "因此优先更新当前子任务而不是新增 todo。"
+                    ),
+                }
+            ],
+        }
+    return {
+        "update_reason": update_reason,
+        "operations": [
+            {
+                "type": "append_subtasks",
+                "subtasks": [
+                    {
+                        "name": "承接最新请求并继续推进",
+                        "description": (
+                            "在已有 todo 基础上追加一个后续步骤，承接本轮新增任务上下文。"
+                            f" 最新请求摘要：{context_preview}"
+                        ),
+                        "priority": "high",
+                        "acceptance_criteria": [
+                            "后续步骤已写入 todo",
+                            "已形成承接当前请求的执行锚点",
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _build_active_todo_summary(todo_id: str, active_subtask_number: int = 0, active_subtask_status: str = "") -> str:
+    todo_id = str(todo_id or "").strip()
+    if not todo_id:
+        return ""
+    task_data = _get_task_by_todo_id(todo_id)
+    if not task_data:
+        return f"todo={todo_id} (summary unavailable)"
+
+    metadata = task_data.get("metadata", {})
+    subtasks = task_data.get("subtasks", [])
+    completed, total, percentage = _calculate_progress(subtasks)
+    summary = [
+        f"todo={todo_id}",
+        f"progress={completed}/{total} ({percentage}%)",
+    ]
+    if active_subtask_number:
+        matched = next((item for item in subtasks if item.get("number") == str(active_subtask_number)), {})
+        active_name = str(matched.get("name", "") or "").strip()
+        active_status = str(active_subtask_status or matched.get("status", "") or "").strip()
+        if active_name or active_status:
+            summary.append(
+                f"active_subtask={active_subtask_number}:{active_name or 'unnamed'}[{active_status or 'unknown'}]"
+            )
+    title = str(metadata.get("Task", "") or metadata.get("Title", "") or "").strip()
+    if title:
+        summary.append(f"title={_preview_text(title, 60)}")
+    return "; ".join(summary)
+
+
+def _should_use_todo_for_prepare(context: Any, active_todo_exists: bool, execution_intent: str = "") -> bool:
+    if active_todo_exists:
+        return True
+    text = f"{str(context or '')} {str(execution_intent or '')}".lower()
+    if len(text.strip()) >= 24:
+        return True
+    hints = [
+        "写",
+        "撰写",
+        "论文",
+        "报告",
+        "设计",
+        "计划",
+        "分析",
+        "整理",
+        "实现",
+        "修复",
+        "重构",
+        "调研",
+        "测试",
+        "review",
+        "write",
+        "draft",
+        "analyze",
+        "design",
+        "implement",
+        "fix",
+        "refactor",
+        "research",
+    ]
+    return any(hint in text for hint in hints)
+
+
+@tool(
+    name="prepare_task",
+    description=(
+        "Prepare a candidate execution plan before plan_task. "
+        "This tool reads current todo context and returns a planning hint, but does not create or update todo state."
+    ),
+    stop_after_tool_call=False,
+    requires_confirmation=False,
+    cache_results=False,
+    hidden=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "task_name": {"type": "string"},
+            "context": {"type": "string"},
+            "active_todo_id": {"type": "string"},
+            "active_todo_exists": {"type": "boolean"},
+            "active_todo_summary": {"type": "string"},
+            "active_subtask_number": {"type": "integer"},
+            "active_subtask_status": {"type": "string"},
+            "execution_intent": {"type": "string"},
+        },
+        "required": ["context"],
+    },
+)
+def prepare_task(
+    context: str,
+    task_name: str = "",
+    active_todo_id: str = "",
+    active_todo_exists: bool = False,
+    active_todo_summary: str = "",
+    active_subtask_number: int = 0,
+    active_subtask_status: str = "",
+    execution_intent: str = "",
+) -> Dict[str, Any]:
+    """Prepare a candidate plan before plan_task without mutating todo state."""
+    context_str = str(context or "").strip()
+    if not context_str:
+        return {"success": False, "error": "context must be a non-empty string"}
+
+    todo_id = str(active_todo_id or "").strip()
+    todo_exists = bool(active_todo_exists or todo_id)
+    resolved_task_name = _derive_prepare_task_name(task_name=task_name, context=context_str, active_todo_id=todo_id)
+    resolved_summary = str(active_todo_summary or "").strip() or _build_active_todo_summary(
+        todo_id=todo_id,
+        active_subtask_number=int(active_subtask_number or 0),
+        active_subtask_status=active_subtask_status,
+    )
+    should_use_todo = _should_use_todo_for_prepare(
+        context=context_str,
+        active_todo_exists=todo_exists,
+        execution_intent=execution_intent,
+    )
+    recommended_mode = "update" if todo_exists else ("create" if should_use_todo else "skip")
+    subtasks: List[Dict[str, Any]] = []
+    split_reason = ""
+    notes: List[str] = []
+    planning_confidence = "medium"
+    plan_ready = False
+    update_plan: Dict[str, Any] = {}
+
+    if should_use_todo and not todo_exists:
+        subtasks = [_build_prepare_bootstrap_subtask(context=context_str)]
+        split_reason = "先通过 Prepare 阶段建立最小执行骨架，再在执行中补充更细的子任务。"
+        notes.append("当前无 active todo，建议先创建带 bootstrap subtask 的 todo。")
+        plan_ready = True
+        planning_confidence = "high"
+    elif should_use_todo and todo_exists:
+        split_reason = "当前已有 active todo，Prepare 阶段先提供 update 建议，由 plan_task 再做最终裁决。"
+        notes.append("当前已有 active todo，建议优先沿用既有 todo，而不是重新 create。")
+        if resolved_summary:
+            notes.append(f"active todo summary: {resolved_summary}")
+        update_plan = _build_prepare_update_plan(
+            context=context_str,
+            active_todo_id=todo_id,
+            active_subtask_number=int(active_subtask_number or 0),
+            active_subtask_status=active_subtask_status,
+        )
+        planning_confidence = "high"
+        plan_ready = True
+    else:
+        split_reason = "当前任务规模较小，可视情况直接执行，无需立即建立 todo。"
+        notes.append("Prepare 判断当前任务不一定需要 todo。")
+        planning_confidence = "low"
+        plan_ready = False
+
+    result = {
+        "success": True,
+        "should_use_todo": should_use_todo,
+        "plan_ready": plan_ready,
+        "recommended_mode": recommended_mode,
+        "task_name": resolved_task_name,
+        "context": context_str,
+        "split_reason": split_reason,
+        "subtasks": subtasks,
+        "planning_confidence": planning_confidence,
+        "active_todo_id": todo_id,
+        "active_todo_summary": resolved_summary,
+        "notes": notes,
+    }
+    if should_use_todo and plan_ready and not todo_exists:
+        result["recommended_plan_task_args"] = {
+            "task_name": resolved_task_name,
+            "context": context_str,
+            "split_reason": split_reason,
+            "subtasks": subtasks,
+            "active_todo_id": todo_id,
+        }
+    if should_use_todo and plan_ready and todo_exists:
+        result["update_plan"] = update_plan
+        result["recommended_update_task_args"] = {
+            "todo_id": todo_id,
+            "update_reason": str(update_plan.get("update_reason", "") or "").strip(),
+            "operations": update_plan.get("operations", []),
+        }
+    return result
+
+
 def _append_create_style_subtasks(
     filepath: str,
     existing_subtasks: List[Dict[str, Any]],
@@ -1910,6 +2186,7 @@ class TodoTools:
     @staticmethod
     def get_tools():
         return [
+            prepare_task,
             plan_task,
             create_task,
             update_task,
@@ -1928,6 +2205,7 @@ class TodoTools:
     @staticmethod
     def get_tool_names():
         return [
+            "prepare_task",
             "plan_task",
             "create_task",
             "update_task",

@@ -59,6 +59,199 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         self.assertIn("Generate one section at a time.", prompt)
         self.assertIn("Write each section before continuing.", prompt)
 
+    def test_runtime_injects_prepare_phase_message_before_first_model_request(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成。"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=registry,
+            max_steps=1,
+            enable_verification_handoff_llm=False,
+        )
+
+        runtime.run(
+            "请根据已有材料先准备计划，再决定是否创建 todo。",
+            task_id="runtime_prepare_phase_task",
+            run_id="runtime_prepare_phase_run",
+        )
+
+        first_request = provider.requests[0]
+        rendered_messages = "\n".join(str(msg.get("content", "")) for msg in first_request["messages"])
+        self.assertIn("[Prepare Phase]", rendered_messages)
+        self.assertIn("recommended_mode=create", rendered_messages)
+        self.assertIn("prefer calling plan_task", rendered_messages)
+        self.assertIn("澄清上下文并细化执行计划", rendered_messages)
+
+    def test_runtime_auto_applies_prepared_create_plan_before_first_model_request(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成。"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=registry,
+            max_steps=1,
+            enable_verification_handoff_llm=False,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260418_prepare_auto_demo"),
+            ):
+                runtime.run(
+                    "请先准备并建立一个跟踪 todo，然后再继续执行。",
+                    task_id="runtime_prepare_auto_plan_task",
+                    run_id="runtime_prepare_auto_plan_run",
+                )
+
+                created = Path(tmpdir) / "20260418_prepare_auto_demo.md"
+                self.assertTrue(created.exists())
+                parsed = _parse_task_file(created)
+                self.assertEqual(len(parsed["subtasks"]), 1)
+                self.assertIn("澄清上下文", parsed["subtasks"][0]["name"])
+
+        first_request = provider.requests[0]
+        assistant_tool_msgs = [msg for msg in first_request["messages"] if msg.get("role") == "assistant" and msg.get("tool_calls")]
+        tool_msgs = [msg for msg in first_request["messages"] if msg.get("role") == "tool"]
+        self.assertTrue(any(call["function"]["name"] == "plan_task" for msg in assistant_tool_msgs for call in msg.get("tool_calls", [])))
+        self.assertTrue(tool_msgs)
+
+    def test_runtime_auto_applies_prepared_update_plan_before_first_model_request(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成。"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=registry,
+            max_steps=1,
+            enable_verification_handoff_llm=False,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch(
+                    "app.core.runtime.agent_runtime.restore_active_todo_context_from_history",
+                    return_value={
+                        "todo_id": "todo_123",
+                        "active_subtask_id": "st_current",
+                        "active_subtask_number": 1,
+                        "execution_phase": "executing",
+                        "binding_required": True,
+                        "binding_state": "bound",
+                        "todo_bound_at": "",
+                        "active_retry_guidance": [],
+                    },
+                ),
+            ):
+                create_task = registry.invoke(
+                    "create_task",
+                    {
+                        "task_name": "Base Task",
+                        "context": "Create the original tracked todo",
+                        "split_reason": "Need a shared todo first.",
+                        "subtasks": [{"name": "Main step", "description": "Do the main thing"}],
+                    },
+                )
+                self.assertTrue(create_task["success"])
+
+                runtime.run(
+                    "请基于已有 todo 继续推进，不要新建。",
+                    task_id="runtime_prepare_auto_update_task",
+                    run_id="runtime_prepare_auto_update_run",
+                )
+
+                parsed = _parse_task_file(Path(tmpdir) / "todo_123.md")
+                self.assertIn("最新请求摘要", parsed["subtasks"][0]["description"])
+
+        first_request = provider.requests[0]
+        assistant_tool_msgs = [msg for msg in first_request["messages"] if msg.get("role") == "assistant" and msg.get("tool_calls")]
+        self.assertTrue(any(call["function"]["name"] == "update_task" for msg in assistant_tool_msgs for call in msg.get("tool_calls", [])))
+
+    def test_runtime_blocks_planning_tools_when_prepare_phase_not_completed(self):
+        registry = ToolRegistry()
+        register_tool_functions(registry, load_todo_tools().get_tools())
+        runtime = AgentRuntime(
+            model_provider=MockModelProvider(scripted_outputs=[]),
+            tool_registry=registry,
+            max_steps=1,
+            enable_verification_handoff_llm=False,
+        )
+        runtime._prepare_phase_completed = False
+        runtime._prepare_phase_result = {}
+
+        messages = []
+        tool_calls = [
+            {
+                "id": "call_plan_without_prepare",
+                "type": "function",
+                "function": {
+                    "name": "plan_task",
+                    "arguments": (
+                        '{"task_name":"Demo","context":"Need tracked work",'
+                        '"split_reason":"Need todo","subtasks":[{"name":"Step 1","description":"Do it"}]}'
+                    ),
+                },
+            }
+        ]
+        outcome = runtime._handle_native_tool_calls(
+            tool_calls=tool_calls,
+            messages=messages,
+            task_id="runtime_prepare_guard_task",
+            run_id="runtime_prepare_guard_run",
+            step_id="1",
+        )
+
+        self.assertEqual(len(outcome["failures"]), 1)
+        self.assertIn("Prepare phase not completed", outcome["failures"][0]["error"])
+        self.assertEqual(outcome["executions"][0]["tool"], "plan_task")
+        self.assertFalse(outcome["executions"][0]["success"])
+
     def test_runtime_rejects_duplicate_create_task_when_active_todo_is_bound(self):
         provider = MockModelProvider(
             scripted_outputs=[
@@ -282,7 +475,8 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
             self.assertIn("create_task", final)
             self.assertIn("20260416_999999_demo", final)
             parsed = _parse_task_file(Path(tmpdir) / "20260416_999999_demo.md")
-            self.assertEqual(len(parsed["subtasks"]), 1)
+            self.assertEqual(len(parsed["subtasks"]), 2)
+            self.assertIn("承接最新请求并继续推进", parsed["subtasks"][1]["name"])
 
     def test_runtime_returns_strong_error_for_create_task_without_subtasks(self):
         provider = MockModelProvider(

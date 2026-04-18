@@ -1,6 +1,6 @@
 # InDepth Tools 参考
 
-更新时间：2026-04-12
+更新时间：2026-04-18
 
 ## 1. 模块范围
 
@@ -170,12 +170,12 @@
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                       Todo 工具组                                 │   │
 │  │                                                                  │   │
-│  │  plan_task ──▶ update_task_status                                 │   │
-│  │      │                    │                                      │   │
-│  │      ├──▶ (internal) create_task                                  │   │
-│  │      └──▶ (internal) update path                                  │   │
-│  │       │                    ▼                                      │   │
-│  │       ▼             reopen_subtask / update_subtask               │   │
+│  │  prepare_task ──▶ plan_task / update_task                         │   │
+│  │         │                    │                                   │   │
+│  │         │                    ├──▶ update_task_status              │   │
+│  │         │                    └──▶ reopen_subtask / update_subtask │   │
+│  │         ▼                                                        │   │
+│  │   (runtime preflight)                                            │   │
 │  │  list_tasks ──▶ get_next_task                                     │   │
 │  │       │                     │                                    │   │
 │  │       ▼                     ▼                                    │   │
@@ -509,17 +509,21 @@ record_task_fallback()
 
 **运行时接入**：
 1. Runtime 会跟踪当前活跃的 todo 执行上下文，包括 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at`
-2. Todo 编排默认先调用 `plan_task`，由其内部决定 `mode=create/update` 并执行对应路径
-3. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
+2. Runtime 会在首轮模型请求前先调用 hidden `prepare_task`
+3. `prepare_task` 若产出成熟计划，会自动分流：
+   - 无 active todo -> `plan_task`
+   - 有 active todo -> `update_task`
+4. planning 类工具存在 prepare guard；若 prepare 未完成，`plan_task/create_task/update_task` 会被直接拒绝
+5. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
    - 调 `record_task_fallback`
    - 调单次 `LLM recovery assessment`
    - 调 `update_task_status`
    - 调 `plan_task_recovery`
    - 仅对 `needs_derived_recovery_subtask=true` 且 `decision_level=auto` 的恢复决策追加 follow-up subtasks
-4. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
-5. `create_task` 若被直接调用，默认仍会要求完整 envelope，并且仅应在无 active todo 时使用；常规路径应交给 `plan_task`
-6. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
-7. 恢复信息会进一步进入：
+6. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
+7. `create_task` 若被直接调用，默认仍会要求完整 envelope，并且仅应在无 active todo 时使用；常规路径应交给 prepare + `plan_task`
+8. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
+9. 恢复信息会进一步进入：
    - `verification_handoff.recovery`
    - `task_judged.payload.verification_handoff`
    - postmortem “交付内容”区块

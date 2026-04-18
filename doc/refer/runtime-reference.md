@@ -8,17 +8,21 @@
 
 从整体运行逻辑看，当前 Runtime 的主链路可以概括为：
 1. 建立本次 run 的消息上下文与执行循环
-2. 在每一步中处理模型输出、工具调用和 stop policy
-3. 维护 active todo / active subtask 执行上下文
-4. 当 run 正常收敛或失败退出时，进入统一的结束处理
-5. 若存在 todo 且 run 未完成，则自动触发 fallback 与 recovery 链路
-6. recovery 链路中会先调用单次 `LLM recovery assessment`，再由 guardrails 落地恢复决策
-7. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
-8. 关闭当前 run 的活跃 todo 绑定并完成收尾
+2. 在第一次模型请求前，强制执行一轮 prepare phase
+3. 若 prepare 已形成成熟计划，则自动完成 todo create/update 落盘
+4. 在每一步中处理模型输出、工具调用和 stop policy
+5. 维护 active todo / active subtask 执行上下文
+6. 当 run 正常收敛或失败退出时，进入统一的结束处理
+7. 若存在 todo 且 run 未完成，则自动触发 fallback 与 recovery 链路
+8. recovery 链路中会先调用单次 `LLM recovery assessment`，再由 guardrails 落地恢复决策
+9. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
+10. 关闭当前 run 的活跃 todo 绑定并完成收尾
 
 当前 Runtime 中与 todo/recovery 最相关的关键节点包括：
+- prepare phase：在首轮模型请求前读取 todo 上下文并生成候选计划
 - tool loop：决定当前动作属于哪个工具调用
 - `_active_todo_context`：跟踪 `todo_id / active_subtask / execution_phase / binding_state`
+- `_prepare_phase_completed / _prepare_phase_result`：跟踪 prepare 是否完成及其结构化结果
 - stop policy：决定 run 是正常完成、等待输入还是失败退出
 - `auto_manage_todo_recovery`：在失败出口自动补齐恢复链路
 - finalization：把恢复信息外溢到 handoff、评估与用户可见摘要
@@ -234,6 +238,8 @@ def run(
 | `_active_todo_context` | `Dict[str, Any]` | 当前活跃的 todo 执行上下文，包含 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at` |
 | `_latest_todo_recovery` | `Dict[str, Any]` | 最近一次自动恢复链路产物 |
 | `consecutive_tool_calls` | `int` | 当前一次 `tool_calls` 响应的条目数 |
+| `_prepare_phase_completed` | `bool` | 当前 run 是否已经完成 prepare |
+| `_prepare_phase_result` | `Dict[str, Any]` | prepare 的结构化结果，供 guard / auto-apply / history 使用 |
 
 ### 4.3 finish_reason 处理
 
@@ -308,7 +314,9 @@ Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 - `todo_bound_at`
 
 主要来源工具：
+- `prepare_task`
 - `plan_task`
+- `update_task`
 - `update_task_status`
 - `update_subtask`
 - `record_task_fallback`
@@ -316,9 +324,14 @@ Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 - `get_next_task`
 
 当前语义：
-- `plan_task` 是对外 Todo 主入口；它会先完成 envelope 校验与 `mode=create/update` 裁决
-- `plan_task` 在裁决为 `mode=create` 且内部执行成功后会记录 `todo_id`，并进入 `planning`
+- `run()` 会在首轮模型请求前强制调用 `prepare_task`
+- `prepare_task` 完成后，其结果会写入 `_prepare_phase_completed / _prepare_phase_result`
+- 若 prepare 结果为 `recommended_mode=create`，Runtime 会自动内部调用 `plan_task`
+- 若 prepare 结果为 `recommended_mode=update`，Runtime 会自动内部调用 `update_task`
+- 这些内部自动工具执行会被追加到 `messages` 与 `memory_store`
+- `plan_task` 成功后会记录 `todo_id`，并进入 `planning`
 - hidden `create_task` 若被直接调用，仍会校验完整 envelope；当前 task 已绑定 active todo 时默认会被拒绝，只有显式 `force_new_cycle=true` 才允许切新周期
+- `update_task` 成功后会同步当前 todo 上下文，但不会新建 todo 周期
 - `update_task_status(..., status="in-progress")` 后会记录 `active_subtask_number`，并进入 `executing`
 - `update_subtask(...)` 后会同步当前 active subtask 的 `subtask_id/subtask_number`
 - `update_task_status(..., status in {blocked, failed, partial, awaiting_input, timed_out})` 后会进入 `recovering`
@@ -331,6 +344,16 @@ Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 - 当前是否已经进入 todo 执行流
 - 当前失败是否能归属到具体 subtask
 - 当前是否应当要求工具调用绑定到 active subtask
+
+#### 4.5.1.1 Prepare Guard
+
+当前 Runtime 对 planning 类工具增加了 guard：
+
+- `plan_task`
+- `create_task`
+- `update_task`
+
+如果模型在 prepare 未完成前直接调用这些工具，Runtime 会直接拒绝，并返回带 prepare 提示的错误结果。这样“先 prepare、再规划/落盘”不再只是提示词约定，而是运行时硬约束。
 
 #### 4.5.2 自动触发时机
 

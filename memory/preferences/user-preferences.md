@@ -2,17 +2,17 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-17T23:04:33+08:00
+- updated_at: 2026-04-18T14:10:49+08:00
 - enabled: true
 
 ## preferences
 
 ### goal_long_term
-- value: 写一篇3000字左右的论文，并最终写到md文档
+- value: 写一篇3000字左右的论文
 - source: llm_extract_v1
-- confidence: 0.95
-- updated_at: 2026-04-17T22:58:31+08:00
-- note: evidence=我希望你为我产出一篇3000字左右的论文...最后写到md文档给我
+- confidence: 0.97
+- updated_at: 2026-04-18T14:04:33+08:00
+- note: evidence=我希望你可以根据此帮我写出一篇3000字左右的论文
 
 ### interest_topics
 - value: [基于pdf参考文件提出自己的评论与思考]
@@ -36,11 +36,11 @@ meta:
 - note: evidence=你好啊
 
 ### response_style
-- value: 之后都不要问我了，直接继续就可以
+- value: [细分生成, 不要一次性生成这么多]
 - source: llm_extract_v1
-- confidence: 0.96
-- updated_at: 2026-04-17T23:04:33+08:00
-- note: evidence=之后都不要问我了，直接继续就可以
+- confidence: 0.95
+- updated_at: 2026-04-18T14:10:49+08:00
+- note: evidence=建议可以细分生成，不要一次性生成这么多，超时。
 
 ### tooling_stack
 - value: [项目主目录的work文件夹中的文献, 项目主目录的work文件夹中的大纲, 网上搜索资料]
