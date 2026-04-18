@@ -1,6 +1,6 @@
 # InDepth Observability 参考
 
-更新时间：2026-04-17
+更新时间：2026-04-18
 
 ## 1. 目标
 
@@ -156,6 +156,9 @@ class EventRecord:
 | **任务** | `task_started` | 任务开始 |
 | | `task_finished` | 任务结束 |
 | | `task_judged` | 任务判定完成 |
+| | `task_updated` | todo 顶层更新 |
+| | `task_fallback_recorded` | 记录 subtask fallback 事实 |
+| | `task_recovery_planned` | 生成恢复决策 |
 | | `run_resumed` | 同一 run 从等待态恢复 |
 | | `user_clarification_received` | 接收到用户澄清补充 |
 | | `clarification_requested` | 模型请求用户澄清 |
@@ -174,6 +177,12 @@ class EventRecord:
 | | `subagent_finished` | SubAgent 完成 |
 | | `subagent_failed` | SubAgent 失败 |
 | **Todo** | `status_updated` | 状态更新 |
+| | `subtask_updated` | subtask 增量更新 |
+| | `subtask_reopened` | subtask 重新激活 |
+| | `followup_subtasks_appended` | 追加 follow-up subtasks |
+| | `todo_binding_missing_warning` | 已进入 todo 流但未绑定 active subtask |
+| | `todo_orphan_failure_detected` | 失败发生时没有 active subtask 可归属 |
+| | `todo_recovery_auto_planned` | runtime 自动恢复规划已生成 |
 | **检索** | `search_guard_initialized` | 检索门禁初始化 |
 | | `search_round_started` | 检索轮次开始 |
 | | `search_round_finished` | 检索轮次结束 |
@@ -182,6 +191,13 @@ class EventRecord:
 | **记忆** | `memory_triggered` | 记忆触发 |
 | | `memory_retrieved` | 记忆检索 |
 | | `memory_decision_made` | 记忆决策 |
+| **用户偏好** | `user_preference_recall_succeeded` | 用户偏好召回成功 |
+| | `user_preference_recall_failed` | 用户偏好召回失败 |
+| | `user_preference_extract_started` | 用户偏好提取开始 |
+| | `user_preference_extract_succeeded` | 用户偏好提取成功 |
+| | `user_preference_extract_failed` | 用户偏好提取失败 |
+| | `user_preference_capture_succeeded` | 用户偏好写回成功 |
+| | `user_preference_capture_failed` | 用户偏好写回失败 |
 | **压缩** | `context_compression_started` | 开始压缩 |
 | | `context_compression_succeeded` | 压缩成功 |
 | | `context_compression_failed` | 压缩失败 |
@@ -190,14 +206,16 @@ class EventRecord:
 | | `verification_passed` | 评估通过 |
 | | `verification_failed` | 评估失败 |
 | | `verification_skipped` | 评估跳过（等待用户输入） |
-| **技能** | `skill_loaded` | 技能加载完成 |
-| | `skill_tool_called` | 技能工具被调用 |
 
 ### 3.3 未知事件处理
 
 若传入未知 `event_type`：
 - 自动归一化为 `unknown_event_type`
 - 在 payload 注入 `_original_event_type` 与 warning 标记
+
+注意：
+- 已被业务代码真实发射的事件类型，应优先补入 `EVENT_TYPES`
+- `unknown_event_type` 只用于真正未建模的新事件，不应用来承载已知业务链路
 
 ## 4. 事件落点
 
