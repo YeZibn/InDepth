@@ -323,12 +323,13 @@ def read_file(
     offset: Optional[int] = None,
 ) -> str
 
-@tool(name="write_file", description="写入文件内容")
+@tool(name="write_file", description="写入文件内容，支持覆盖或追加")
 def write_file(
     file_path: str,
     content: str,
-    mode: str = "w"  # w:覆盖, a:追加
-) -> Dict
+    overwrite: bool = False,
+    append: bool = False,
+) -> str
 ```
 
 ### 6.3 Search Guard 工具组
