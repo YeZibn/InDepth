@@ -331,6 +331,7 @@ class AgentRuntime:
             "active_subtask_number": int(args.get("active_subtask_number") or 0),
             "active_subtask_status": str(args.get("active_subtask_status", "") or "").strip(),
             "execution_intent": str(args.get("execution_intent", "") or "").strip(),
+            "resume_from_waiting": bool(args.get("resume_from_waiting")),
         }
         emit_event(
             task_id=task_id,
@@ -375,6 +376,17 @@ class AgentRuntime:
 
     def _run_prepare_phase_llm(self, args: Dict[str, Any], task_id: str, run_id: str) -> Dict[str, Any]:
         current_state_scan = args.get("current_state_scan", {}) if isinstance(args.get("current_state_scan"), dict) else {}
+        abandon_subtasks: List[int] = []
+        if bool(args.get("resume_from_waiting")):
+            unfinished = current_state_scan.get("unfinished_subtasks", [])
+            if isinstance(unfinished, list):
+                for item in unfinished:
+                    if not isinstance(item, dict):
+                        continue
+                    number_text = str(item.get("number", "") or "").strip()
+                    if number_text.isdigit():
+                        abandon_subtasks.append(int(number_text))
+        abandon_subtasks = sorted(set(abandon_subtasks))
         payload = {
             "user_input": str(args.get("context", "") or "").strip(),
             "active_todo_exists": bool(args.get("active_todo_exists")),
@@ -384,6 +396,7 @@ class AgentRuntime:
             "current_state_scan": current_state_scan,
             "active_subtask_number": int(args.get("active_subtask_number") or 0),
             "execution_phase": str(args.get("execution_phase", "") or "planning").strip() or "planning",
+            "resume_from_waiting": bool(args.get("resume_from_waiting")),
             "latest_recovery": args.get("latest_recovery", {}) if isinstance(args.get("latest_recovery"), dict) else {},
         }
         emit_event(
@@ -422,6 +435,12 @@ class AgentRuntime:
             "active_todo_summary": "",
             "current_state_scan": current_state_scan,
             "current_state_summary": str(current_state_scan.get("summary", "") or "").strip(),
+            "abandon_subtasks": abandon_subtasks,
+            "abandon_reason": (
+                "收到澄清回复后，旧计划中的未完成 subtasks 先标记为 abandoned，再继续追加新计划。"
+                if abandon_subtasks
+                else ""
+            ),
             "notes": [str(item).strip() for item in notes if str(item).strip()],
             "planner_source": "llm",
         }
@@ -454,7 +473,7 @@ class AgentRuntime:
         self._prepare_phase_result = prepared
         return prepared
 
-    def _run_prepare_phase(self, user_input: str, task_id: str, run_id: str) -> Dict[str, Any]:
+    def _run_prepare_phase(self, user_input: str, task_id: str, run_id: str, resume_from_waiting: bool = False) -> Dict[str, Any]:
         ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
         todo_id = str(ctx.get("todo_id", "") or "").strip()
         active_number = ctx.get("active_subtask_number")
@@ -483,6 +502,7 @@ class AgentRuntime:
             "active_subtask_status": active_status,
             "execution_phase": execution_phase,
             "current_state_scan": current_state_scan,
+            "resume_from_waiting": bool(resume_from_waiting),
             "latest_recovery": self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {},
             "execution_intent": "runtime_preflight",
         }
@@ -524,6 +544,9 @@ class AgentRuntime:
             if normalized_notes:
                 lines.append("notes:")
                 lines.extend([f"- {item}" for item in normalized_notes[:4]])
+        abandon_subtasks = prepared.get("abandon_subtasks", [])
+        if isinstance(abandon_subtasks, list) and abandon_subtasks:
+            lines.append("abandon_subtasks=" + ",".join([str(item) for item in abandon_subtasks if str(item).strip()]))
         suggested = prepared.get("recommended_plan_task_args", {})
         if isinstance(suggested, dict) and suggested:
             lines.append("If you decide to use todo tracking, prefer calling plan_task with these prepared fields instead of designing a new plan from scratch.")
@@ -573,6 +596,11 @@ class AgentRuntime:
         current_state_summary = str(prepared.get("current_state_summary", "") or "").strip()
         if current_state_summary:
             lines.append(f"当前现状：{self._preview(current_state_summary, 140)}")
+        abandon_subtasks = prepared.get("abandon_subtasks", [])
+        if isinstance(abandon_subtasks, list) and abandon_subtasks:
+            preview_list = ", ".join([f"Task {item}" for item in abandon_subtasks if str(item).strip()])
+            if preview_list:
+                lines.append(f"旧计划处理：将废弃 {self._preview(preview_list, 140)}")
         if subtasks:
             lines.append("计划明细：")
             for idx, item in enumerate(subtasks, 1):
@@ -711,6 +739,60 @@ class AgentRuntime:
     ) -> Dict[str, Any]:
         if not isinstance(prepared, dict) or not prepared:
             return {}
+        todo_id = str(prepared.get("active_todo_id", "") or "").strip()
+        abandon_subtasks = prepared.get("abandon_subtasks", [])
+        if todo_id and isinstance(abandon_subtasks, list):
+            for subtask_number in abandon_subtasks:
+                number_text = str(subtask_number).strip()
+                if not number_text.isdigit():
+                    continue
+                abandon_args = {
+                    "todo_id": todo_id,
+                    "subtask_number": int(number_text),
+                    "status": "abandoned",
+                }
+                tool_name = "update_task_status"
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type="tool_called",
+                    payload={"tool": tool_name, "args": abandon_args, "source": "prepare_phase_auto_abandon"},
+                )
+                result = self.tool_registry.invoke(tool_name, abandon_args)
+                event_type = "tool_succeeded" if result.get("success") else "tool_failed"
+                emit_event(
+                    task_id=task_id,
+                    run_id=run_id,
+                    actor="main",
+                    role="general",
+                    event_type=event_type,
+                    status="ok" if result.get("success") else "error",
+                    payload={"tool": tool_name, "error": str(result.get("error", "")), "source": "prepare_phase_auto_abandon"},
+                )
+                self._append_internal_tool_execution_to_messages(
+                    messages=messages,
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id="prepare",
+                    tool_name=tool_name,
+                    tool_args=abandon_args,
+                    result=result,
+                    call_id=f"auto_prepare_{tool_name}_{self._slug(run_id)}_{number_text}",
+                )
+                execution_payload = result.get("result", {})
+                execution = {
+                    "tool": tool_name,
+                    "args": abandon_args,
+                    "success": bool(result.get("success")),
+                    "error": str(result.get("error", "")),
+                    "payload": execution_payload if isinstance(execution_payload, dict) else {},
+                }
+                self._active_todo_context = update_active_todo_context(
+                    current_context=self._active_todo_context,
+                    executions=[execution],
+                )
         if not bool(prepared.get("should_use_todo")):
             return {}
         suggested = prepared.get("recommended_plan_task_args", {})
@@ -802,7 +884,12 @@ class AgentRuntime:
             user_input=user_input,
             messages=messages,
         )
-        prepared = self._run_prepare_phase(user_input=user_input, task_id=task_id, run_id=run_id)
+        prepared = self._run_prepare_phase(
+            user_input=user_input,
+            task_id=task_id,
+            run_id=run_id,
+            resume_from_waiting=resume_from_waiting,
+        )
         self._maybe_apply_prepared_plan(
             prepared=prepared,
             messages=messages,

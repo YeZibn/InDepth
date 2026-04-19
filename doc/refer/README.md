@@ -13,6 +13,10 @@
 6. 恢复优先围绕原 subtask 展开，必要时才派生 recovery subtasks
 7. 结束时恢复信息继续外溢到 handoff、评估、观测和 postmortem
 
+其中有一个新的现实约束需要注意：
+1. 若本轮是从 `awaiting_user_input` 恢复，且存在 active todo，Runtime 会先把旧计划中未完成的 subtasks 标记为 `abandoned`
+2. 然后再在同一个 todo 下继续追加新的计划
+
 因此，阅读 `doc/refer/` 时可以把几个关键节点记住：
 - `prepare phase`
 - `current state scan`

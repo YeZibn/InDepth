@@ -85,6 +85,36 @@ class TodoRecoveryFlowTests(unittest.TestCase):
         self.assertIn("当前 todo 进度", result["current_state_summary"])
         self.assertEqual(result["current_state_scan"]["progress"], "0/1 (0%)")
 
+    def test_prepare_task_marks_old_unfinished_subtasks_for_abandon_when_resuming(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+            ):
+                _create_todo(
+                    task_name="Base Task",
+                    context="Create the original tracked todo",
+                    split_reason="Need a shared todo first.",
+                    subtasks=[
+                        {"name": "Main step", "description": "Do the main thing"},
+                        {"name": "Follow-up", "description": "Do the next thing"},
+                    ],
+                )
+                result = prepare_task.entrypoint(
+                    task_name="Continue Task",
+                    context="用户补充了新的约束",
+                    active_todo_id="todo_123",
+                    active_todo_exists=True,
+                    active_subtask_number=1,
+                    active_subtask_status="awaiting_input",
+                    resume_from_waiting=True,
+                )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["abandon_subtasks"], [1, 2])
+        self.assertIn("澄清恢复", " ".join(result["notes"]))
+
     def test_plan_task_normalizes_create_style_envelope(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (

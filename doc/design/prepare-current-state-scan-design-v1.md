@@ -22,7 +22,7 @@
 
 ## 3. 非目标
 
-1. 不引入“澄清后废弃旧计划并重建”的机制。
+1. 不引入“多 todo / 多计划版本”的重规划机制。
 2. 不新增 plan version / 多版本计划管理。
 3. 不做全仓扫描或复杂资产索引。
 4. 不改变现有 todo 生命周期。
@@ -53,6 +53,8 @@
 5. `ready_subtasks`
 6. `known_artifacts`
 7. `summary`
+8. `abandon_subtasks`
+9. `abandon_reason`
 
 其中：
 
@@ -66,6 +68,10 @@
    - 从 subtask 描述、验收条件、fallback evidence 中提取路径样式 token。
 5. `summary`
    - 面向 runtime 和模型消费的单行摘要。
+6. `abandon_subtasks`
+   - 当 `resume_from_waiting=true` 且存在 active todo 时，列出旧计划中需要废弃的未完成 subtask 编号。
+7. `abandon_reason`
+   - 说明这些旧 subtask 被废弃的原因。
 
 ## 6. 落点
 
@@ -80,6 +86,7 @@
 
 1. `current_state_scan`
 2. `current_state_summary`
+3. 若 `resume_from_waiting=true`，额外返回 `abandon_subtasks / abandon_reason`
 
 ### 6.2 Runtime Prepare
 
@@ -88,8 +95,10 @@
 1. `_run_prepare_phase` 在 active todo 存在时调用 `_build_current_state_scan`
 2. rule fallback 路径回填 `current_state_scan/current_state_summary`
 3. LLM prepare 路径把 `current_state_summary/current_state_scan` 一并送入 planner payload
-4. CLI `[Prepare]` 摘要增加一行 `当前现状：...`
-5. system-visible prepare message 增加 `current_state_summary=...`
+4. 若 `resume_from_waiting=true`，prepare 结果会带上旧未完成 subtasks 的废弃列表
+5. `_maybe_apply_prepared_plan` 会先把这些旧 subtask 标记为 `abandoned`，再执行新的 `plan_task(update)`
+6. CLI `[Prepare]` 摘要增加一行 `当前现状：...`
+7. system-visible prepare message 增加 `current_state_summary=...`
 
 ## 7. 行为变化
 
@@ -102,6 +111,11 @@
 2. 有 active todo 的任务
    - `prepare` 会返回基础现状摘要
    - 后续 planning 不再只看到 active todo id，而是能看到当前进度与已知产物
+
+3. 用户回复澄清、以同一 run 恢复
+   - `prepare` 会识别 `resume_from_waiting=true`
+   - 旧计划中未完成 subtasks 会先被标记为 `abandoned`
+   - 然后再在同一个 todo 下继续追加新的计划
 
 ## 8. 示例
 
@@ -116,8 +130,10 @@
 新增或更新测试覆盖：
 
 1. `prepare_task` 在 active todo 存在时返回 `current_state_summary`
-2. runtime 的 `[Prepare]` CLI 输出包含 `当前现状`
-3. runtime 发给模型的 prepare message 包含 `current_state_summary=...`
+2. `prepare_task` 在 `resume_from_waiting=true` 时返回 `abandon_subtasks`
+3. runtime 的 `[Prepare]` CLI 输出包含 `当前现状`
+4. runtime 发给模型的 prepare message 包含 `current_state_summary=...`
+5. runtime 在澄清恢复时会先把旧未完成 subtask 标记为 `abandoned`
 
 ## 10. 结论
 
@@ -125,6 +141,7 @@
 
 1. 不碰重规划
 2. 不改变 todo 状态机
-3. 只给 `prepare` 增加“当前现状感知”
+3. 给 `prepare` 增加“当前现状感知”
+4. 在澄清恢复时自动收束旧的未完成 subtask
 
 这样可以先解决最常见的计划脱离现状问题，同时保持实现与认知成本都足够低。

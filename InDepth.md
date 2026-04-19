@@ -141,9 +141,10 @@ Runtime 绑定现实：
 2. Runtime 会在首轮模型请求前强制执行一次 prepare phase。
 3. 若存在 active todo，prepare SHOULD 先感知当前现状，包括当前进度、未完成 subtask 与已知产物摘要。
 4. 若 prepare 结果已形成成熟计划，Runtime MAY 在首轮模型请求前自动完成 `plan_task` 落盘。
-5. Runtime 会在进入执行前输出一段 `[Prepare]` 摘要，向用户展示任务目标、todo 决策、拆分理由、当前现状摘要（若有）与完整子任务清单。
-6. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
-7. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
+5. 若当前是从 `awaiting_user_input` 恢复，且存在 active todo，Runtime MAY 先将旧计划中未完成的 subtasks 标记为 `abandoned`，再继续追加新的计划。
+6. Runtime 会在进入执行前输出一段 `[Prepare]` 摘要，向用户展示任务目标、todo 决策、拆分理由、当前现状摘要（若有）、旧计划处理（若有）与完整子任务清单。
+7. 若 todo 已创建，但普通工具调用尚未绑定 active subtask，Runtime MAY 发出 warning，提示当前执行存在编排缺口。
+8. 协议层仍要求 Agent 主动完成子任务绑定；Runtime warning 只是补充保护，不等于协议豁免。
 
 状态机约束：
 1. 初始状态：`pending`

@@ -817,6 +817,29 @@ def _build_current_state_scan(todo_id: str, max_items: int = 4) -> Dict[str, Any
     }
 
 
+def _build_prepare_abandon_plan(current_state_scan: Dict[str, Any], resume_from_waiting: bool) -> Dict[str, Any]:
+    scan = current_state_scan if isinstance(current_state_scan, dict) else {}
+    if not bool(resume_from_waiting):
+        return {"subtask_numbers": [], "reason": ""}
+    unfinished = scan.get("unfinished_subtasks", [])
+    if not isinstance(unfinished, list):
+        unfinished = []
+    numbers: List[int] = []
+    for item in unfinished:
+        if not isinstance(item, dict):
+            continue
+        number_text = str(item.get("number", "") or "").strip()
+        if number_text.isdigit():
+            numbers.append(int(number_text))
+    numbers = sorted(set(numbers))
+    if not numbers:
+        return {"subtask_numbers": [], "reason": ""}
+    return {
+        "subtask_numbers": numbers,
+        "reason": "收到澄清回复后，旧计划中的未完成 subtasks 先标记为 abandoned，再继续追加新计划。",
+    }
+
+
 def _build_prepare_update_plan(
     context: Any,
     active_todo_id: str,
@@ -959,6 +982,7 @@ def _should_use_todo_for_prepare(context: Any, active_todo_exists: bool, executi
             "active_subtask_number": {"type": "integer"},
             "active_subtask_status": {"type": "string"},
             "execution_intent": {"type": "string"},
+            "resume_from_waiting": {"type": "boolean"},
         },
         "required": ["context"],
     },
@@ -972,6 +996,7 @@ def prepare_task(
     active_subtask_number: int = 0,
     active_subtask_status: str = "",
     execution_intent: str = "",
+    resume_from_waiting: bool = False,
 ) -> Dict[str, Any]:
     """Prepare a candidate plan before plan_task without mutating todo state."""
     context_str = str(context or "").strip()
@@ -996,11 +1021,20 @@ def prepare_task(
     notes: List[str] = []
     planning_confidence = "medium"
     current_state_scan: Dict[str, Any] = {}
+    abandon_plan: Dict[str, Any] = {"subtask_numbers": [], "reason": ""}
 
     if todo_exists:
         current_state_scan = _build_current_state_scan(todo_id)
         if current_state_scan.get("summary"):
             notes.append(f"现状扫描：{current_state_scan['summary']}")
+        abandon_plan = _build_prepare_abandon_plan(
+            current_state_scan=current_state_scan,
+            resume_from_waiting=resume_from_waiting,
+        )
+        if abandon_plan.get("subtask_numbers"):
+            notes.append(
+                "澄清恢复：旧的未完成 subtasks 将先废弃，随后在同一 todo 下继续推进新的执行计划。"
+            )
 
     if should_use_todo and not todo_exists:
         subtasks = [_build_prepare_bootstrap_subtask(context=context_str)]
@@ -1032,6 +1066,8 @@ def prepare_task(
         "notes": notes,
         "current_state_scan": current_state_scan,
         "current_state_summary": str(current_state_scan.get("summary", "") or "").strip(),
+        "abandon_subtasks": list(abandon_plan.get("subtask_numbers", []) or []),
+        "abandon_reason": str(abandon_plan.get("reason", "") or "").strip(),
     }
     if should_use_todo and subtasks:
         result["recommended_plan_task_args"] = {

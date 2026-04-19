@@ -355,6 +355,64 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         self.assertIn("当前现状：", joined)
         self.assertIn("当前 todo 进度", joined)
 
+    def test_runtime_auto_abandons_old_unfinished_subtasks_when_resuming_from_waiting(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成。"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = self._build_runtime(provider=provider)
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+                patch(
+                    "app.core.runtime.agent_runtime.restore_active_todo_context_from_history",
+                    return_value={
+                        "todo_id": "todo_123",
+                        "active_subtask_id": None,
+                        "active_subtask_number": 1,
+                        "execution_phase": "planning",
+                        "binding_required": True,
+                        "binding_state": "bound",
+                        "todo_bound_at": "",
+                        "active_retry_guidance": [],
+                    },
+                ),
+            ):
+                created = plan_task.entrypoint(
+                    task_name="Base Task",
+                    context="Create the original tracked todo",
+                    split_reason="Need a shared todo first.",
+                    subtasks=[
+                        {"name": "Main step", "description": "Do the main thing"},
+                        {"name": "Follow-up", "description": "Do the next thing"},
+                    ],
+                )
+                self.assertTrue(created["success"])
+                runtime.run(
+                    "补充信息后继续推进",
+                    task_id="runtime_prepare_resume_task",
+                    run_id="runtime_prepare_resume_run",
+                    resume_from_waiting=True,
+                )
+                parsed = _parse_task_file(Path(tmpdir) / "todo_123.md")
+
+        self.assertEqual(parsed["subtasks"][0]["status"], "abandoned")
+        self.assertEqual(parsed["subtasks"][1]["status"], "abandoned")
+        self.assertEqual(parsed["subtasks"][2]["status"], "pending")
+
     def test_runtime_can_use_llm_prepare_without_tools(self):
         provider = MockModelProvider(
             scripted_outputs=[

@@ -176,6 +176,13 @@ prepare phase 当前负责：
 
 因此现在的 prepare 不只是知道“有没有 active todo”，还知道“当前 todo 已做到哪里”。
 
+当 `resume_from_waiting=True` 且 active todo 存在时，prepare 还会额外产出：
+
+1. `abandon_subtasks`
+2. `abandon_reason`
+
+用于在继续追加新计划前，先把旧计划中未完成的 subtask 收束为 `abandoned`。
+
 ### Prepare 的两条实现路径
 
 当前有两条 prepare 路径：
@@ -199,6 +206,8 @@ prepare phase 当前负责：
 - `active_todo_summary`
 - `current_state_scan`
 - `current_state_summary`
+- `abandon_subtasks`
+- `abandon_reason`
 - `notes`
 - `recommended_plan_task_args`
 
@@ -219,7 +228,8 @@ prepare 完成后，Runtime 会向两个方向输出结果：
 4. 拆分理由
 5. 计划摘要
 6. 当前现状（仅 active todo 存在时）
-7. 计划明细
+7. 旧计划处理（仅澄清恢复时）
+8. 计划明细
 
 ## 5.3 Prepare Auto Apply
 
@@ -235,6 +245,12 @@ prepare 完成后，Runtime 会向两个方向输出结果：
 
 3. `should_use_todo=True` 且有 active todo
    - `plan_task` 走 `update`
+
+若本轮是澄清恢复，且 prepare 产出了 `abandon_subtasks`：
+
+1. Runtime 会先内部调用 `update_task_status(..., status="abandoned")`
+2. 把旧计划中的未完成 subtask 标记为 `abandoned`
+3. 再执行新的 `plan_task(update)`
 
 这里不要求模型自己再决定 create/update，Runtime 会直接把 `active_todo_id` 带进去。
 
