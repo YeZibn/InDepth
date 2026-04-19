@@ -3,6 +3,7 @@ from app.core.memory import SQLiteMemoryStore, build_context_compressor
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
+from app.core.runtime.task_token_store import TaskTokenStore
 from app.core.skills import build_skills_manager
 from app.core.tools.adapters import build_default_registry, register_tool_functions
 
@@ -45,6 +46,7 @@ def create_runtime(
     tool_registry = build_default_registry()
     skills_manager = build_skills_manager(skill_paths or [], validate=False)
     skill_prompt = skills_manager.get_system_prompt_snippet()
+    task_token_store = TaskTokenStore()
     if skills_manager.get_skill_names():
         register_tool_functions(tool_registry, skills_manager.get_tools())
     return AgentRuntime(
@@ -64,9 +66,11 @@ def create_runtime(
             event_summarizer_kind=compression_config.event_summarizer_kind,
             event_summarizer_max_tokens=compression_config.event_summarizer_max_tokens,
             event_summarizer_model_provider=model_provider,
+            task_token_store=task_token_store,
         ),
         skill_prompt=skill_prompt,
         generation_config=generation_config,
         enable_llm_judge=enable_llm_judge,
         compression_config=compression_config,
+        task_token_store=task_token_store,
     )

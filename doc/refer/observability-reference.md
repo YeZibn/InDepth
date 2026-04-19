@@ -240,6 +240,11 @@ class EventRecord:
 
 **写入策略**：memory 事件同时写 JSONL + SQLite，SQLite 异常不阻塞主流程
 
+补充：
+- task token ledger 不走 `emit_event` 的独立事件类型，而是落盘到 `db/task_token_ledger.db`
+- `model_request_started` 提供 request 级 token 观测
+- `context_compression_*` 事件提供 `20% live + 25% summary` 的预算观测
+
 ## 5. 指标聚合
 
 ### 5.1 aggregate_task_metrics
@@ -494,24 +499,53 @@ context_compression_started
     payload: {
         trigger,
         mode,
+        step,
         estimated_tokens,
         context_usage_ratio,
+        budget_split_kind,           # live_plus_summary
+        live_keep_ratio,             # 0.20
+        summary_keep_ratio,          # 0.25
+        total_keep_ratio,            # 0.45
+        target_keep_tokens,          # live budget
+        live_budget_tokens,
+        summary_budget_tokens,
+        compaction_budget_total_tokens,
         compression_trigger_window_tokens,
         model_context_window_tokens
     }
 
 context_compression_succeeded
     payload: {
+        trigger,
+        mode,
+        applied,
+        reason,
         before_messages,
         after_messages,
-        dropped_messages
+        dropped_messages,
+        budget_split_kind,
+        live_keep_ratio,
+        summary_keep_ratio,
+        total_keep_ratio,
+        target_keep_tokens,
+        live_budget_tokens,
+        summary_budget_tokens,
+        compaction_budget_total_tokens,
+        actual_kept_tokens_est,
+        summary_tokens_est,
+        trim_strategy,               # token_budget / tool_chain_replace / ...
+        cut_adjustment_reason,       # step_budget / turn_budget / min_keep_guard / ...
+        compressor_kind_requested,
+        compressor_kind_applied,
+        compressor_fallback_used,
+        compressor_failure_reason
     }
 
 context_compression_failed
-    payload: {error}
+    payload: {error, trigger, mode, budget_split_kind, live_budget_tokens, summary_budget_tokens}
 
 context_consistency_check_failed
-    payload: {reason}
+    payload: {result, trigger, mode, budget_split_kind, live_budget_tokens, summary_budget_tokens}
 ```
 
 ## 9. 测试映射

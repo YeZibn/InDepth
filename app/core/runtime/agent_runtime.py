@@ -20,9 +20,10 @@ from app.core.runtime.runtime_utils import (
 )
 from app.core.runtime.token_counter import (
     build_request_token_metrics,
-    count_chat_input_tokens,
+    count_chat_messages_tokens,
     resolve_request_model_id,
 )
+from app.core.runtime.task_token_store import TaskTokenStore
 from app.core.runtime.system_memory_lifecycle import (
     extract_title_topic,
     finalize_task_memory,
@@ -178,6 +179,7 @@ class AgentRuntime:
         system_memory_store: Optional[SystemMemoryStore] = None,
         compression_config: Optional[RuntimeCompressionConfig] = None,
         user_preference_config: Optional[RuntimeUserPreferenceConfig] = None,
+        task_token_store: Optional[TaskTokenStore] = None,
     ):
         self.model_provider = model_provider
         self.tool_registry = tool_registry
@@ -196,6 +198,12 @@ class AgentRuntime:
         self.system_memory_store = system_memory_store
         self.compression_config = compression_config or load_runtime_compression_config()
         self.user_preference_config = user_preference_config or load_runtime_user_preference_config()
+        self.task_token_store = task_token_store
+        if self.task_token_store is None:
+            try:
+                self.task_token_store = TaskTokenStore()
+            except Exception:
+                self.task_token_store = None
         self.user_preference_store: Optional[UserPreferenceStore] = None
         if self.user_preference_config.enabled:
             try:
@@ -842,6 +850,7 @@ class AgentRuntime:
         # Runtime 主循环只负责“编排”三件事：请求模型、执行工具、收敛本轮状态。
         # 具体的 todo 恢复、memory 生命周期、verification handoff 都尽量下沉到独立模块。
         for step in range(1, self.max_steps + 1):
+            step_messages = self._build_step_seed_messages(step=step, user_input=user_input)
             tools = self.tool_registry.list_tool_schemas()
             messages = self._maybe_compact_mid_run(
                 step=step,
@@ -869,6 +878,7 @@ class AgentRuntime:
                 event_type="model_request_started",
                 payload=request_metrics,
             )
+            self._record_task_token_metrics(task_id=task_id, run_id=run_id, step=step, metrics=request_metrics)
             self._trace(f"[step {step}] model_request")
             try:
                 model_output = self.model_provider.generate(
@@ -877,6 +887,12 @@ class AgentRuntime:
                     config=self.generation_config,
                 )
             except Exception as e:
+                self._record_task_token_metrics(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step=step,
+                    metrics=self._with_step_input_tokens(request_metrics, step_messages),
+                )
                 final_answer = f"模型调用失败：{str(e)}"
                 task_status = "error"
                 stop_reason = "model_failed"
@@ -916,13 +932,13 @@ class AgentRuntime:
                 # Event compaction trigger is based on current tool_calls batch size.
                 consecutive_tool_calls = len(tool_calls)
                 self._trace(f"[step {step}] execute_tool_calls count={len(tool_calls)}")
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": raw_message.get("content", "") or "",
-                        "tool_calls": tool_calls,
-                    }
-                )
+                assistant_tool_message = {
+                    "role": "assistant",
+                    "content": raw_message.get("content", "") or "",
+                    "tool_calls": tool_calls,
+                }
+                messages.append(assistant_tool_message)
+                step_messages.append(dict(assistant_tool_message))
                 if self.memory_store:
                     self.memory_store.append_message(
                         task_id,
@@ -935,14 +951,31 @@ class AgentRuntime:
                 tool_outcome = self._handle_native_tool_calls(tool_calls, messages, task_id, run_id, str(step))
                 last_tool_failures = tool_outcome.get("failures", [])
                 last_tool_executions = tool_outcome.get("executions", [])
+                batch_messages = tool_outcome.get("appended_messages", [])
+                if isinstance(batch_messages, list):
+                    step_messages.extend([dict(item) for item in batch_messages if isinstance(item, dict)])
+                self._record_task_token_metrics(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step=step,
+                    metrics=self._with_step_input_tokens(request_metrics, step_messages),
+                )
                 continue
             consecutive_tool_calls = 0
 
             if finish_reason == "stop":
-                messages.append({"role": "assistant", "content": content})
+                assistant_message = {"role": "assistant", "content": content}
+                messages.append(assistant_message)
+                step_messages.append(dict(assistant_message))
                 if self.memory_store:
                     self.memory_store.append_message(task_id, "assistant", content, run_id=run_id, step_id=str(step))
                     final_answer_written = True
+                self._record_task_token_metrics(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step=step,
+                    metrics=self._with_step_input_tokens(request_metrics, step_messages),
+                )
                 # stop 分支既可能是正常完成，也可能是“等待用户补充信息”或失败兜底。
                 # 这些收敛规则统一放在 stop policy，避免主循环继续堆分支细节。
                 stop_outcome = resolve_stop_finish_reason(
@@ -966,10 +999,18 @@ class AgentRuntime:
                 self._trace(f"[step {step}] completed finish_reason=stop final={self._preview(final_answer)}")
                 break
 
-            messages.append({"role": "assistant", "content": content})
+            assistant_message = {"role": "assistant", "content": content}
+            messages.append(assistant_message)
+            step_messages.append(dict(assistant_message))
             if self.memory_store:
                 self.memory_store.append_message(task_id, "assistant", content, run_id=run_id, step_id=str(step))
                 final_answer_written = True
+            self._record_task_token_metrics(
+                task_id=task_id,
+                run_id=run_id,
+                step=step,
+                metrics=self._with_step_input_tokens(request_metrics, step_messages),
+            )
 
             # 对于非 stop 的 finish_reason，这里统一做“失败收敛”或“fallback 内容收敛”。
             # 主循环只负责接收 policy 的结果，而不再直接维护每一种停止条件的细节。
@@ -1600,12 +1641,51 @@ class AgentRuntime:
             max_output_tokens=max_output_tokens,
         )
 
-    def _estimate_context_tokens(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> int:
-        return count_chat_input_tokens(
-            messages=messages,
-            tools=tools,
+    def _record_task_token_metrics(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        step: int,
+        metrics: Dict[str, Any],
+    ) -> None:
+        if self.task_token_store is None:
+            return
+        try:
+            self.task_token_store.record_step_metrics(
+                task_id=task_id,
+                run_id=run_id,
+                step=step,
+                metrics=metrics,
+            )
+        except Exception as e:
+            self._trace(f"[runtime] task_token_store_failed step={step} error={str(e)}")
+
+    def _build_step_seed_messages(self, step: int, user_input: str) -> List[Dict[str, Any]]:
+        if int(step or 0) != 1:
+            return []
+        return [{"role": "user", "content": user_input}]
+
+    def _count_step_input_tokens(self, step_messages: List[Dict[str, Any]]) -> int:
+        if not step_messages:
+            return 0
+        return count_chat_messages_tokens(
+            messages=step_messages,
             model=self._resolve_request_model_id(),
+            include_reply_primer=False,
         )
+
+    def _with_step_input_tokens(
+        self,
+        metrics: Dict[str, Any],
+        step_messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = dict(metrics)
+        payload["step_input_tokens"] = self._count_step_input_tokens(step_messages)
+        return payload
+
+    def _estimate_context_tokens(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> int:
+        return count_chat_messages_tokens(messages=messages, model=self._resolve_request_model_id())
 
     def _estimate_context_usage(self, estimated_tokens: int) -> float:
         return estimate_context_usage(

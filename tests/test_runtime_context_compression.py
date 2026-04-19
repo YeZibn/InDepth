@@ -14,7 +14,9 @@ from app.core.memory.sqlite_memory_store import SQLiteMemoryStore
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.runtime.runtime_compaction_policy import finalize_memory_compaction
+from app.core.runtime.task_token_store import TaskTokenStore
 from app.core.tools.registry import ToolRegistry, ToolSpec
+from app.core.runtime.runtime_compaction_policy import maybe_compact_mid_run
 
 
 class _InMemoryStore:
@@ -79,6 +81,18 @@ class _InMemoryStore:
         self.compact_final_calls += 1
         return {"success": True, "applied": False}
 
+    def build_compaction_observability_payload(self, mode: str, token_budget: int | None = None) -> Dict[str, Any]:
+        return {
+            "budget_split_kind": "live_plus_summary",
+            "live_keep_ratio": 0.20,
+            "summary_keep_ratio": 0.25,
+            "total_keep_ratio": 0.45,
+            "target_keep_tokens": 24,
+            "live_budget_tokens": 24,
+            "summary_budget_tokens": 30,
+            "compaction_budget_total_tokens": 54,
+        }
+
 
 class RuntimeContextCompressionTests(unittest.TestCase):
     def test_runtime_compression_config_loads_dual_window_defaults(self):
@@ -87,6 +101,8 @@ class RuntimeContextCompressionTests(unittest.TestCase):
         self.assertEqual(config.model_context_window_tokens, 160000)
         self.assertEqual(config.compression_trigger_window_tokens, 120000)
         self.assertEqual(config.context_window_tokens, 120000)
+        self.assertEqual(config.target_keep_ratio_midrun, 0.45)
+        self.assertEqual(config.target_keep_ratio_finalize, 0.45)
         self.assertFalse(config.enable_finalize_compaction)
 
     def test_runtime_compression_config_falls_back_to_legacy_context_window(self):
@@ -577,6 +593,112 @@ class RuntimeContextCompressionTests(unittest.TestCase):
             self.assertIn("turn2", rows[0][1])
             self.assertIn("turn4 latest", rows[-2][1])
 
+    def test_compact_final_prefers_step_budget_when_step_tokens_available(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_step_budget.db")
+            token_db_path = str(Path(td) / "task_token_ledger.db")
+            token_store = TaskTokenStore(db_file=token_db_path)
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=120,
+                target_keep_ratio_finalize=0.45,
+                min_keep_turns=1,
+                task_token_store=token_store,
+            )
+            task_id = "step_budget_task"
+            run_id = "run_step_budget"
+
+            for step in range(1, 5):
+                token_store.record_step_metrics(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step=step,
+                    metrics={
+                        "model": "gpt-4-turbo",
+                        "encoding": "cl100k_base",
+                        "token_counter_kind": "tiktoken",
+                        "messages_tokens": 100,
+                        "tools_tokens": 0,
+                        "step_input_tokens": 8,
+                        "input_tokens": 100,
+                        "reserved_output_tokens": 0,
+                        "total_window_claim_tokens": 100,
+                        "context_usage_ratio": 0.1,
+                        "compression_trigger_window_tokens": 120,
+                        "model_context_window_tokens": 160000,
+                    },
+                )
+                store.append_message(
+                    task_id,
+                    "user",
+                    f"step{step} user " + ("x " * 80),
+                    run_id=run_id,
+                    step_id=str(step),
+                )
+                store.append_message(
+                    task_id,
+                    "assistant",
+                    f"step{step} assistant " + ("y " * 80),
+                    run_id=run_id,
+                    step_id=str(step),
+                )
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+            self.assertEqual(result.get("cut_adjustment_reason"), "step_budget")
+            self.assertEqual(result.get("target_keep_tokens"), 24)
+            self.assertEqual(result.get("summary_budget_tokens"), 30)
+
+            with store._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT role, content, run_id, step_id
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (task_id,),
+                ).fetchall()
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(str(rows[0][3]), "2")
+            self.assertEqual(str(rows[-1][3]), "4")
+
+    def test_compact_final_bounds_summary_to_summary_budget(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "runtime_memory_summary_budget.db")
+            store = SQLiteMemoryStore(
+                db_file=db_path,
+                summarize_threshold=3,
+                context_window_tokens=1200,
+                target_keep_ratio_finalize=0.45,
+                min_keep_turns=1,
+            )
+            task_id = "summary_budget_task"
+
+            for idx in range(1, 9):
+                store.append_message(task_id, "system", f"必须遵守审批流程 {idx} " + ("s " * 40))
+                store.append_message(task_id, "user", f"question {idx}? " + ("u " * 40))
+                store.append_message(task_id, "assistant", f"answer {idx} " + ("a " * 40))
+                store.append_message(task_id, "tool", "{\"success\": true, \"payload\": \"" + ("x" * 200) + "\"}")
+
+            result = store.compact_final(task_id)
+            self.assertTrue(bool(result.get("success")))
+            self.assertTrue(bool(result.get("applied")))
+
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT summary_json FROM summaries WHERE conversation_id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            summary = json.loads(row[0])
+            self.assertLessEqual(
+                store._estimate_summary_tokens(summary),
+                int(result.get("summary_budget_tokens") or 0),
+            )
+
     def test_event_compaction_replaces_tool_chain_without_summary(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "runtime_memory_event_replace.db")
@@ -904,6 +1026,67 @@ class RuntimeContextCompressionTests(unittest.TestCase):
         self.assertEqual(memory_store.rows[0]["run_id"], "run_compact")
         self.assertEqual(memory_store.rows[0]["step_id"], "1")
         self.assertTrue(any(row["role"] == "tool" and row["step_id"] == "1" for row in memory_store.rows))
+
+    def test_maybe_compact_mid_run_emits_budget_rich_observability_payloads(self):
+        memory_store = _InMemoryStore()
+        events: List[Dict[str, Any]] = []
+
+        def _fake_emit_event(**kwargs):
+            events.append(kwargs)
+            return kwargs
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        ]
+
+        out = maybe_compact_mid_run(
+            step=2,
+            task_id="task_obs_compact",
+            run_id="run_obs_compact",
+            messages=messages,
+            tools=[],
+            consecutive_tool_calls=10,
+            memory_store=memory_store,
+            compression_config=RuntimeCompressionConfig(
+                enabled_mid_run=True,
+                round_interval=4,
+                midrun_token_ratio=0.99,
+                model_context_window_tokens=160000,
+                compression_trigger_window_tokens=120000,
+                keep_recent_turns=8,
+                tool_burst_threshold=1,
+                consistency_guard=True,
+                enable_finalize_compaction=False,
+                target_keep_ratio_midrun=0.45,
+                target_keep_ratio_finalize=0.45,
+                min_keep_turns=3,
+                compressor_kind="auto",
+                compressor_llm_max_tokens=1200,
+                event_summarizer_kind="auto",
+                event_summarizer_max_tokens=280,
+            ),
+            estimate_context_tokens=lambda _messages, _tools: 1000,
+            estimate_context_usage=lambda estimated: estimated / 120000,
+            build_system_prompt=lambda: "sys",
+            emit_event=_fake_emit_event,
+        )
+
+        self.assertEqual(out, messages)
+        start_event = next(e for e in events if e.get("event_type") == "context_compression_started")
+        start_payload = start_event.get("payload", {})
+        self.assertEqual(start_payload.get("budget_split_kind"), "live_plus_summary")
+        self.assertEqual(start_payload.get("live_budget_tokens"), 24)
+        self.assertEqual(start_payload.get("summary_budget_tokens"), 30)
+        self.assertEqual(start_payload.get("compaction_budget_total_tokens"), 54)
+
+        success_event = next(e for e in events if e.get("event_type") == "context_compression_succeeded")
+        success_payload = success_event.get("payload", {})
+        self.assertEqual(success_payload.get("budget_split_kind"), "live_plus_summary")
+        self.assertEqual(success_payload.get("target_keep_tokens"), 24)
+        self.assertEqual(success_payload.get("summary_budget_tokens"), 30)
+        self.assertEqual(success_payload.get("applied"), False)
 
     def test_consistency_guard_toggle_controls_blocking(self):
         with tempfile.TemporaryDirectory() as td:

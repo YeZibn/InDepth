@@ -9,7 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.memory.context_compressor import ContextCompressor
 from app.core.memory.llm_tool_chain_summarizer import summarize_tool_chain_payload
 from app.core.model.base import ModelProvider
-from app.core.runtime.token_counter import count_chat_messages_tokens, resolve_request_model_id
+from app.core.runtime.task_token_store import TaskTokenStore
+from app.core.runtime.token_counter import (
+    count_chat_message_tokens,
+    count_chat_messages_tokens,
+    resolve_request_model_id,
+)
 
 
 @dataclass
@@ -32,6 +37,16 @@ class _ToolChainUnit:
     is_stateful: bool
 
 
+@dataclass
+class _CompactionUnit:
+    start_idx: int
+    end_idx: int
+    token_count: int
+    kind: str
+    run_id: str = ""
+    step_id: str = ""
+
+
 class _ManagedSQLiteConnection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         try:
@@ -41,6 +56,9 @@ class _ManagedSQLiteConnection(sqlite3.Connection):
 
 
 class SQLiteMemoryStore:
+    LIVE_KEEP_RATIO = 0.20
+    SUMMARY_KEEP_RATIO = 0.25
+
     def __init__(
         self,
         db_file: str = "db/runtime_memory.db",
@@ -48,8 +66,8 @@ class SQLiteMemoryStore:
         summarize_threshold: int = 15,
         consistency_guard: bool = True,
         context_window_tokens: int = 16000,
-        target_keep_ratio_midrun: float = 0.40,
-        target_keep_ratio_finalize: float = 0.40,
+        target_keep_ratio_midrun: float = 0.45,
+        target_keep_ratio_finalize: float = 0.45,
         min_keep_turns: int = 3,
         keep_recent_event_tool_pairs: int = 1,
         event_stateful_tools: Optional[List[str]] = None,
@@ -57,6 +75,7 @@ class SQLiteMemoryStore:
         event_summarizer_kind: str = "rule",
         event_summarizer_max_tokens: int = 280,
         event_summarizer_model_provider: Optional[ModelProvider] = None,
+        task_token_store: Optional[TaskTokenStore] = None,
     ):
         self.db_file = db_file
         self.keep_recent = keep_recent
@@ -82,6 +101,12 @@ class SQLiteMemoryStore:
         self.event_summarizer_kind = str(event_summarizer_kind or "rule").strip().lower() or "rule"
         self.event_summarizer_max_tokens = max(int(event_summarizer_max_tokens), 120)
         self.event_summarizer_model_provider = event_summarizer_model_provider
+        self.task_token_store = task_token_store
+        if self.task_token_store is None:
+            try:
+                self.task_token_store = TaskTokenStore()
+            except Exception:
+                self.task_token_store = None
         self.token_count_model_id = resolve_request_model_id(
             model_provider=event_summarizer_model_provider,
             default_model="gpt-4-turbo",
@@ -300,6 +325,24 @@ class SQLiteMemoryStore:
             token_budget=token_budget,
         )
 
+    def build_compaction_observability_payload(
+        self,
+        mode: str,
+        token_budget: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        target_keep_tokens = self._resolve_target_keep_tokens(mode=mode, token_budget=token_budget)
+        summary_budget_tokens = self._resolve_summary_budget_tokens(mode=mode)
+        return {
+            "budget_split_kind": "live_plus_summary",
+            "live_keep_ratio": self.LIVE_KEEP_RATIO,
+            "summary_keep_ratio": self.SUMMARY_KEEP_RATIO,
+            "total_keep_ratio": round(self.LIVE_KEEP_RATIO + self.SUMMARY_KEEP_RATIO, 4),
+            "target_keep_tokens": target_keep_tokens,
+            "live_budget_tokens": target_keep_tokens,
+            "summary_budget_tokens": summary_budget_tokens,
+            "compaction_budget_total_tokens": target_keep_tokens + summary_budget_tokens,
+        }
+
     def _compact_impl(
         self,
         conversation_id: str,
@@ -316,8 +359,10 @@ class SQLiteMemoryStore:
                 return {"success": True, "applied": False, "reason": "below_threshold", "total": total}
 
             target_keep_tokens = self._resolve_target_keep_tokens(mode=mode, token_budget=token_budget)
+            summary_budget_tokens = self._resolve_summary_budget_tokens(mode=mode)
             trim_strategy = "token_budget"
             cut_idx, cut_adjustment_reason = self._compute_token_budget_cut_index(
+                conversation_id=conversation_id,
                 rows=all_rows,
                 target_keep_tokens=target_keep_tokens,
                 min_keep_turns=self.min_keep_turns,
@@ -361,6 +406,7 @@ class SQLiteMemoryStore:
                 after_messages=total - len(old_rows),
                 dropped_messages=len(old_rows),
             )
+            merged_json = self._shrink_summary_to_budget(merged_json, summary_budget_tokens)
             if self.consistency_guard and not self.compressor.validate_consistency(existing_json, merged_json):
                 return {"success": False, "applied": False, "reason": "consistency_check_failed", "total": total}
 
@@ -418,7 +464,9 @@ class SQLiteMemoryStore:
                     ((merged_json.get("compression_meta") or {}).get("immutable_hits_count") or 0)
                 ),
                 "target_keep_tokens": target_keep_tokens,
+                "summary_budget_tokens": summary_budget_tokens,
                 "actual_kept_tokens_est": actual_kept_tokens,
+                "summary_tokens_est": self._estimate_summary_tokens(merged_json),
                 "trim_strategy": trim_strategy,
                 "cut_adjustment_reason": cut_adjustment_reason,
                 "compressor_kind_requested": str(
@@ -511,31 +559,42 @@ class SQLiteMemoryStore:
                 return max(int(token_budget), 0)
             except (TypeError, ValueError):
                 return 0
-        ratio = self.target_keep_ratio_midrun
+        configured_ratio = self.target_keep_ratio_midrun
         if mode == "finalize":
-            ratio = self.target_keep_ratio_finalize
-        return max(int(self.context_window_tokens * ratio), 0)
+            configured_ratio = self.target_keep_ratio_finalize
+        live_ratio = min(configured_ratio, self.LIVE_KEEP_RATIO)
+        return max(int(self.context_window_tokens * live_ratio), 0)
+
+    def _resolve_summary_budget_tokens(self, mode: str) -> int:
+        configured_ratio = self.target_keep_ratio_midrun
+        if mode == "finalize":
+            configured_ratio = self.target_keep_ratio_finalize
+        live_ratio = min(configured_ratio, self.LIVE_KEEP_RATIO)
+        summary_ratio = min(max(configured_ratio - live_ratio, 0.0), self.SUMMARY_KEEP_RATIO)
+        return max(int(self.context_window_tokens * summary_ratio), 0)
 
     def _compute_token_budget_cut_index(
         self,
+        conversation_id: str,
         rows: List[_MessageRow],
         target_keep_tokens: int,
         min_keep_turns: int,
     ) -> Tuple[int, str]:
         if target_keep_tokens <= 0 or not rows:
             return 0, "budget_unavailable"
-        turn_ranges = self._split_turn_ranges(rows)
-        if not turn_ranges:
+        units = self._build_compaction_units(conversation_id=conversation_id, rows=rows)
+        if not units:
             return 0, "empty_turns"
-        if len(turn_ranges) <= max(min_keep_turns, 1):
+        if len(units) <= max(min_keep_turns, 1):
             return 0, "below_min_keep_turns"
 
         keep_from = len(rows)
         kept_tokens = 0
         kept_turns = 0
-        for idx in range(len(turn_ranges) - 1, -1, -1):
-            start, end = turn_ranges[idx]
-            turn_tokens = self._estimate_rows_tokens(rows[start:end])
+        for idx in range(len(units) - 1, -1, -1):
+            unit = units[idx]
+            start, end = unit.start_idx, unit.end_idx
+            turn_tokens = unit.token_count
             if keep_from == len(rows):
                 keep_from = start
                 kept_tokens = turn_tokens
@@ -550,13 +609,79 @@ class SQLiteMemoryStore:
         cut_adjustment_reason = ""
         min_keep = max(min_keep_turns, 1)
         if kept_turns < min_keep:
-            keep_from = turn_ranges[-min_keep][0]
+            keep_from = units[-min_keep].start_idx
             cut_adjustment_reason = "min_keep_guard"
+
+        if any(unit.kind == "step" for unit in units):
+            cut_adjustment_reason = cut_adjustment_reason or "step_budget"
+        else:
+            cut_adjustment_reason = cut_adjustment_reason or "turn_budget"
 
         keep_from, pair_adjustment = self._adjust_cut_for_tool_pairing(rows, keep_from)
         if pair_adjustment:
             cut_adjustment_reason = pair_adjustment
         return keep_from, cut_adjustment_reason
+
+    def _build_compaction_units(self, conversation_id: str, rows: List[_MessageRow]) -> List[_CompactionUnit]:
+        step_token_map = self._get_step_input_token_map(conversation_id)
+        units = self._split_step_units(rows=rows, step_token_map=step_token_map)
+        if units:
+            return units
+        turn_ranges = self._split_turn_ranges(rows)
+        return [
+            _CompactionUnit(
+                start_idx=start,
+                end_idx=end,
+                token_count=self._estimate_rows_tokens(rows[start:end]),
+                kind="turn",
+            )
+            for start, end in turn_ranges
+        ]
+
+    def _get_step_input_token_map(self, conversation_id: str) -> Dict[tuple[str, str], int]:
+        if self.task_token_store is None:
+            return {}
+        try:
+            return self.task_token_store.get_step_input_token_map(conversation_id)
+        except Exception:
+            return {}
+
+    def _split_step_units(
+        self,
+        rows: List[_MessageRow],
+        step_token_map: Dict[tuple[str, str], int],
+    ) -> List[_CompactionUnit]:
+        if not rows:
+            return []
+        units: List[_CompactionUnit] = []
+        idx = 0
+        while idx < len(rows):
+            row = rows[idx]
+            run_id = str(row.run_id or "").strip()
+            step_id = str(row.step_id or "").strip()
+            if not run_id or not step_id:
+                return []
+            start = idx
+            idx += 1
+            while idx < len(rows):
+                probe = rows[idx]
+                if str(probe.run_id or "").strip() != run_id or str(probe.step_id or "").strip() != step_id:
+                    break
+                idx += 1
+            token_count = int(step_token_map.get((run_id, step_id), 0) or 0)
+            if token_count <= 0:
+                token_count = self._estimate_rows_tokens(rows[start:idx])
+            units.append(
+                _CompactionUnit(
+                    start_idx=start,
+                    end_idx=idx,
+                    token_count=token_count,
+                    kind="step",
+                    run_id=run_id,
+                    step_id=step_id,
+                )
+            )
+        return units
 
     def _split_turn_ranges(self, rows: List[_MessageRow]) -> List[Tuple[int, int]]:
         if not rows:
@@ -633,6 +758,100 @@ class SQLiteMemoryStore:
             tool_calls_json=tool_calls_json,
         )
         return count_chat_messages_tokens(messages=[message], model=self.token_count_model_id)
+
+    def _estimate_summary_tokens(self, summary: Dict[str, Any]) -> int:
+        prompt = self.compressor.render_summary_prompt(summary)
+        return count_chat_message_tokens(
+            message={"role": "system", "content": prompt},
+            model=self.token_count_model_id,
+        )
+
+    def _shrink_summary_to_budget(self, summary: Dict[str, Any], budget_tokens: int) -> Dict[str, Any]:
+        if budget_tokens <= 0 or not isinstance(summary, dict):
+            return summary
+        current = json.loads(json.dumps(summary, ensure_ascii=False))
+        while self._estimate_summary_tokens(current) > budget_tokens:
+            changed = False
+            open_questions = current.get("open_questions")
+            if isinstance(open_questions, list) and len(open_questions) > 3:
+                del open_questions[0]
+                changed = True
+            elif isinstance(current.get("artifacts"), list) and len(current["artifacts"]) > 5:
+                del current["artifacts"][0]
+                changed = True
+            elif isinstance(current.get("decisions"), list) and len(current["decisions"]) > 5:
+                del current["decisions"][0]
+                changed = True
+            elif isinstance(current.get("constraints"), list):
+                constraints = current["constraints"]
+                removable_idx = next(
+                    (idx for idx, item in enumerate(constraints) if isinstance(item, dict) and not bool(item.get("immutable"))),
+                    -1,
+                )
+                if removable_idx >= 0 and len(constraints) > 3:
+                    del constraints[removable_idx]
+                    changed = True
+            if changed:
+                continue
+
+            for field, limit in [
+                ("constraints", ("rule", 20)),
+                ("decisions", ("what", 20)),
+                ("artifacts", ("summary", 20)),
+                ("open_questions", ("question", 20)),
+            ]:
+                items = current.get(field)
+                if not isinstance(items, list):
+                    continue
+                text_key, min_len = limit
+                reduced = False
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_text = str(item.get(text_key, "") or "").strip()
+                    if len(raw_text) <= min_len:
+                        continue
+                    item[text_key] = raw_text[: max(len(raw_text) // 2, min_len)]
+                    reduced = True
+                if reduced:
+                    changed = True
+                    break
+            if changed:
+                continue
+
+            for field, min_items in [
+                ("open_questions", 1),
+                ("artifacts", 1),
+                ("decisions", 1),
+                ("constraints", 1),
+            ]:
+                items = current.get(field)
+                if not isinstance(items, list) or len(items) <= min_items:
+                    continue
+                del items[0]
+                changed = True
+                break
+            if changed:
+                continue
+
+            task_state = current.get("task_state")
+            if not isinstance(task_state, dict):
+                break
+            progress = str(task_state.get("progress", "") or "").strip()
+            next_step = str(task_state.get("next_step", "") or "").strip()
+            goal = str(task_state.get("goal", "") or "").strip()
+            if len(progress) > 40:
+                task_state["progress"] = progress[: max(len(progress) // 2, 40)]
+                changed = True
+            elif len(next_step) > 30:
+                task_state["next_step"] = next_step[: max(len(next_step) // 2, 30)]
+                changed = True
+            elif len(goal) > 30:
+                task_state["goal"] = goal[: max(len(goal) // 2, 30)]
+                changed = True
+            if not changed:
+                break
+        return current
 
     def _compact_event_tool_chain(self, conversation_id: str, mode: str) -> Dict[str, Any]:
         with closing(self._connect()) as conn:

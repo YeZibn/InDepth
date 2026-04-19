@@ -4,6 +4,22 @@ from app.config import RuntimeCompressionConfig
 from app.core.memory.base import MemoryStore
 
 
+def _build_compaction_observability_payload(
+    memory_store: MemoryStore | None,
+    mode: str,
+) -> Dict[str, Any]:
+    if memory_store is None:
+        return {}
+    builder = getattr(memory_store, "build_compaction_observability_payload", None)
+    if not callable(builder):
+        return {}
+    try:
+        payload = builder(mode=mode)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def maybe_compact_mid_run(
     step: int,
     task_id: str,
@@ -39,6 +55,7 @@ def maybe_compact_mid_run(
 
     if not trigger:
         return messages
+    budget_payload = _build_compaction_observability_payload(memory_store=memory_store, mode=mode)
 
     emit_event(
         task_id=task_id,
@@ -54,6 +71,7 @@ def maybe_compact_mid_run(
             "context_usage_ratio": round(usage, 4),
             "compression_trigger_window_tokens": compression_config.compression_trigger_window_tokens,
             "model_context_window_tokens": compression_config.model_context_window_tokens,
+            **budget_payload,
         },
     )
     try:
@@ -64,10 +82,10 @@ def maybe_compact_mid_run(
             run_id=run_id,
             actor="main",
             role="general",
-            event_type="context_compression_failed",
-            status="error",
-            payload={"error": str(e), "trigger": trigger, "mode": mode},
-        )
+                event_type="context_compression_failed",
+                status="error",
+                payload={"error": str(e), "trigger": trigger, "mode": mode, **budget_payload},
+            )
         return messages
 
     if not isinstance(result, dict):
@@ -83,22 +101,43 @@ def maybe_compact_mid_run(
             role="general",
             event_type=event_type,
             status="error",
-            payload={"result": result, "trigger": trigger, "mode": mode},
+            payload={"result": result, "trigger": trigger, "mode": mode, **budget_payload},
         )
         return messages
+    success_payload = {
+        "trigger": trigger,
+        "mode": mode,
+        "result": result,
+        "compression_trigger_window_tokens": compression_config.compression_trigger_window_tokens,
+        "model_context_window_tokens": compression_config.model_context_window_tokens,
+        **budget_payload,
+    }
+    for key in [
+        "applied",
+        "reason",
+        "before_messages",
+        "after_messages",
+        "dropped_messages",
+        "target_keep_tokens",
+        "summary_budget_tokens",
+        "actual_kept_tokens_est",
+        "summary_tokens_est",
+        "trim_strategy",
+        "cut_adjustment_reason",
+        "compressor_kind_requested",
+        "compressor_kind_applied",
+        "compressor_fallback_used",
+        "compressor_failure_reason",
+    ]:
+        if key in result:
+            success_payload[key] = result.get(key)
     emit_event(
         task_id=task_id,
         run_id=run_id,
         actor="main",
         role="general",
         event_type="context_compression_succeeded",
-        payload={
-            "trigger": trigger,
-            "mode": mode,
-            "result": result,
-            "compression_trigger_window_tokens": compression_config.compression_trigger_window_tokens,
-            "model_context_window_tokens": compression_config.model_context_window_tokens,
-        },
+        payload=success_payload,
     )
 
     if not result.get("applied"):

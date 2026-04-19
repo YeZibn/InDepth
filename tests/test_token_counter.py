@@ -8,7 +8,9 @@ from app.core.model.base import ModelOutput
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.runtime.token_counter import (
+    build_request_token_metrics,
     count_chat_input_tokens,
+    count_chat_message_tokens,
     count_chat_messages_tokens,
 )
 from app.core.tools.registry import ToolRegistry
@@ -44,6 +46,34 @@ class TokenCounterTests(unittest.TestCase):
             message_tokens = count_chat_messages_tokens(messages=messages, model="gpt-4o-mini")
             total_tokens = count_chat_input_tokens(messages=messages, tools=tools, model="gpt-4o-mini")
         self.assertGreater(total_tokens, message_tokens)
+
+    def test_build_request_token_metrics_excludes_tools_from_input_tokens(self):
+        fake_module = _FakeTiktoken()
+        messages = [{"role": "user", "content": "hello"}]
+        tools = [{"name": "read_file", "parameters": {"type": "object"}}]
+        with patch.dict(sys.modules, {"tiktoken": fake_module}):
+            metrics = build_request_token_metrics(
+                messages=messages,
+                tools=tools,
+                model="gpt-4o-mini",
+                max_output_tokens=20,
+            )
+        self.assertEqual(metrics["input_tokens"], metrics["messages_tokens"])
+        self.assertEqual(
+            metrics["total_window_claim_tokens"],
+            metrics["messages_tokens"] + metrics["tools_tokens"] + metrics["reserved_output_tokens"],
+        )
+
+    def test_count_chat_message_tokens_is_additive_without_reply_primer(self):
+        fake_module = _FakeTiktoken()
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        ]
+        with patch.dict(sys.modules, {"tiktoken": fake_module}):
+            per_message_total = sum(count_chat_message_tokens(message=message, model="gpt-4o-mini") for message in messages)
+            full_total = count_chat_messages_tokens(messages=messages, model="gpt-4o-mini")
+        self.assertEqual(full_total, per_message_total + 3)
 
     def test_count_chat_messages_tokens_fails_fast_for_unsupported_model(self):
         fake_module = _FakeTiktoken()
@@ -100,7 +130,8 @@ class TokenCounterTests(unittest.TestCase):
                     "token_counter_kind": "tiktoken",
                     "messages_tokens": 10,
                     "tools_tokens": 5,
-                    "input_tokens": 15,
+                    "step_input_tokens": 4,
+                    "input_tokens": 10,
                     "reserved_output_tokens": 0,
                     "total_window_claim_tokens": 15,
                 },
@@ -114,7 +145,7 @@ class TokenCounterTests(unittest.TestCase):
         self.assertEqual(len(request_events), 1)
         payload = request_events[0].get("payload", {})
         self.assertEqual(payload.get("step"), 1)
-        self.assertEqual(payload.get("input_tokens"), 15)
+        self.assertEqual(payload.get("input_tokens"), 10)
         self.assertEqual(payload.get("tools_tokens"), 5)
 
 

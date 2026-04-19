@@ -1,7 +1,7 @@
 # Runtime Tiktoken Token Estimation 设计稿（V1）
 
 更新时间：2026-04-19  
-状态：V1 设计中（待实现）
+状态：V1 已落地首版
 
 ## 1. 背景与问题
 
@@ -70,18 +70,18 @@ V1 不做：
    - `tools` / function schema
    - 与 prompt 构造直接相关的结构字段
 3. 输出预算 token = `max_tokens` 或等价的生成上限
-4. 总窗口约束 = `input_tokens + reserved_output_tokens <= model_context_window_tokens`
+4. 总窗口约束 = `input_tokens + tools_tokens + reserved_output_tokens <= model_context_window_tokens`
 
 对当前项目的 V1 约定：
 1. midrun 压缩触发仍主要依据输入上下文 token 使用率
-2. 输入上下文 token 采用 `tiktoken` 按 Chat Completions 标准 message / tools 口径计算
+2. 输入上下文 token 采用 `tiktoken` 按 Chat Completions 标准 message 口径计算，`tools` 独立统计
 3. 不再使用自定义 message 文本渲染格式作为主计数依据
 
 V1 纳入计数的内容：
 1. `messages` 全量内容
 2. `tool_calls`
 3. `tool_call_id`
-4. `tools` schema
+4. `tools` schema（独立统计，不并入 `input_tokens`）
 
 V1 暂不纳入独立预算核算但保留双窗口安全带的内容：
 1. provider 内部实现细节带来的额外包装
@@ -119,13 +119,15 @@ V1 暂不纳入独立预算核算但保留双窗口安全带的内容：
 实现原则：
 1. 模块内部统一获取 `tiktoken` encoding。
 2. 计数方法尽量对齐 Chat Completions 标准 message 口径，而不是自行拼接自由文本。
-3. `messages` 与 `tools` 分开计数，再合并为本次请求输入 token。
+3. `messages` 与 `tools` 分开计数。
+4. `input_tokens` 表示 request `messages` token；`tools_tokens` 作为辅助观测字段保留。
 4. 对空值、非法结构显式报错，不做静默吞掉。
 
 建议接口扩展为：
 1. `count_chat_messages_tokens(messages: List[Dict[str, Any]], model: str) -> int`
 2. `count_chat_tools_tokens(tools: List[Dict[str, Any]], model: str) -> int`
 3. `count_chat_input_tokens(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], model: str) -> int`
+4. `build_request_token_metrics(...) -> Dict[str, Any]`
 
 说明：
 1. V1 采用“按 Chat Completions 请求结构计数”的格式。
@@ -151,9 +153,9 @@ V1 暂不纳入独立预算核算但保留双窗口安全带的内容：
 调整建议：
 1. `estimate_context_tokens(...)` 改为调用共享 token counter。
 2. `AgentRuntime` 在每一个 step 的 `model_provider.generate(...)` 之前，先统计本轮真实请求输入 token。
-3. `AgentRuntime._estimate_context_tokens(...)` 改为接收 `messages + tools`，供 midrun compaction 复用。
+3. `AgentRuntime._estimate_context_tokens(...)` 改为复用共享 message counter，供 midrun compaction 复用。
 4. `estimate_context_usage(...)` 保持不变，继续使用 `compression_trigger_window_tokens` 计算占用率。
-5. 调用侧必须把“本轮请求实际会发送的 tools”一并传入 token counter，而不是只数 messages。
+5. 调用侧仍需把“本轮请求实际会发送的 tools”一并传入 token counter，用于 `tools_tokens` 和 `total_window_claim_tokens`。
 
 这样可以做到：
 1. 调用链最小改动
@@ -161,9 +163,10 @@ V1 暂不纳入独立预算核算但保留双窗口安全带的内容：
 3. step 级统计结果可直接进入 observability，用于后续阈值校准
 
 补充：
-1. `maybe_compact_mid_run(...)` 需要从仅接收 `messages` 调整为接收 `messages + tools`。
+1. `maybe_compact_mid_run(...)` 仍保留 `tools` 参数，用于观测当前 request 的完整窗口申领。
 2. 每个 step 都要重新统计，因为 tool schema、历史摘要和最近消息都会动态变化。
-3. `AgentRuntime` 是 step 语义和压缩策略的拥有者，因此统计入口应放在 `AgentRuntime`，而不是 provider。
+3. `AgentRuntime` 需要同时维护 request 级 `input_tokens` 与 step 级 `step_input_tokens`。
+4. `AgentRuntime` 是 step 语义和压缩策略的拥有者，因此统计入口应放在 `AgentRuntime`，而不是 provider。
 
 ### 6.4 SQLite Memory Store 接入点
 

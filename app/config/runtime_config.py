@@ -161,9 +161,9 @@ def load_runtime_compression_config() -> RuntimeCompressionConfig:
         target_keep_ratio_midrun=_env_float_alias(
             "COMPACTION_TARGET_KEEP_RATIO_MIDRUN",
             "COMPACTION_TARGET_KEEP_RATIO_STRONG",
-            0.40,
+            0.45,
         ),
-        target_keep_ratio_finalize=_env_float("COMPACTION_TARGET_KEEP_RATIO_FINALIZE", 0.40),
+        target_keep_ratio_finalize=_env_float("COMPACTION_TARGET_KEEP_RATIO_FINALIZE", 0.45),
         min_keep_turns=_env_int("COMPACTION_MIN_KEEP_TURNS", 3, min_value=1),
         compressor_kind=(os.getenv("COMPACTION_COMPRESSOR_KIND") or "auto").strip().lower() or "auto",
         compressor_llm_max_tokens=_env_int("COMPACTION_COMPRESSOR_LLM_MAX_TOKENS", 1200, min_value=200),

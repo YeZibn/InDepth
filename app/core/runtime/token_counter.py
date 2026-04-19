@@ -77,23 +77,32 @@ def count_text_tokens(text: str, model: str) -> int:
     return len(encoding.encode(text or ""))
 
 
-def count_chat_messages_tokens(messages: List[Dict[str, Any]], model: str) -> int:
+def count_chat_message_tokens(message: Dict[str, Any], model: str) -> int:
     encoding = _get_encoding(model)
     tokens_per_message = 3
     tokens_per_name = 1
-    total = 0
-    for message in messages or []:
-        total += tokens_per_message
-        for key, value in (message or {}).items():
-            if key == "tool_calls" and isinstance(value, list):
-                encoded_value = _stable_json(value)
-            else:
-                encoded_value = _stringify_message_value(value)
-            total += len(encoding.encode(encoded_value))
-            if key == "name":
-                total += tokens_per_name
-    total += 3
+    total = tokens_per_message
+    for key, value in (message or {}).items():
+        if key == "tool_calls" and isinstance(value, list):
+            encoded_value = _stable_json(value)
+        else:
+            encoded_value = _stringify_message_value(value)
+        total += len(encoding.encode(encoded_value))
+        if key == "name":
+            total += tokens_per_name
     return max(total, 1)
+
+
+def count_chat_messages_tokens(
+    messages: List[Dict[str, Any]],
+    model: str,
+    *,
+    include_reply_primer: bool = True,
+) -> int:
+    total = sum(count_chat_message_tokens(message=message, model=model) for message in (messages or []))
+    if include_reply_primer:
+        total += 3
+    return max(total, 1 if include_reply_primer else 0)
 
 
 def count_chat_tools_tokens(tools: List[Dict[str, Any]], model: str) -> int:
@@ -119,7 +128,7 @@ def build_request_token_metrics(
 ) -> Dict[str, Any]:
     messages_tokens = count_chat_messages_tokens(messages=messages, model=model)
     tools_tokens = count_chat_tools_tokens(tools=tools, model=model)
-    input_tokens = messages_tokens + tools_tokens
+    input_tokens = messages_tokens
     reserved_output_tokens = max(int(max_output_tokens or 0), 0)
     return {
         "model": model,
@@ -129,5 +138,5 @@ def build_request_token_metrics(
         "tools_tokens": tools_tokens,
         "input_tokens": input_tokens,
         "reserved_output_tokens": reserved_output_tokens,
-        "total_window_claim_tokens": input_tokens + reserved_output_tokens,
+        "total_window_claim_tokens": input_tokens + tools_tokens + reserved_output_tokens,
     }

@@ -86,7 +86,7 @@ User Input
 │  │                           │                                  │   │
 │  │  2. MemoryStore.get_recent_messages() ──▶ 加载历史消息      │   │
 │  │                           │                                  │   │
-│  │  3. step 级 token 统计（messages + tools）                  │   │
+│  │  3. step 级 token 统计（messages，tools 单独统计）         │   │
 │  │                           │                                  │   │
 │  │  4. model_provider.generate(messages, tools) ──▶ 调用模型   │   │
 │  │                           │                                  │   │
@@ -269,7 +269,7 @@ def run(
 统计时机：
 1. 先完成 `_maybe_compact_mid_run(...)`
 2. 获取当前 `tools = self.tool_registry.list_tool_schemas()`
-3. 基于“即将发送给模型”的 `messages + tools` 计算 token
+3. 基于“即将发送给模型”的 `messages` 计算 `input_tokens`，并单独统计 `tools_tokens`
 4. 发射 `model_request_started`
 5. 再调用 `model_provider.generate(...)`
 
@@ -289,8 +289,9 @@ def run(
 
 计数说明：
 1. 采用 `tiktoken`
-2. 口径为 Chat Completions 输入语义
-3. 与 MemoryStore 的 token budget 裁剪共享同一套底层计数器
+2. `input_tokens` 当前只表示 request `messages` token，`tools_tokens` 单独统计
+3. `step_input_tokens` 不在该事件里，而是写入 task token ledger，用于后续按 step 计算压缩预算
+4. 与 MemoryStore 的 token budget 裁剪共享同一套底层计数器
 2. 优先调用 LLM judge（mini 模型）输出 JSON：
    - `is_clarification_request: bool`
    - `confidence: float(0~1)`
@@ -670,8 +671,8 @@ class RuntimeCompressionConfig:
     tool_burst_threshold: int = 5         # 单次 tool_calls 条目阈值
     consistency_guard: bool = True        # 一致性守护
     enable_finalize_compaction: bool = False
-    target_keep_ratio_midrun: float = 0.40
-    target_keep_ratio_finalize: float = 0.40
+    target_keep_ratio_midrun: float = 0.45
+    target_keep_ratio_finalize: float = 0.45
     min_keep_turns: int = 3
     compressor_kind: str = "auto"
     compressor_llm_max_tokens: int = 1200

@@ -9,6 +9,7 @@ from app.core.memory import SQLiteMemoryStore, build_context_compressor
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
+from app.core.runtime.task_token_store import TaskTokenStore
 from app.core.skills import build_skills_manager
 from app.core.tools.adapters import register_tool_functions
 from app.core.tools.registry import ToolRegistry
@@ -107,6 +108,7 @@ class SubAgent:
             model_provider=model_provider,
             llm_max_tokens=compression_config.compressor_llm_max_tokens,
         )
+        task_token_store = TaskTokenStore()
 
         self.runtime = AgentRuntime(
             model_provider=model_provider,
@@ -125,10 +127,12 @@ class SubAgent:
                 event_summarizer_kind=compression_config.event_summarizer_kind,
                 event_summarizer_max_tokens=compression_config.event_summarizer_max_tokens,
                 event_summarizer_model_provider=model_provider,
+                task_token_store=task_token_store,
             ),
             skill_prompt=skill_prompt,
             generation_config=generation_config,
             compression_config=compression_config,
+            task_token_store=task_token_store,
         )
 
     def _normalize_role(self, role: str) -> str:

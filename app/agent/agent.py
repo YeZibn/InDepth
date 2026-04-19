@@ -11,6 +11,7 @@ from app.core.memory import SQLiteMemoryStore, build_context_compressor
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
+from app.core.runtime.task_token_store import TaskTokenStore
 from app.core.skills import build_skills_manager
 from app.core.tools.adapters import build_default_registry, register_tool_functions
 from app.core.tools.registry import ToolRegistry
@@ -86,6 +87,7 @@ class BaseAgent:
             model_provider=model_provider,
             llm_max_tokens=compression_config.compressor_llm_max_tokens,
         )
+        task_token_store = TaskTokenStore()
         # Aggregate runtime memory by agent type to avoid per-name DB fragmentation.
         memory_file = "db/runtime_memory_main_agent.db"
         self.runtime = AgentRuntime(
@@ -105,11 +107,13 @@ class BaseAgent:
                 event_summarizer_kind=compression_config.event_summarizer_kind,
                 event_summarizer_max_tokens=compression_config.event_summarizer_max_tokens,
                 event_summarizer_model_provider=model_provider,
+                task_token_store=task_token_store,
             ),
             skill_prompt=self.skill_prompt,
             generation_config=generation_config,
             enable_llm_judge=enable_llm_judge,
             compression_config=compression_config,
+            task_token_store=task_token_store,
         )
         self._active_run_id: Optional[str] = None
         self._awaiting_user_input = False
