@@ -4,221 +4,103 @@
 
 ## 1. 定位
 
-`AgentRuntime`（`app/core/runtime/agent_runtime.py`）是执行中枢，负责把对话请求转为可控执行循环，并在结束时完成评估、观测、记忆收尾。
+`AgentRuntime`（[agent_runtime.py](/Users/yezibin/Project/InDepth/app/core/runtime/agent_runtime.py)）是当前系统的执行中枢。它不只是“调模型 + 调工具”，而是负责把一次用户输入组织成一个完整的运行周期：
 
-从整体运行逻辑看，当前 Runtime 的主链路可以概括为：
-1. 建立本次 run 的消息上下文与执行循环
-2. 在第一次模型请求前，强制执行一轮 prepare phase
-3. 若 prepare 已形成成熟计划，则自动通过 `plan_task` 完成 todo 落盘（create/update 由其内部决定）
-4. 在每一步中处理模型输出、工具调用和 stop policy
-5. 维护 active todo / active subtask 执行上下文
-6. 当 run 正常收敛或失败退出时，进入统一的结束处理
-7. 若存在 todo 且 run 未完成，则自动触发 fallback 与 recovery 链路
-8. recovery 链路中会先调用单次 `LLM recovery assessment`，再由 guardrails 落地恢复决策
-9. 生成 recovery 摘要、verification handoff、postmortem 和评估结果
-10. 关闭当前 run 的活跃 todo 绑定并完成收尾
+1. 恢复当前 task 的上下文
+2. 在首轮模型请求前强制执行 `prepare phase`
+3. 依据 prepare 结果自动完成 todo create/update
+4. 进入多步工具循环
+5. 处理澄清暂停、失败恢复、评估、记忆收尾和观测落盘
 
-当前 Runtime 中与 todo/recovery 最相关的关键节点包括：
-- prepare phase：在首轮模型请求前读取 todo 上下文并生成候选计划
-- prepare CLI summary：在进入 executing 前向用户打印任务目标、todo 决策、拆分理由与完整子任务列表
-- tool loop：决定当前动作属于哪个工具调用
-- `_active_todo_context`：跟踪 `todo_id / active_subtask / execution_phase / binding_state`
-- `_prepare_phase_completed / _prepare_phase_result`：跟踪 prepare 是否完成及其结构化结果
-- stop policy：决定 run 是正常完成、等待输入还是失败退出
-- `auto_manage_todo_recovery`：在失败出口自动补齐恢复链路
-- finalization：把恢复信息外溢到 handoff、评估与用户可见摘要
-- step 级 request token 统计：在每个 `model_provider.generate(...)` 之前统计本轮真实输入 token
+如果只记一条主线，当前 Runtime 的整体流程是：
 
-因此，Runtime 不只是“跑模型 + 调工具”，它还承担了当前任务边界、subtask 执行归属和失败恢复闭环的编排职责。
+1. 载入 history、用户偏好和系统记忆
+2. 恢复 active todo context
+3. 执行 prepare phase，并补充基础现状扫描
+4. 必要时自动调用 `plan_task`
+5. 进入 executing phase，开始模型-工具循环
+6. 根据 `finish_reason` 收敛为完成、等待输入或失败
+7. 若存在未闭环 todo，则自动补 fallback / recovery
+8. 统一进入 finalizing phase，完成 verification、memory、postmortem 和事件收尾
 
-核心职责：
-- 管理多步推理循环（Tool Calling Loop）
-- 处理模型响应与工具执行
-- 装配 stop policy、todo recovery、clarification、memory lifecycle
-- 触发评估与观测事件
-- 沉淀任务记忆与用户偏好
+## 2. Runtime 的几层职责
 
-## 2. 架构图
+可以把 Runtime 理解成五层连续职责：
 
-### 2.1 模块架构
+1. 上下文装配
+   - system prompt
+   - history
+   - user preference recall
+   - system memory recall
+   - active todo context
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              AgentRuntime                                │
-│                                                                         │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐ │
-│  │  ModelProvider   │  │  ToolRegistry    │  │     MemoryStore         │ │
-│  │                 │  │                  │  │                         │ │
-│  │ ┌─────────────┐ │  │ ┌─────────────┐  │  │ ┌───────────────────┐  │ │
-│  │ │HttpChatModel│ │  │ │   invoke()  │  │  │ │SQLiteMemoryStore  │  │ │
-│  │ │ Provider    │ │  │ └─────────────┘  │  │ └───────────────────┘  │ │
-│  │ └─────────────┘ │  │                  │  │ ┌───────────────────┐  │ │
-│  │                 │  │ ┌─────────────┐  │  │ │SystemMemoryStore  │  │ │
-│  │ ┌─────────────┐ │  │ │list_tools()│  │  │ └───────────────────┘  │ │
-│  │ │ MockProvider│ │  │ └─────────────┘  │  │                         │ │
-│  │ └─────────────┘ │  │                  │  │ ┌───────────────────┐  │ │
-│  └─────────────────┘  │ tools=[]        │  │ │ContextCompressor  │  │ │
-│                        └─────────────────┘  │ └───────────────────┘  │ │
-│                                               └─────────────────────────┘ │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐ │
-│  │EvalOrchestrator │  │ Observability   │  │  CompressionConfig      │ │
-│  │                 │  │                 │  │                         │ │
-│  │ ┌─────────────┐ │  │ emit_event()   │  │ strong_token_ratio     │ │
-│  │ │ evaluate()  │ │  │                 │  │ event/tool thresholds  │ │
-│  │ └─────────────┘ │  │ postmortem     │  │ tool_burst_threshold   │ │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+2. 前置规划
+   - `prepare_task`
+   - prepare result
+   - prepare CLI summary
+   - auto-apply `plan_task`
 
-### 2.2 执行流程
+3. 执行循环
+   - 调模型
+   - 处理 `tool_calls`
+   - 回写 tool messages
+   - 维护 active todo / active subtask 绑定
 
-```
-User Input
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      run() 主循环 (max_steps)                         │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Step N:                                                     │   │
-│  │                                                              │   │
-│  │  1. _maybe_compact_mid_run() ──▶ 判断是否触发上下文压缩     │   │
-│  │                           │                                  │   │
-│  │  2. MemoryStore.get_recent_messages() ──▶ 加载历史消息      │   │
-│  │                           │                                  │   │
-│  │  3. step 级 token 统计（messages，tools 单独统计）         │   │
-│  │                           │                                  │   │
-│  │  4. model_provider.generate(messages, tools) ──▶ 调用模型   │   │
-│  │                           │                                  │   │
-│  │  5. 解析 finish_reason                                           │   │
-│  │      │                                                          │   │
-│  │      ├─── tool_calls ──▶ _handle_native_tool_calls()          │   │
-│  │      │                        │                               │   │
-│  │      │                   ToolRegistry.invoke()                │   │
-│  │      │                        │                               │   │
-│  │      │                   emit_event(tool_*)                    │   │
-│  │      │                        │                               │   │
-│  │      │                   回写 tool 消息                        │   │
-│  │      │                        │                               │   │
-│  │      ├─── stop ──────────────▶ 正常收敛，输出 final_answer   │   │
-│  │      │                                                          │   │
-│  │      ├─── length ────────────▶ 标记 stop_reason=length        │   │
-│  │      │                                                          │   │
-│  │      └─── content_filter ──▶ 标记 stop_reason=content_filter │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    任务结束处理                                 │   │
-│  │                                                               │   │
-│  │  emit_event(task_finished)                                    │   │
-│  │        │                                                      │   │
-│  │  EvalOrchestrator.evaluate()                                  │   │
-│  │        │                                                      │   │
-│  │  emit_event(task_judged)                                      │   │
-│  │        │                                                      │   │
-│  │  _finalize_task_memory() ──▶ SystemMemoryStore.upsert_card() │   │
-│  │        │                                                      │   │
-│  │  MemoryStore.compact_final()                                  │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+4. 失败与暂停处理
+   - clarification judge
+   - awaiting user input
+   - fallback record
+   - recovery decision
 
-## 3. 核心组件详解
+5. 结束收尾
+   - verification handoff
+   - task judgement
+   - postmortem
+   - runtime/system/user preference memory finalize
 
-### 3.1 ModelProvider
+## 3. 核心状态
 
-**职责**：封装模型 API，屏蔽不同模型供应商差异
+Runtime 当前维护几组关键状态。
 
-**默认实现**：`HttpChatModelProvider`
+### 3.1 运行级状态
 
-```python
-class HttpChatModelProvider:
-    def generate(
-        self,
-        messages: List[Dict],
-        tools: Optional[List[Dict]] = None,
-        generation_config: Optional[GenerationConfig] = None,
-    ) -> LLMResponse:
-        # POST <LLM_BASE_URL>/chat/completions
-        # 处理重试、退避、超时
-```
+- `last_runtime_state`
+  - `idle / running / awaiting_user_input / completed / failed`
+- `last_stop_reason`
+  - 记录本轮结束原因
+- `last_task_id`
+- `last_run_id`
 
-**关键特性**：
-- 接口：`POST <LLM_BASE_URL>/chat/completions`
-- 默认重试：`max_retries=4`
-- 退避策略：`retry_backoff_seconds=1.2`（指数退避）
-- 默认超时：`timeout_seconds=120`
-- 空 tools 时不发送 `tools/tool_choice`（兼容部分 provider）
+### 3.2 Prepare 状态
 
-### 3.2 ToolRegistry
+- `_prepare_phase_completed`
+  - 当前 run 是否已完成 prepare
+- `_prepare_phase_result`
+  - prepare 的结构化结果，供 guard、auto-apply 和提示词注入复用
 
-**职责**：工具的注册、发现与调用
+### 3.3 Todo 执行上下文
 
-```python
-class ToolRegistry:
-    def register(self, tool_functions: List[ToolFunction]) -> None
-    def invoke(self, name: str, args: Dict[str, Any]) -> ToolResult
-    def list_tool_schemas(self) -> List[Dict]
-```
+`_active_todo_context` 由 [todo_runtime_lifecycle.py](/Users/yezibin/Project/InDepth/app/core/runtime/todo_runtime_lifecycle.py) 维护，当前最重要的字段有：
 
-**调用链**：
-```
-@tool(...) ---> ToolFunction
-      │
-      ▼
-register_tool_functions() ---> ToolRegistry.register()
-      │
-      ▼
-Runtime.generate() ---> ToolRegistry.list_tools() ---> tools=[] in request
-      │
-      ▼
-Model returns tool_calls ---> ToolRegistry.invoke(name, args)
-      │
-      ▼
-返回 ToolResult {success, result/error}
-```
+- `todo_id`
+- `active_subtask_id`
+- `active_subtask_number`
+- `execution_phase`
+  - `planning / executing / recovering / finalizing`
+- `binding_required`
+- `binding_state`
+  - `bound / closed`
+- `todo_bound_at`
+- `active_retry_guidance`
 
-### 3.3 Runtime Strategy Modules
+### 3.4 最近恢复结果
 
-当前 `AgentRuntime` 已把主要策略拆到独立模块：
+- `_latest_todo_recovery`
+  - 保存最近一次自动 recovery 的摘要，便于后续输出给用户和 handoff
 
-1. `runtime_stop_policy.py`
-2. `runtime_finalization.py`
-3. `runtime_compaction_policy.py`
-4. `clarification_policy.py`
-5. `todo_runtime_lifecycle.py`
-6. `user_preference_lifecycle.py`
-7. `system_memory_lifecycle.py`
+## 4. 运行入口
 
-### 3.4 MemoryStore
-
-**职责**：管理会话历史与上下文压缩
-
-三条链路：
-1. `SQLiteMemoryStore`：Runtime 会话记忆
-2. `SystemMemoryStore`：系统经验记忆
-3. `UserPreferenceStore`：用户偏好记忆（用于个性化提示词注入）
-
-### 3.5 EvalOrchestrator
-
-**职责**：区分"回答完成"与"任务完成"
-
-```python
-class EvalOrchestrator:
-    def evaluate(
-        self,
-        run_outcome: RunOutcome,
-    ) -> RunJudgement:
-        # 1. 构建 verifier 链
-        # 2. 顺序执行，收集 VerifierResult
-        # 3. 硬失败优先
-        # 4. 返回 RunJudgement
-```
-
-## 4. run() 主循环详解
-
-### 4.1 方法签名
+Runtime 的入口方法是：
 
 ```python
 def run(
@@ -230,125 +112,173 @@ def run(
 ) -> str:
 ```
 
-### 4.2 关键状态
+其中：
 
-| 状态变量 | 类型 | 说明 |
-|---------|------|------|
-| `final_answer` | `Optional[str]` | 最终回答文本 |
-| `task_status` | `str` | `ok` / `error` |
-| `stop_reason` | `str` | 收敛原因 |
-| `runtime_state` | `str` | `running/awaiting_user_input/completed/failed` |
-| `last_tool_failures` | `List[Dict]` | 工具失败记录 |
-| `_active_todo_context` | `Dict[str, Any]` | 当前活跃的 todo 执行上下文，包含 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at` |
-| `_latest_todo_recovery` | `Dict[str, Any]` | 最近一次自动恢复链路产物 |
-| `consecutive_tool_calls` | `int` | 当前一次 `tool_calls` 响应的条目数 |
-| `_prepare_phase_completed` | `bool` | 当前 run 是否已经完成 prepare |
-| `_prepare_phase_result` | `Dict[str, Any]` | prepare 的结构化结果，供 guard / auto-apply / history 使用 |
+- `task_id`
+  - 代表当前任务容器
+- `run_id`
+  - 代表当前这次运行
+- `resume_from_waiting`
+  - 用户是否是在接续上一次“等待澄清”的 run
 
-### 4.3 finish_reason 处理
+当前设计里，若上一次 run 因澄清进入 `awaiting_user_input`，后续用户回复会沿用同一个 `run_id` 恢复。
 
-| finish_reason | 处理逻辑 | stop_reason |
-|--------------|---------|-------------|
-| `stop` + 澄清意图 | 由 LLM 判定（失败回退启发式），命中后挂起等待用户输入（同 run 可恢复） | `awaiting_user_input` |
-| `stop` + 非澄清 | 正常收敛 | `stop` |
-| `length` | 超出上下文 | `length` |
-| `content_filter` | 内容过滤 | `content_filter` |
-| `tool_calls` | 执行工具（循环） | - |
-| 其他 + 有文本 | fallback 收敛 | `fallback_content` |
-| 其他 + 空 | 标记错误 | `model_failed` |
+## 5. 完整执行流程
 
-### 4.4 澄清判定与恢复链路
+## 5.1 运行前恢复
 
-`finish_reason=stop` 且有文本时：
-1. 进入澄清判定子流程 `_judge_clarification_request(...)`。
+在第一次模型请求前，Runtime 会先做这些事情：
 
-### 4.5 Step 级 Token 统计
+1. 清空上轮残留的 `_latest_todo_recovery`
+2. 重置 `_prepare_phase_completed` / `_prepare_phase_result`
+3. 从 `memory_store` 读取最近消息
+4. 用 `restore_active_todo_context_from_history(...)` 从历史工具执行恢复 todo 绑定
+5. 组装基础消息：
+   - system
+   - history
+   - current user input
+6. 注入用户偏好 recall
+7. 注入系统经验记忆 recall
 
-当前 Runtime 已在 `AgentRuntime.run()` 的每个 step 内、模型请求前执行 token 统计。
+到这一步为止，还没开始首轮模型请求。
 
-统计时机：
-1. 先完成 `_maybe_compact_mid_run(...)`
-2. 获取当前 `tools = self.tool_registry.list_tool_schemas()`
-3. 基于“即将发送给模型”的 `messages` 计算 `input_tokens`，并单独统计 `tools_tokens`
-4. 发射 `model_request_started`
-5. 再调用 `model_provider.generate(...)`
+## 5.2 Prepare Phase
 
-统计实现：
-1. `AgentRuntime._build_request_token_metrics(...)`
-2. `app/core/runtime/token_counter.py`
+prepare phase 是当前 Runtime 的硬前置步骤。
 
-统计字段：
-- `messages_tokens`
-- `tools_tokens`
-- `input_tokens`
-- `reserved_output_tokens`
-- `total_window_claim_tokens`
-- `token_counter_kind`
-- `encoding`
-- `context_usage_ratio`
+### 做什么
 
-计数说明：
-1. 采用 `tiktoken`
-2. `input_tokens` 当前只表示 request `messages` token，`tools_tokens` 单独统计
-3. `step_input_tokens` 不在该事件里，而是写入 task token ledger，用于后续按 step 计算压缩预算
-4. 与 MemoryStore 的 token budget 裁剪共享同一套底层计数器
-2. 优先调用 LLM judge（mini 模型）输出 JSON：
-   - `is_clarification_request: bool`
-   - `confidence: float(0~1)`
-   - `reason: str`
-3. 仅当 `is_clarification_request=true && confidence>=threshold(默认 0.60)` 判为澄清。
-4. 若 judge 调用异常或输出非法，则回退到 `is_clarification_request(...)` 启发式规则。
-5. 命中澄清时：
-   - `runtime_state=awaiting_user_input`
-   - 发 `clarification_requested`
-   - 跳过 verifier（发 `verification_skipped`）
+prepare phase 当前负责：
 
-#### 澄清恢复机制
+1. 判断本轮是否应使用 todo
+2. 若已有 active todo，则读取其当前现状
+3. 形成候选计划
+4. 生成 prepare CLI summary
+5. 必要时自动调用 `plan_task`
 
-当 Runtime 进入 `awaiting_user_input` 状态后：
+### 当前现状扫描
 
-```
-用户输入补充信息
-    │
-    ▼
-emit_event(user_clarification_received)
-    │
-    ▼
-emit_event(run_resumed)
-    │
-    ▼
-AgentRuntime.run(
-    user_input=<补充信息>,
-    resume_from_waiting=True,  # 关键参数
-    task_id=<相同task_id>,
-    run_id=<相同run_id>        # 保持连续性
-)
-    │
-    ▼
-从上次中断点继续执行（保留完整对话历史）
-```
+这是当前最新行为之一。
 
-**关键特性**：
-- **同一 run_id**：恢复执行使用相同的 `run_id`，保证观测事件连续性
-- **会话记忆保留**：`SQLiteMemoryStore` 中保留完整对话历史
-- **自动检测**：`resume_from_waiting=True` 时自动检测并恢复状态
+当 active todo 存在时，Runtime 会在 prepare 前调用 [todo_tool.py](/Users/yezibin/Project/InDepth/app/tool/todo_tool/todo_tool.py) 里的 `_build_current_state_scan(...)`，得到：
 
-### 4.5 Todo 恢复自动接入
+1. `progress`
+2. `completed_subtasks`
+3. `unfinished_subtasks`
+4. `ready_subtasks`
+5. `known_artifacts`
+6. `summary`
 
-当前 Runtime 已接入 todo 恢复链路。
+这份扫描结果会通过两条路径进入 prepare：
 
-#### 4.5.1 活跃 todo 上下文
+1. rule fallback prepare
+2. LLM prepare payload
 
-Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
-- `todo_id`
-- `active_subtask_id`
-- `active_subtask_number`
-- `execution_phase`
-- `binding_required`
-- `binding_state`
-- `todo_bound_at`
+因此现在的 prepare 不只是知道“有没有 active todo”，还知道“当前 todo 已做到哪里”。
 
-主要来源工具：
+### Prepare 的两条实现路径
+
+当前有两条 prepare 路径：
+
+1. LLM 路径
+   - `_run_prepare_phase_llm`
+   - 由 mini model 读取结构化输入后直接输出 JSON
+
+2. 规则回退路径
+   - `_run_prepare_phase_rule_fallback`
+   - 调用隐藏工具 `prepare_task`
+
+无论走哪条路径，prepare 的结果都会规范化成：
+
+- `should_use_todo`
+- `task_name`
+- `context`
+- `split_reason`
+- `subtasks`
+- `active_todo_id`
+- `active_todo_summary`
+- `current_state_scan`
+- `current_state_summary`
+- `notes`
+- `recommended_plan_task_args`
+
+### Prepare 的用户可见输出
+
+prepare 完成后，Runtime 会向两个方向输出结果：
+
+1. system-visible prepare message
+   - 注入后续模型上下文
+2. CLI 可见 `[Prepare]` 摘要
+   - 打印给用户
+
+当前 CLI 摘要通常包含：
+
+1. 任务目标
+2. todo 决策
+3. 下一阶段
+4. 拆分理由
+5. 计划摘要
+6. 当前现状（仅 active todo 存在时）
+7. 计划明细
+
+## 5.3 Prepare Auto Apply
+
+若 prepare 结果已经形成成熟计划，Runtime 会在首轮模型请求前自动调用 `plan_task`。
+
+当前策略是：
+
+1. `should_use_todo=False`
+   - 不自动落盘
+
+2. `should_use_todo=True` 且无 active todo
+   - `plan_task` 走 `create`
+
+3. `should_use_todo=True` 且有 active todo
+   - `plan_task` 走 `update`
+
+这里不要求模型自己再决定 create/update，Runtime 会直接把 `active_todo_id` 带进去。
+
+## 5.4 进入 Executing Phase
+
+prepare 结束并且 auto-apply 完成后，Runtime：
+
+1. 把 phase 切换为 `executing`
+2. 刷新首条 system message，使其反映当前 phase
+3. 若本轮是 `resume_from_waiting=True`
+   - 发送 `user_clarification_received`
+   - 发送 `run_resumed`
+4. 否则发送 `task_started`
+
+然后正式进入主循环。
+
+## 5.5 主循环
+
+主循环的每一轮大致是：
+
+1. 构造 step seed messages
+2. 列出当前工具 schema
+3. 必要时执行 mid-run compaction
+4. 统计 step 级 token 使用
+5. 调用 `model_provider.generate(...)`
+6. 解析 `finish_reason`
+7. 根据 `finish_reason` 分流
+
+## 6. finish_reason 分流
+
+### 6.1 `tool_calls`
+
+这是最常见的执行分支。
+
+Runtime 会：
+
+1. 调用 `handle_native_tool_calls(...)`
+2. 逐个执行工具
+3. 发出 `tool_called / tool_succeeded / tool_failed`
+4. 把工具返回写回消息历史
+5. 更新 `_active_todo_context`
+
+这里最关键的是，todo 相关工具会不断刷新 active subtask 绑定。例如：
+
 - `plan_task`
 - `update_task_status`
 - `update_subtask`
@@ -356,387 +286,175 @@ Runtime 会基于工具执行结果维护当前活跃的 todo 上下文：
 - `reopen_subtask`
 - `get_next_task`
 
-当前语义：
-- `run()` 会在首轮模型请求前强制执行 prepare phase
-- prepare 结果会写入 `_prepare_phase_completed / _prepare_phase_result`
-- 若 prepare 判断需要 todo，Runtime 会自动内部调用 `plan_task`
-- `plan_task` 内部根据 active todo 情况决定 create/update
-- 这些内部自动工具执行会被追加到 `messages` 与 `memory_store`
-- Runtime 会在进入 `executing` 前打印 `[Prepare]` 摘要
-- `plan_task` 成功后会记录 `todo_id`，并进入 `executing`
-- `update_task_status(..., status="in-progress")` 后会记录 `active_subtask_number`，并进入 `executing`
-- `update_subtask(...)` 后会同步当前 active subtask 的 `subtask_id/subtask_number`
-- `update_task_status(..., status in {blocked, failed, partial, awaiting_input, timed_out})` 后会进入 `recovering`
-- `record_task_fallback` 后会把该 subtask 视为当前恢复目标，并进入 `recovering`
-- `reopen_subtask` 后会把该 subtask 重新视为当前执行目标，并进入 `executing`
-- `get_next_task` 返回 ready subtask 后会记录候选 `active_subtask_number`，但此时仍更接近“待激活”的 `planning`
-- run 完成后当前 todo 绑定会切换到 `closed`
-
-这层上下文的作用不只是记忆，而是帮助 Runtime 判断：
-- 当前是否已经进入 todo 执行流
-- 当前失败是否能归属到具体 subtask
-- 当前是否应当要求工具调用绑定到 active subtask
-
-#### 4.5.1.1 Prepare Guard
-
-当前 Runtime 对 planning 类工具增加了 guard：
-
-- `plan_task`
-
-如果模型在 prepare 未完成前直接调用这些工具，Runtime 会直接拒绝，并返回带 prepare 提示的错误结果。这样“先 prepare、再规划/落盘”不再只是提示词约定，而是运行时硬约束。
-
-#### 4.5.2 自动触发时机
-
-当 Runtime 进入以下未完成出口时，会自动尝试恢复链路：
-- `awaiting_user_input`
-- `tool_failed_before_stop`
-- `max_steps_reached`
-- 其他 `runtime_state=failed` 分支
-
-自动顺序为：
-1. `record_task_fallback`
-2. 单次 `LLM recovery assessment`
-3. 回写 `failure_interpretation / retry_guidance`
-4. `update_task_status`
-5. `plan_task_recovery`
-6. 若 `needs_derived_recovery_subtask=true && decision_level=auto && stop_auto_recovery=false`，则 `append_followup_subtasks`
-
-#### 4.5.3 自动恢复结果
-
-Runtime 会把自动恢复结果保存在 `_latest_todo_recovery` 中，随后继续外溢到：
-- `verification_handoff.recovery`
-- `task_judged.payload.verification_handoff`
-- postmortem “交付内容”区块
-- 最终用户回复中的“恢复摘要”
-- **空输入处理**：空输入不会触发模型调用，提示用户补充信息
-
-#### 4.5.4 Todo Binding Warning
-
-当前 Runtime 已新增一层 `warn` 级 todo binding guard。
-
-触发条件：
-- 已存在 `todo_id`
-- `binding_required = true`
-- 当前没有 `active_subtask_number`
-- 模型仍尝试调用普通业务工具
-
-当前效果：
-- Runtime 会发出 `todo_binding_missing_warning`
-- 不会立即中断整个执行循环
-- 目的是先显式暴露“todo 已创建但执行未绑定 subtask”的编排问题
-
-当前默认视为编排/补救工具，因此不会触发该 warning 的工具包括：
-- `plan_task`
-- `list_tasks`
-- `get_next_task`
-- `get_task_progress`
-- `generate_task_report`
-- `update_task_status`
-- `record_task_fallback`
-- `plan_task_recovery`
-- `append_followup_subtasks`
-
-#### 4.5.5 Orphan Failure
-
-当前 Runtime 已新增 `orphan failure` 分支。
-
-定义：
-- todo 已创建
-- Runtime 已知 `todo_id`
-- 但失败发生时没有 `active_subtask_number`
-
-当前行为：
-- Runtime 不再直接跳过恢复逻辑
-- 会生成一份最小恢复结果并写入 `_latest_todo_recovery`
-- 该恢复结果通常包含：
-  - `reason_code = orphan_subtask_unbound`
-  - `primary_action = decision_handoff`
-  - `decision_level = agent_decide`
-
-注意：
-- 这类失败当前不会自动修改某个具体 subtask 的状态
-- 因为 Runtime 无法确定该失败究竟属于哪个 subtask
-- 它暴露的是“编排绑定缺口”，而不是普通业务失败
-
-## 5. 上下文压缩
-
-### 5.1 压缩触发条件
-
-按优先级依次检查：
-
-```
-1. token_ratio >= midrun_token_ratio ──▶ trigger=token, mode=midrun
-                                            (运行中 token 压缩)
-
-2. current_tool_calls_count >= tool_burst_threshold ──▶ trigger=event, mode=event
-                                                      (事件驱动，工具链替换压缩)
-```
-
-### 5.2 压缩执行流程
-
-```
-compact_mid_run(conversation_id, trigger, mode)
-    │
-    ├──▶ if trigger == event:
-    │       ├──▶ 定位最近连续工具调用段（assistant(tool_calls)+tool...）
-    │       ├──▶ 过滤状态工具（plan_task/get_next_task/update_task_status/init_search_guard）
-    │       ├──▶ 保留最近 1 个工具单元原文
-    │       ├──▶ UPDATE 锚点为 [tool-chain-compact] 摘要 + DELETE 其余消息
-    │       └──▶ 不写 summaries
-    │
-    └──▶ else (token/finalize):
-            ├──▶ 按 token 预算从最新 turn 向前累计计算保留区间
-            ├──▶ ContextCompressor.merge_summary()
-            ├──▶ validate_consistency()（一致性守护）
-            ├──▶ UPSERT summaries
-            └──▶ 删除被摘要覆盖的前缀消息
-```
-
-### 5.3 结构化摘要 v1
-
-```json
-{
-  "version": "v1",
-  "task_state": {
-    "goal": "当前任务目标",
-    "progress": "已完成的工作",
-    "next_step": "下一步计划",
-    "completion": "完成度评估"
-  },
-  "decisions": [
-    {"id": "d1", "content": "决策内容", "anchor": "对应消息ID"}
-  ],
-  "constraints": [
-    {"id": "c1", "content": "必须遵守的约束", "immutable": true}
-  ],
-  "artifacts": [
-    {"id": "a1", "path": "文件路径", "desc": "产出物描述"}
-  ],
-  "open_questions": [
-    {"id": "q1", "content": "未解决的问题"}
-  ]
-}
-```
-
-## 6. 评估与判定
-
-### 6.1 判定流程
-
-```
-task_finished 事件
-        │
-        ▼
-EvalOrchestrator.evaluate(run_outcome)
-        │
-        ├──▶ build_default_deterministic_verifiers()
-        │       │
-        │       ├──▶ StopReasonVerifier (硬检查)
-        │       └──▶ ToolFailureVerifier (硬检查)
-        │
-        ├──▶ 顺序执行每个 verifier
-        │
-        ├──▶ 硬失败优先检查
-        │       └──▶ 任何 hard=true && passed=false ──▶ fail
-        │
-        └──▶ soft 平均分检查
-                └──▶ avg < run_outcome.verification_handoff.soft_score_threshold ──▶ partial
-```
-
-### 6.2 判定结果
-
-| 条件 | final_status |
-|------|-------------|
-| 硬检查失败 | `fail` |
-| 硬检查通过 + soft < 阈值 | `partial` |
-| 硬检查通过 + soft >= 阈值 | `pass` |
-
-### 6.3 Verification Handoff 来源观测
-
-- 生成时机：step 内进入终态（非 `awaiting_user_input`）时立即生成；循环外仅保底生成。
-- `verification_started.payload.handoff_source`：`llm` 或 `fallback_rule`
-- `task_judged.payload.verification_handoff_source`：`llm` 或 `fallback_rule`
-- `task_judged.payload.verification_handoff`：结构化交付快照（postmortem 用于渲染“交付内容”）
-
-## 7. 记忆生命周期
-
-### 7.1 run_start：系统记忆召回注入
-
-首次模型请求前执行 `_inject_system_memory_recall()`：
-
-```python
-def _inject_system_memory_recall(self, task_id, run_id, user_input, messages):
-    # 1) 触发事件
-    emit_event(..., event_type="memory_triggered", payload={"source": "runtime_start_recall"})
-
-    # 2) 拉取 active 且未过期候选池
-    rows = system_memory.search_cards(query="", only_active=True, limit=50)
-
-    # 3) LLM 基于 user_input + title 做 Top-K 重排
-    selected = rerank_by_llm(user_input=user_input, titles=rows)[:5]
-
-    # 4) 逐条 retrieval + 汇总 decision
-    # 5) 轻注入（memory_id + recall_hint）到 system prompt
-```
-
-关键规则：
-1. 精确率优先，最多 5 条。
-2. 未命中不阻塞主流程。
-3. 仅注入 `memory_id + recall_hint`，不注入整卡全文。
-
-### 7.2 run_end：_finalize_task_memory()
-
-任务结束时强制执行：
-
-```python
-def _finalize_task_memory(self, task_id, run_id, task_status):
-    # 1. 写入 postmortem 经验卡
-    card_id = f"mem_task_{task_slug}_{run_slug}"
-    card = {
-        "id": card_id,
-        "scenario": {"stage": "postmortem"},
-        "problem_pattern": {"risk_level": "P1" if task_status == "error" else "P3"},
-        "...": "..."
-    }
-    SystemMemoryStore.upsert_card(card)
-
-    # 2. 追加记忆事件三连
-    emit_event(task_id=task_id, event_type="memory_triggered", payload={"source": "runtime_forced_finalize"})
-    emit_event(task_id=task_id, event_type="memory_retrieved", payload={"reason": "task_end_finalization"})
-    emit_event(task_id=task_id, event_type="memory_decision_made", payload={"decision": "accepted"})
-```
-
-### 7.3 run_during：候选 capture（tool）
-
-运行中候选经验仍通过 `capture_runtime_memory_candidate` tool 显式调用完成，Runtime 不做隐式自动 capture。
-
-## 8. 关键事件总表
-
-| 事件类型 | 说明 | 载荷 |
-|---------|------|------|
-| `task_started` | 任务开始 | task_id, run_id |
-| `model_reasoning` | 模型思考中 | reasoning_content |
-| `model_failed` | 模型调用失败 | error |
-| `model_stopped_length` | 超出长度限制 | - |
-| `model_stopped_content_filter` | 内容过滤 | - |
-| `tool_called` | 工具调用 | name, arguments |
-| `tool_succeeded` | 工具成功 | name, result |
-| `tool_failed` | 工具失败 | name, error |
-| `todo_binding_missing_warning` | todo 已创建但普通工具调用缺少 active subtask 绑定 | todo_id, tool, execution_phase, guard_mode |
-| `todo_orphan_failure_detected` | todo 流失败时没有 active subtask，无法归属失败 | todo_id, stop_reason, runtime_state, execution_phase |
-| `context_compression_started` | 开始压缩 | trigger, mode |
-| `context_compression_succeeded` | 压缩成功 | before, after |
-| `context_compression_failed` | 压缩失败 | error |
-| `verification_started` | 开始评估 | stop_reason, handoff_source |
-| `verification_passed` | 评估通过 | verifier_results |
-| `verification_failed` | 评估失败 | verifier_results |
-| `verification_skipped` | 跳过评估（等待用户输入） | reason, runtime_state |
-| `clarification_requested` | 请求用户补充信息 | question_preview, judge_source, judge_confidence |
-| `clarification_judge_started` | 澄清判定开始 | step, content_preview |
-| `clarification_judge_completed` | 澄清判定完成（LLM） | decision, confidence, threshold, latency_ms |
-| `clarification_judge_fallback` | 澄清判定回退启发式 | reason, fallback_decision, source |
-| `user_clarification_received` | 收到用户补充 | - |
-| `run_resumed` | 同一 run 恢复执行 | - |
-| `task_finished` | 任务结束 | stop_reason, tool_failure_count |
-| `task_judged` | 任务判定 | 完整 judgement + verification_handoff_source + verification_handoff |
-| `memory_triggered` | 记忆触发 | context_id, risk_level, source/source_event |
-| `memory_retrieved` | 记忆检索 | trigger_event_id, memory_id, score, source/reason |
-| `memory_decision_made` | 记忆决策 | trigger_event_id, memory_id, decision, reason |
-
-## 9. 配置参数
-
-### 9.1 运行时配置
-
-```python
-@dataclass
-class RuntimeConfig:
-    max_steps: int = 50          # 最大步数
-    trace_steps: bool = True     # 是否打印追踪
-    enable_llm_judge: bool = False  # 是否启用 LLM 评判
-    enable_llm_clarification_judge: bool = True  # 是否启用 LLM 澄清判定
-    clarification_judge_confidence_threshold: float = 0.60  # 澄清置信度阈值
-    enable_clarification_heuristic_fallback: bool = True  # 判定失败时回退启发式
-```
-
-### 9.2 压缩配置
-
-```python
-@dataclass
-class RuntimeCompressionConfig:
-    enabled_mid_run: bool = True
-    round_interval: int = 4              # 兼容保留（当前 mid-run 不再使用 round 触发）
-    midrun_token_ratio: float = 0.82      # 运行中压缩阈值
-    model_context_window_tokens: int = 160000         # 模型理论上下文窗口
-    compression_trigger_window_tokens: int = 120000   # Runtime 压缩触发预算窗口
-    keep_recent_turns: int = 8            # 仅在预算不可用时的兜底策略
-    tool_burst_threshold: int = 5         # 单次 tool_calls 条目阈值
-    consistency_guard: bool = True        # 一致性守护
-    enable_finalize_compaction: bool = False
-    target_keep_ratio_midrun: float = 0.45
-    target_keep_ratio_finalize: float = 0.45
-    min_keep_turns: int = 3
-    compressor_kind: str = "auto"
-    compressor_llm_max_tokens: int = 1200
-    event_summarizer_kind: str = "auto"
-    event_summarizer_max_tokens: int = 280
-```
-
-压缩器策略说明：
-- `auto`：真实模型走 LLM 压缩，`MockModelProvider` 自动使用规则压缩
-- `rule`：全程规则压缩
-- `llm`：优先走 LLM 压缩，失败时自动回退规则压缩
-- `compression_trigger_window_tokens` 用于计算 `context_usage_ratio`
-- step 级 token 统计同样使用 `compression_trigger_window_tokens` 计算输入占用率
-- `enable_finalize_compaction=False` 时，任务结束后不会自动执行 destructive `compact_final()`
-- `midrun/finalize` 路径由 `compressor_kind` 控制结构化摘要压缩
-- `event` 路径由独立的 `event_summarizer_kind` 控制工具链替代摘要；真实 provider 默认优先使用 mini 模型，失败时回退规则摘要
-
-## 10. 入口点
-
-| 入口 | 文件 | 说明 |
-|------|------|------|
-| `create_runtime()` | `app/core/bootstrap.py` | CLI Runtime 构造 |
-| `RuntimeAgent` | `app/agent/runtime_agent.py` | 交互式 CLI |
-| `BaseAgent` | `app/agent/agent.py` | 主 Agent 封装 |
-| `SubAgent` | `app/agent/sub_agent.py` | 子 Agent 封装 |
-
-### 10.1 Runtime CLI（单一 task 模式）
-
-当前 `runtime_agent.py` 采用单一 `task` 模式：
-1. 启动即进入 `task` 模式，并初始化 `task` 任务。
-2. 普通输入统一走执行链路（不再按模式禁用工具）。
-3. `/mode` 仅保留兼容提示：当前只支持 `task` 单模式。
-4. 可用命令：
-   - `/task <label>`：结束旧任务并开启新任务
-   - `/newtask <label>`：`/task` 别名
-   - `/new [label]`：结束旧任务并开启新任务
-   - `/status`：查看 `mode=task` 与当前 `task_id`
-   - `/help`、`/exit`
-
-### 10.2 CLI 澄清交互
-
-当前 CLI 在澄清态（`awaiting_user_input`）增强行为：
-1. 输出样式：
-   - `[需要澄清]`
-   - Agent 原问题
-   - `请直接回复补充信息，我会在当前任务中继续。`
-2. 用户下一次正常输入默认作为澄清补充，沿用同一 `run_id` 恢复执行。
-3. 空输入不会触发模型调用，会提示：`[需要澄清] 请补充信息后继续...`
-4. 支持 `/new [label]` 立即结束旧任务并启动新任务（清空澄清等待态）。
-
-### 10.3 Completed Run 收尾
-
-completed run 当前分为两段：
-1. 主链路串行完成：`task_finished -> verification -> task_judged`
-2. 收尾任务并行执行，并在全部完成后返回 `run()`
-
-并行收尾任务包括：
-1. postmortem 生成
-2. system memory finalize
-3. user preference capture
-4. final memory compaction
-
-## 11. 测试
-
-- `tests/test_runtime_context_compression.py`：压缩触发、摘要结构、一致性守护
-- `tests/test_runtime_eval_integration.py`：评估链路、记忆沉淀
-- `tests/test_main_agent.py`：澄清态 run 复用、CLI 输出格式与 `/new` 任务切换
+### 6.2 `stop`
+
+`stop` 不一定等于任务完成。
+
+当前 Runtime 会先走 clarification judge：
+
+1. 若模型回复像是在向用户索取缺失信息
+   - 进入 `awaiting_user_input`
+2. 否则
+   - 视为正常收敛候选
+
+### 6.3 `length`
+
+表示模型被长度截断。
+
+通常会被收敛成未正常完成的 stop reason，并进入后续恢复/收尾逻辑。
+
+### 6.4 `content_filter`
+
+表示内容被过滤。
+
+同样会走未正常完成的出口。
+
+### 6.5 其他 finish_reason
+
+若有文本内容，Runtime 会尽量收敛成一个可解释的结果；
+若既无有效文本也无工具，则会视作异常失败路径的一部分。
+
+## 7. Tool Loop 与 Todo 绑定
+
+当前 Runtime 的工具循环有一个重要附加职责：维护 todo 绑定现实。
+
+### 7.1 binding warning
+
+如果：
+
+1. 当前已有 todo
+2. `binding_required=True`
+3. 但当前普通工具调用没有绑定 active subtask
+
+Runtime 会发出 `todo_binding_missing_warning`。
+
+这只是 warning，不会强阻断执行，但它是一个重要观测信号，说明当前执行正在脱离既有编排。
+
+### 7.2 active todo context 更新
+
+`update_active_todo_context(...)` 会根据工具执行结果维护绑定状态，例如：
+
+1. `plan_task(create/update)` 后切到 planning
+2. `update_task_status(..., in-progress)` 后切到 executing
+3. `record_task_fallback` 后切到 recovering
+4. `reopen_subtask` 后重新切回 executing
+5. `completed/abandoned/pending` 会清空 active subtask 指针
+
+## 8. Clarification 与恢复
+
+## 8.1 Clarification Judge
+
+clarification judge 的职责是区分：
+
+1. 这是任务完成后的最终回答
+2. 这是在向用户索取缺失信息
+
+当前实现支持：
+
+1. LLM judge
+2. heuristic fallback
+
+若命中 clarification：
+
+1. Runtime state 进入 `awaiting_user_input`
+2. 当前 run 挂起
+3. 用户下次回复时，可以通过 `resume_from_waiting=True` 在同一个 run 恢复
+
+## 8.2 失败出口
+
+若 run 未正常完成且存在 active todo，Runtime 会进入自动恢复链路。
+
+这部分主要由 [todo_runtime_lifecycle.py](/Users/yezibin/Project/InDepth/app/core/runtime/todo_runtime_lifecycle.py) 驱动。
+
+主要顺序是：
+
+1. 构造 runtime fallback record
+2. 若当前失败无法归属具体 subtask，则识别为 orphan failure
+3. 调用 `record_task_fallback`
+4. 调用 `plan_task_recovery`
+5. 若 recovery decision 允许自动推进，则补 follow-up subtasks 或原位恢复
+6. 将 recovery 摘要挂到 `_latest_todo_recovery`
+
+### 当前恢复策略特点
+
+当前恢复策略有几个特点：
+
+1. 优先围绕原 subtask 恢复
+2. 只有必要时才派生 recovery subtasks
+3. 失败出口会触发单次 `LLM recovery assessment`
+4. 最终是否自动执行，还要经过 guardrails 落地
+
+## 9. Finalizing Phase
+
+无论是完成、澄清暂停还是失败，Runtime 最后都会进入 `finalizing phase`。
+
+这里会统一处理：
+
+1. verification handoff
+2. `EvalOrchestrator.evaluate(...)`
+3. `task_judged`
+4. postmortem 生成
+5. runtime memory finalize
+6. system memory finalize
+7. user preference capture
+8. `_active_todo_context` 关闭或收束
+
+### 9.1 Verification
+
+verification 的目标是把“回答看起来完成”与“任务真完成”分开。
+
+当前评估链主要由：
+
+- `EvalOrchestrator`
+- verifier 链
+- 可选 LLM judge
+
+共同决定最终 judgement。
+
+### 9.2 Postmortem
+
+每次运行结束后，系统会把关键事件、恢复信息和结果判断沉淀到 `observability-evals/`。
+
+## 10. 关键模块映射
+
+当前 Runtime 相关的核心模块如下：
+
+- 主循环
+  - [agent_runtime.py](/Users/yezibin/Project/InDepth/app/core/runtime/agent_runtime.py)
+
+- todo 生命周期与恢复
+  - [todo_runtime_lifecycle.py](/Users/yezibin/Project/InDepth/app/core/runtime/todo_runtime_lifecycle.py)
+
+- clarification 判断
+  - [clarification_policy.py](/Users/yezibin/Project/InDepth/app/core/runtime/clarification_policy.py)
+
+- stop policy
+  - [runtime_stop_policy.py](/Users/yezibin/Project/InDepth/app/core/runtime/runtime_stop_policy.py)
+
+- finalization
+  - [runtime_finalization.py](/Users/yezibin/Project/InDepth/app/core/runtime/runtime_finalization.py)
+
+- compaction
+  - [runtime_compaction_policy.py](/Users/yezibin/Project/InDepth/app/core/runtime/runtime_compaction_policy.py)
+
+- tool execution
+  - [tool_execution.py](/Users/yezibin/Project/InDepth/app/core/runtime/tool_execution.py)
+
+- todo 工具
+  - [todo_tool.py](/Users/yezibin/Project/InDepth/app/tool/todo_tool/todo_tool.py)
+
+## 11. 当前 Runtime 的现实边界
+
+理解当前实现时，有几个边界要明确：
+
+1. prepare 现在已经有“基础现状扫描”，但还没有“自动重规划”
+2. active todo 存在时，prepare 会更像“在现状上继续规划”，而不是重新从零设计
+3. binding warning 是观测信号，不是强阻断
+4. recovery 默认偏主动，但仍受 guardrails 约束
+5. Runtime 只负责编排，不应该替代协议层定义任务边界
+
+## 12. 一句话总结
+
+当前 Runtime 的真实职责可以概括为：
+
+它先在首轮请求前把“当前有什么、要怎么做、todo 要不要跟”准备好，再在执行中持续维护 active subtask 绑定，最后把暂停、失败、恢复、评估和记忆收尾闭成一个完整运行周期。

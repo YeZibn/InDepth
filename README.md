@@ -96,6 +96,7 @@ InDepth 的设计遵循以下原则：
 - Runtime 编排：多轮推理、工具调用、收敛控制
 - Runtime 澄清恢复：`awaiting_user_input` 挂起 + 同一 `run_id` 恢复执行
 - Runtime Todo 绑定感知：维护 `todo_id/active_subtask_number/execution_phase/binding_required`
+- Runtime Prepare 现状感知：当存在 active todo 时，prepare 会补充当前进度、未完成项和已知产物摘要
 - Runtime 失败兜底闭环：失败出口自动补 `fallback_record`、规划 `recovery_decision`，并识别 `orphan failure`
 - Tool 体系：统一声明、注册、参数校验、调用封装
 - SubAgent 协同：角色化子代理与并行执行
@@ -135,6 +136,7 @@ InDepth 的设计遵循以下原则：
   - 是否启用或沿用 todo
   - 下一阶段
   - 顶层拆分理由
+  - 当前现状摘要（仅 active todo 存在时）
   - 完整子任务清单（含每条拆分依据）
 - 当 Runtime 进入 `awaiting_user_input`：
   - CLI 会提示 `[需要澄清]`

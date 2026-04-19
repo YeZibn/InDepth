@@ -6,14 +6,16 @@
 
 如果从整体运行逻辑理解这组参考文档，当前系统可以先抓一条主线：
 1. Runtime 建立当前 task 的执行循环
-2. 首轮模型请求前，Runtime 先执行 prepare phase，并按结果自动完成 `plan_task` 落盘
-3. 工具调用推动业务执行、todo 绑定和状态流转
-4. 若进入失败出口，Runtime 自动补齐 fallback，并触发单次 `LLM recovery assessment` 后再落地 recovery
-5. 恢复优先围绕原 subtask 展开，必要时才派生 recovery subtasks
-6. 结束时恢复信息继续外溢到 handoff、评估、观测和 postmortem
+2. 首轮模型请求前，Runtime 先执行 prepare phase；若存在 active todo，会先补一层基础现状扫描
+3. prepare 会产出候选计划，并按结果自动完成 `plan_task` 落盘（create/update 由 Runtime 统一决定）
+4. 工具调用推动业务执行、todo 绑定和状态流转
+5. 若进入失败出口，Runtime 自动补齐 fallback，并触发单次 `LLM recovery assessment` 后再落地 recovery
+6. 恢复优先围绕原 subtask 展开，必要时才派生 recovery subtasks
+7. 结束时恢复信息继续外溢到 handoff、评估、观测和 postmortem
 
 因此，阅读 `doc/refer/` 时可以把几个关键节点记住：
 - `prepare phase`
+- `current state scan`
 - `plan_task`
 - `task -> todo` 绑定
 - `todo -> active subtask` 绑定

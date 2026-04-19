@@ -81,6 +81,9 @@ class TodoRecoveryFlowTests(unittest.TestCase):
         self.assertIn("recommended_plan_task_args", result)
         self.assertEqual(result["recommended_plan_task_args"]["active_todo_id"], "todo_123")
         self.assertTrue(result["recommended_plan_task_args"]["subtasks"])
+        self.assertIn("current_state_summary", result)
+        self.assertIn("当前 todo 进度", result["current_state_summary"])
+        self.assertEqual(result["current_state_scan"]["progress"], "0/1 (0%)")
 
     def test_plan_task_normalizes_create_style_envelope(self):
         with tempfile.TemporaryDirectory() as tmpdir:

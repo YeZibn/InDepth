@@ -720,6 +720,103 @@ def _build_prepare_bootstrap_subtask(context: Any) -> Dict[str, Any]:
     }
 
 
+def _extract_path_like_tokens(text: Any) -> List[str]:
+    raw = str(text or "")
+    if not raw:
+        return []
+    matches = re.findall(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+", raw)
+    results: List[str] = []
+    for item in matches:
+        normalized = str(item).strip().strip("`")
+        if normalized and normalized not in results:
+            results.append(normalized)
+    return results
+
+
+def _build_current_state_scan(todo_id: str, max_items: int = 4) -> Dict[str, Any]:
+    todo_id = str(todo_id or "").strip()
+    task_data = _get_task_by_todo_id(todo_id)
+    if not task_data:
+        return {
+            "todo_id": todo_id,
+            "summary": "未能读取当前 todo 的现状。",
+            "progress": "0/0 (0%)",
+            "completed_subtasks": [],
+            "unfinished_subtasks": [],
+            "ready_subtasks": [],
+            "known_artifacts": [],
+        }
+
+    subtasks = task_data.get("subtasks", [])
+    completed, total, percentage = _calculate_progress(subtasks)
+    blocked = _calculate_blocked_status(subtasks)
+
+    completed_items = [
+        {
+            "number": item.get("number", ""),
+            "name": item.get("name", ""),
+            "status": item.get("status", ""),
+        }
+        for item in subtasks
+        if item.get("status") == "completed"
+    ]
+    unfinished_items = [
+        {
+            "number": item.get("number", ""),
+            "name": item.get("name", ""),
+            "status": item.get("status", ""),
+        }
+        for item in subtasks
+        if item.get("status") not in TERMINAL_SUBTASK_STATUSES
+    ]
+    ready_items = [{"number": number, "name": name} for number, name in blocked.get("ready", [])]
+
+    known_artifacts: List[str] = []
+    for item in subtasks:
+        for source in [
+            item.get("description", ""),
+            item.get("acceptance_criteria", []),
+            item.get("fallback_record", {}).get("evidence", []),
+        ]:
+            values = source if isinstance(source, list) else [source]
+            for value in values:
+                for token in _extract_path_like_tokens(value):
+                    if token not in known_artifacts:
+                        known_artifacts.append(token)
+
+    completed_preview = "、".join(
+        [f"Task {item['number']} {item['name']}" for item in completed_items[:max_items] if item.get("name")]
+    )
+    unfinished_preview = "、".join(
+        [
+            f"Task {item['number']} {item['name']}[{item['status']}]"
+            for item in unfinished_items[:max_items]
+            if item.get("name")
+        ]
+    )
+    artifact_preview = "、".join(known_artifacts[:max_items])
+
+    summary_parts = [
+        f"当前 todo 进度 {completed}/{total} ({percentage}%)",
+    ]
+    if completed_preview:
+        summary_parts.append(f"已完成：{completed_preview}")
+    if unfinished_preview:
+        summary_parts.append(f"未完成：{unfinished_preview}")
+    if artifact_preview:
+        summary_parts.append(f"已知产物：{artifact_preview}")
+
+    return {
+        "todo_id": todo_id,
+        "progress": f"{completed}/{total} ({percentage}%)",
+        "completed_subtasks": completed_items,
+        "unfinished_subtasks": unfinished_items,
+        "ready_subtasks": ready_items,
+        "known_artifacts": known_artifacts,
+        "summary": "；".join(summary_parts),
+    }
+
+
 def _build_prepare_update_plan(
     context: Any,
     active_todo_id: str,
@@ -898,6 +995,12 @@ def prepare_task(
     split_reason = ""
     notes: List[str] = []
     planning_confidence = "medium"
+    current_state_scan: Dict[str, Any] = {}
+
+    if todo_exists:
+        current_state_scan = _build_current_state_scan(todo_id)
+        if current_state_scan.get("summary"):
+            notes.append(f"现状扫描：{current_state_scan['summary']}")
 
     if should_use_todo and not todo_exists:
         subtasks = [_build_prepare_bootstrap_subtask(context=context_str)]
@@ -927,6 +1030,8 @@ def prepare_task(
         "active_todo_id": todo_id,
         "active_todo_summary": resolved_summary,
         "notes": notes,
+        "current_state_scan": current_state_scan,
+        "current_state_summary": str(current_state_scan.get("summary", "") or "").strip(),
     }
     if should_use_todo and subtasks:
         result["recommended_plan_task_args"] = {

@@ -9,7 +9,7 @@ from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.runtime.todo_runtime_lifecycle import update_active_todo_context
 from app.core.tools.adapters import register_tool_functions
 from app.core.tools.registry import ToolRegistry
-from app.tool.todo_tool.todo_tool import _parse_task_file, load_todo_tools
+from app.tool.todo_tool.todo_tool import _parse_task_file, load_todo_tools, plan_task
 
 
 class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
@@ -246,6 +246,114 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         self.assertIn("计划明细：", joined)
         self.assertIn("1. 澄清上下文并细化执行计划", joined)
         self.assertIn("拆分依据：", joined)
+
+    def test_runtime_prepare_message_includes_current_state_summary_for_active_todo(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成。"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = self._build_runtime(provider=provider)
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+                patch(
+                    "app.core.runtime.agent_runtime.restore_active_todo_context_from_history",
+                    return_value={
+                        "todo_id": "todo_123",
+                        "active_subtask_id": None,
+                        "active_subtask_number": 1,
+                        "execution_phase": "planning",
+                        "binding_required": True,
+                        "binding_state": "bound",
+                        "todo_bound_at": "",
+                        "active_retry_guidance": [],
+                    },
+                ),
+            ):
+                created = plan_task.entrypoint(
+                    task_name="Base Task",
+                    context="Create the original tracked todo",
+                    split_reason="Need a shared todo first.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                self.assertTrue(created["success"])
+                runtime.run(
+                    "继续推进这个任务",
+                    task_id="runtime_prepare_active_todo_task",
+                    run_id="runtime_prepare_active_todo_run",
+                )
+
+        first_request = provider.requests[0]
+        rendered_messages = "\n".join(str(msg.get("content", "")) for msg in first_request["messages"])
+        self.assertIn("current_state_summary=", rendered_messages)
+        self.assertIn("当前 todo 进度", rendered_messages)
+
+    def test_runtime_prepare_cli_summary_includes_current_state_for_active_todo(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "已完成。"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        traced: list[str] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = self._build_runtime(provider=provider, trace_printer=traced.append)
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="todo_123"),
+                patch(
+                    "app.core.runtime.agent_runtime.restore_active_todo_context_from_history",
+                    return_value={
+                        "todo_id": "todo_123",
+                        "active_subtask_id": None,
+                        "active_subtask_number": 1,
+                        "execution_phase": "planning",
+                        "binding_required": True,
+                        "binding_state": "bound",
+                        "todo_bound_at": "",
+                        "active_retry_guidance": [],
+                    },
+                ),
+            ):
+                created = plan_task.entrypoint(
+                    task_name="Base Task",
+                    context="Create the original tracked todo",
+                    split_reason="Need a shared todo first.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                self.assertTrue(created["success"])
+                runtime.run(
+                    "继续推进这个任务",
+                    task_id="runtime_prepare_active_todo_cli_task",
+                    run_id="runtime_prepare_active_todo_cli_run",
+                )
+
+        joined = "\n".join(traced)
+        self.assertIn("当前现状：", joined)
+        self.assertIn("当前 todo 进度", joined)
 
     def test_runtime_can_use_llm_prepare_without_tools(self):
         provider = MockModelProvider(

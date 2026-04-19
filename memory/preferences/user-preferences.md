@@ -2,7 +2,7 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-19T21:47:54+08:00
+- updated_at: 2026-04-19T22:16:55+08:00
 - enabled: true
 
 ## preferences
@@ -10,9 +10,9 @@ meta:
 ### goal_long_term
 - value: 写一个简单的计算器到项目主目录的work文件夹下
 - source: llm_extract_v1
-- confidence: 0.96
-- updated_at: 2026-04-19T21:40:10+08:00
-- note: evidence=写一个简单的计算器到项目主目录的work文件夹下
+- confidence: 0.88
+- updated_at: 2026-04-19T22:04:40+08:00
+- note: evidence=麻烦写一个简单的python计算器到项目主目录的work文件夹下，单子目录
 
 ### interest_topics
 - value: [基于pdf参考文件提出自己的评论与思考]
@@ -36,15 +36,15 @@ meta:
 - note: evidence=你好啊
 
 ### response_style
-- value: 带有窗口按钮
+- value: [偏好将内容放到子目录下, 希望补充一个 README]
 - source: llm_extract_v1
-- confidence: 0.91
-- updated_at: 2026-04-19T21:47:54+08:00
-- note: evidence=做一个带有窗口按钮的
+- confidence: 0.94
+- updated_at: 2026-04-19T22:06:32+08:00
+- note: evidence=我希望放到一子目录下，麻烦再写一个readme
 
 ### tooling_stack
-- value: [Python]
+- value: cli
 - source: llm_extract_v1
-- confidence: 0.98
-- updated_at: 2026-04-19T21:40:10+08:00
-- note: evidence=帮我写一个简单的python程序
+- confidence: 0.93
+- updated_at: 2026-04-19T22:16:55+08:00
+- note: evidence=我希望可以做一个cli的先

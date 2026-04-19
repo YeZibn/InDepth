@@ -84,6 +84,7 @@ PREPARE_PLANNER_SYSTEM_PROMPT = """你是 Runtime 的前置 Todo 规划器。
 请基于输入事实判断：
 1. 当前请求是否需要使用 todo 跟踪
 2. 如果需要，输出一份可直接交给 plan_task 的完整计划
+3. 如果输入已提供 current_state_summary，请把它视为“当前已有内容”的事实基础，不要把已存在的工作重新规划成从零开始
 
 要求：
 1. 只输出 JSON
@@ -363,17 +364,24 @@ class AgentRuntime:
         )
         payload = result.get("result", {})
         prepared = payload if isinstance(payload, dict) else {}
+        if not str(prepared.get("current_state_summary", "") or "").strip():
+            current_state_scan = args.get("current_state_scan", {}) if isinstance(args.get("current_state_scan"), dict) else {}
+            prepared["current_state_scan"] = current_state_scan
+            prepared["current_state_summary"] = str(current_state_scan.get("summary", "") or "").strip()
         prepared["planner_source"] = "rule_fallback"
         self._prepare_phase_completed = True
         self._prepare_phase_result = prepared
         return prepared
 
     def _run_prepare_phase_llm(self, args: Dict[str, Any], task_id: str, run_id: str) -> Dict[str, Any]:
+        current_state_scan = args.get("current_state_scan", {}) if isinstance(args.get("current_state_scan"), dict) else {}
         payload = {
             "user_input": str(args.get("context", "") or "").strip(),
             "active_todo_exists": bool(args.get("active_todo_exists")),
             "active_todo_id": str(args.get("active_todo_id", "") or "").strip(),
             "active_todo_full_text": str(args.get("active_todo_full_text", "") or "").strip(),
+            "current_state_summary": str(current_state_scan.get("summary", "") or "").strip(),
+            "current_state_scan": current_state_scan,
             "active_subtask_number": int(args.get("active_subtask_number") or 0),
             "execution_phase": str(args.get("execution_phase", "") or "planning").strip() or "planning",
             "latest_recovery": args.get("latest_recovery", {}) if isinstance(args.get("latest_recovery"), dict) else {},
@@ -412,6 +420,8 @@ class AgentRuntime:
             "planning_confidence": "high" if should_use_todo else "low",
             "active_todo_id": str(args.get("active_todo_id", "") or "").strip(),
             "active_todo_summary": "",
+            "current_state_scan": current_state_scan,
+            "current_state_summary": str(current_state_scan.get("summary", "") or "").strip(),
             "notes": [str(item).strip() for item in notes if str(item).strip()],
             "planner_source": "llm",
         }
@@ -454,6 +464,14 @@ class AgentRuntime:
         execution_phase = str(ctx.get("execution_phase", "") or "planning").strip() or "planning"
         if active_number:
             active_status = "in-progress" if execution_phase == "executing" else ""
+        current_state_scan: Dict[str, Any] = {}
+        if todo_id:
+            try:
+                from app.tool.todo_tool.todo_tool import _build_current_state_scan
+
+                current_state_scan = _build_current_state_scan(todo_id)
+            except Exception:
+                current_state_scan = {}
         args = {
             "task_name": self._extract_title_topic(user_input),
             "context": user_input,
@@ -464,6 +482,7 @@ class AgentRuntime:
             "active_subtask_number": int(active_number or 0),
             "active_subtask_status": active_status,
             "execution_phase": execution_phase,
+            "current_state_scan": current_state_scan,
             "latest_recovery": self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {},
             "execution_intent": "runtime_preflight",
         }
@@ -496,6 +515,9 @@ class AgentRuntime:
         active_summary = str(prepared.get("active_todo_summary", "") or "").strip()
         if active_summary:
             lines.append(f"active_todo_summary={active_summary}")
+        current_state_summary = str(prepared.get("current_state_summary", "") or "").strip()
+        if current_state_summary:
+            lines.append(f"current_state_summary={current_state_summary}")
         notes = prepared.get("notes", [])
         if isinstance(notes, list):
             normalized_notes = [str(item).strip() for item in notes if str(item).strip()]
@@ -548,6 +570,9 @@ class AgentRuntime:
             f"拆分理由：{self._preview(split_reason, 120) if split_reason else '未显式提供'}",
             f"计划摘要：{plan_summary}",
         ]
+        current_state_summary = str(prepared.get("current_state_summary", "") or "").strip()
+        if current_state_summary:
+            lines.append(f"当前现状：{self._preview(current_state_summary, 140)}")
         if subtasks:
             lines.append("计划明细：")
             for idx, item in enumerate(subtasks, 1):
