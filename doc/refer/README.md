@@ -1,6 +1,6 @@
 # InDepth 参考文档总索引
 
-更新时间：2026-04-18
+更新时间：2026-04-19
 
 `doc/refer/` 目标：把"实现事实"沉淀为可查、可维护、可验证的工程参考，而不是概念说明。
 
@@ -30,8 +30,10 @@
 - `architecture-reference.md`：系统整体架构图、核心模块设计、技术选型依据、组件交互流程。
 - `runtime-reference.md`：`AgentRuntime` 主循环、收敛逻辑、评估与记忆收尾（含 Runtime CLI 单一 task 模式说明）。
 - `prompt-reference.md`：Prompt 组装、运行时注入顺序、主/子 Agent 提示词来源。
-- `memory-reference.md`：运行时记忆压缩、结构化摘要、系统记忆卡与事件闭环。
-- **`user-preference-reference.md`：用户偏好记忆存储、API 与使用场景（新增）。**
+- `memory-reference.md`：记忆系统总览，说明 Runtime / System / User Preference 三条链路的边界与协同。
+- `runtime-memory-reference.md`：当前 task 的会话记忆、上下文压缩、step token ledger 与预算语义。
+- `system-memory-reference.md`：跨任务经验卡、召回链路、finalize 沉淀与 recall 注入。
+- `user-preference-reference.md`：用户偏好存储、提取、写回与 recall 注入。
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
 - `todo-reference.md`：Todo 编排、subtask 设计、依赖流转、与 SubAgent 协作边界。
 - `search-guard-reference.md`：检索门禁会话模型、预算控制、自动扩容与状态诊断。
@@ -51,18 +53,22 @@
 6. `search-guard-reference.md`
 7. `skills-reference.md`
 8. `memory-reference.md`
-9. **`user-preference-reference.md`（新增）**
-10. `eval-reference.md`
-11. `observability-reference.md`
-12. `agent-collaboration-reference.md`
-13. `config-reference.md`
+9. `runtime-memory-reference.md`
+10. `system-memory-reference.md`
+11. `user-preference-reference.md`
+12. `eval-reference.md`
+13. `observability-reference.md`
+14. `agent-collaboration-reference.md`
+15. `config-reference.md`
 
 ## 3. 代码主映射
 
 - 架构核心：`app/core/runtime/agent_runtime.py` + `app/core/*`
 - 工具体系：`app/core/tools/*` + `app/tool/*`
-- 记忆体系：`app/core/memory/*`（含 SQLiteMemoryStore、SystemMemoryStore、**UserPreferenceStore**）
+- 记忆体系：`app/core/memory/*`（含 SQLiteMemoryStore、SystemMemoryStore、UserPreferenceStore）
 - 评估体系：`app/eval/*`
 - 可观测性：`app/observability/*`
 - 主/子代理：`app/agent/agent.py` + `app/agent/sub_agent.py` + `app/tool/sub_agent_tool/sub_agent_tool.py`
-- 用户偏好：`app/core/memory/user_preference_store.py` + `memory/preferences/user-preferences.md`
+- Runtime 会话记忆：`app/core/memory/sqlite_memory_store.py` + `app/core/runtime/task_token_store.py`
+- System 经验记忆：`app/core/memory/system_memory_store.py` + `app/core/runtime/system_memory_lifecycle.py`
+- 用户偏好：`app/core/memory/user_preference_store.py` + `app/core/runtime/user_preference_lifecycle.py` + `memory/preferences/user-preferences.md`
