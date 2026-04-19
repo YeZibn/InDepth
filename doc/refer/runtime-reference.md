@@ -1,6 +1,6 @@
 # InDepth Runtime 参考
 
-更新时间：2026-04-18
+更新时间：2026-04-19
 
 ## 1. 定位
 
@@ -27,6 +27,7 @@
 - stop policy：决定 run 是正常完成、等待输入还是失败退出
 - `auto_manage_todo_recovery`：在失败出口自动补齐恢复链路
 - finalization：把恢复信息外溢到 handoff、评估与用户可见摘要
+- step 级 request token 统计：在每个 `model_provider.generate(...)` 之前统计本轮真实输入 token
 
 因此，Runtime 不只是“跑模型 + 调工具”，它还承担了当前任务边界、subtask 执行归属和失败恢复闭环的编排职责。
 
@@ -85,9 +86,11 @@ User Input
 │  │                           │                                  │   │
 │  │  2. MemoryStore.get_recent_messages() ──▶ 加载历史消息      │   │
 │  │                           │                                  │   │
-│  │  3. model_provider.generate(messages, tools) ──▶ 调用模型   │   │
+│  │  3. step 级 token 统计（messages + tools）                  │   │
 │  │                           │                                  │   │
-│  │  4. 解析 finish_reason                                           │   │
+│  │  4. model_provider.generate(messages, tools) ──▶ 调用模型   │   │
+│  │                           │                                  │   │
+│  │  5. 解析 finish_reason                                           │   │
 │  │      │                                                          │   │
 │  │      ├─── tool_calls ──▶ _handle_native_tool_calls()          │   │
 │  │      │                        │                               │   │
@@ -258,6 +261,36 @@ def run(
 
 `finish_reason=stop` 且有文本时：
 1. 进入澄清判定子流程 `_judge_clarification_request(...)`。
+
+### 4.5 Step 级 Token 统计
+
+当前 Runtime 已在 `AgentRuntime.run()` 的每个 step 内、模型请求前执行 token 统计。
+
+统计时机：
+1. 先完成 `_maybe_compact_mid_run(...)`
+2. 获取当前 `tools = self.tool_registry.list_tool_schemas()`
+3. 基于“即将发送给模型”的 `messages + tools` 计算 token
+4. 发射 `model_request_started`
+5. 再调用 `model_provider.generate(...)`
+
+统计实现：
+1. `AgentRuntime._build_request_token_metrics(...)`
+2. `app/core/runtime/token_counter.py`
+
+统计字段：
+- `messages_tokens`
+- `tools_tokens`
+- `input_tokens`
+- `reserved_output_tokens`
+- `total_window_claim_tokens`
+- `token_counter_kind`
+- `encoding`
+- `context_usage_ratio`
+
+计数说明：
+1. 采用 `tiktoken`
+2. 口径为 Chat Completions 输入语义
+3. 与 MemoryStore 的 token budget 裁剪共享同一套底层计数器
 2. 优先调用 LLM judge（mini 模型）输出 JSON：
    - `is_clarification_request: bool`
    - `confidence: float(0~1)`
@@ -651,6 +684,7 @@ class RuntimeCompressionConfig:
 - `rule`：全程规则压缩
 - `llm`：优先走 LLM 压缩，失败时自动回退规则压缩
 - `compression_trigger_window_tokens` 用于计算 `context_usage_ratio`
+- step 级 token 统计同样使用 `compression_trigger_window_tokens` 计算输入占用率
 - `enable_finalize_compaction=False` 时，任务结束后不会自动执行 destructive `compact_final()`
 - `midrun/finalize` 路径由 `compressor_kind` 控制结构化摘要压缩
 - `event` 路径由独立的 `event_summarizer_kind` 控制工具链替代摘要；真实 provider 默认优先使用 mini 模型，失败时回退规则摘要

@@ -9,10 +9,11 @@ def maybe_compact_mid_run(
     task_id: str,
     run_id: str,
     messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
     consecutive_tool_calls: int,
     memory_store: MemoryStore | None,
     compression_config: RuntimeCompressionConfig,
-    estimate_context_tokens: Callable[[List[Dict[str, Any]]], int],
+    estimate_context_tokens: Callable[[List[Dict[str, Any]], List[Dict[str, Any]]], int],
     estimate_context_usage: Callable[[int], float],
     build_system_prompt: Callable[[], str],
     emit_event: Callable[..., Dict[str, Any]],
@@ -27,7 +28,7 @@ def maybe_compact_mid_run(
 
     trigger = ""
     mode = ""
-    estimated_tokens = estimate_context_tokens(messages)
+    estimated_tokens = estimate_context_tokens(messages, tools)
     usage = estimate_context_usage(estimated_tokens)
     if usage >= compression_config.midrun_token_ratio:
         trigger = "token"

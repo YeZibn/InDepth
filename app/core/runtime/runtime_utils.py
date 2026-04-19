@@ -2,6 +2,8 @@ import json
 import re
 from typing import Any, Dict, List
 
+from app.core.runtime.token_counter import count_chat_messages_tokens, resolve_request_model_id
+
 
 def parse_json_dict(text: str) -> Dict[str, Any]:
     raw = (text or "").strip()
@@ -41,20 +43,8 @@ def preview_json(obj: Any, max_len: int = 200) -> str:
 
 
 def estimate_context_tokens(messages: List[Dict[str, Any]]) -> int:
-    # Hybrid estimator: CJK chars ~= 1 token, latin words ~= 1 token, plus JSON overhead.
-    tokens = 0
-    for msg in messages:
-        content = str(msg.get("content", "") or "")
-        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", content))
-        latin_words = len(re.findall(r"[A-Za-z0-9_]+", content))
-        punctuation = len(re.findall(r"[^\w\s]", content))
-        tokens += cjk_count + latin_words + max(punctuation // 2, 0) + 8  # per-message envelope
-        if msg.get("tool_calls"):
-            try:
-                tokens += len(json.dumps(msg.get("tool_calls"), ensure_ascii=False)) // 4
-            except Exception:
-                tokens += 20
-    return max(tokens, 1)
+    model = resolve_request_model_id()
+    return count_chat_messages_tokens(messages=messages, model=model)
 
 
 def estimate_context_usage(estimated_tokens: int, context_window_tokens: int) -> float:

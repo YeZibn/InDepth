@@ -188,6 +188,7 @@ class EventRecord:
 | | `search_round_finished` | 检索轮次结束 |
 | | `search_stopped` | 检索停止 |
 | | `search_budget_auto_overridden` | 检索预算自动扩容 |
+| **模型请求** | `model_request_started` | step 级模型请求开始，含 token 统计 |
 | **记忆** | `memory_triggered` | 记忆触发 |
 | | `memory_retrieved` | 记忆检索 |
 | | `memory_decision_made` | 记忆决策 |
@@ -473,11 +474,38 @@ tool_failed
 ### 8.3 压缩事件
 
 ```
+model_request_started
+    payload: {
+        step,
+        model,
+        encoding,
+        token_counter_kind,        # tiktoken
+        messages_tokens,
+        tools_tokens,
+        input_tokens,
+        reserved_output_tokens,
+        total_window_claim_tokens,
+        context_usage_ratio,
+        compression_trigger_window_tokens,
+        model_context_window_tokens
+    }
+
 context_compression_started
-    payload: {trigger, mode}
+    payload: {
+        trigger,
+        mode,
+        estimated_tokens,
+        context_usage_ratio,
+        compression_trigger_window_tokens,
+        model_context_window_tokens
+    }
 
 context_compression_succeeded
-    payload: {before_messages, after_messages, dropped_messages}
+    payload: {
+        before_messages,
+        after_messages,
+        dropped_messages
+    }
 
 context_compression_failed
     payload: {error}

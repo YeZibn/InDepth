@@ -1,6 +1,6 @@
 # InDepth Memory 参考
 
-更新时间：2026-04-17
+更新时间：2026-04-19
 
 ## 1. 模块范围
 
@@ -304,6 +304,36 @@ append_message(conversation_id, role, content, ...)
 | `event_summarizer_kind` | `auto` | `COMPACTION_EVENT_SUMMARIZER_KIND` |
 | `event_summarizer_max_tokens` | 280 | `COMPACTION_EVENT_SUMMARIZER_MAX_TOKENS` |
 
+### 3.5 Token 计算口径
+
+当前 Runtime Memory 的 token 计算已切换为 `tiktoken`，并统一到共享模块：
+- `app/core/runtime/token_counter.py`
+
+核心原则：
+1. 每一个 step 在模型请求前，都会重新统计一次本轮真实请求输入 token。
+2. 统计口径以 Chat Completions 输入为准，至少包含：
+   - `messages`
+   - `tools` schema
+3. mid-run 压缩触发使用的是“本 step 将发送的完整输入 token”，而不是仅历史消息字符数。
+4. SQLite Memory Store 在 token budget 裁剪时，复用同一套 `tiktoken` 计数逻辑，避免“触发判断”和“裁剪预算”口径不一致。
+
+当前具体计数接口：
+- `count_chat_messages_tokens(messages, model)`
+- `count_chat_tools_tokens(tools, model)`
+- `count_chat_input_tokens(messages, tools, model)`
+
+模型选择规则：
+1. 优先使用 `GenerationConfig.provider_options["model"]`
+2. 否则使用 `model_provider.config.model_id`
+3. 若运行时缺少显式模型配置，当前实现会落到内部默认模型，用于测试与无 provider 环境
+
+补充说明：
+1. `tiktoken` 计算的是 Runtime 侧可见输入 token，已经比旧启发式更接近真实请求。
+2. provider 侧仍可能存在隐式包装开销，因此系统继续保留：
+   - `model_context_window_tokens`
+   - `compression_trigger_window_tokens`
+   的双窗口安全带。
+
 ### 8.3 压缩器类型
 
 - `rule`
@@ -495,6 +525,8 @@ def _compute_token_budget_cut_index(
 - 当前压缩下限已按“轮次”保护，而不是按消息条数保护
 - `min_keep_turns=3` 表示无论 token 预算多小，都至少保留最近 3 轮原文
 - 轮次定义沿用当前实现：有 `user` 时按相邻 `user` 分段；无 `user` 时按 `assistant` 分段
+- turn 的 token 估算不再使用字符/单词启发式，而是把每条 message 规范化后交给 `tiktoken` 计数
+- `event` 路径虽然不走 `summary_json`，但主循环的 step 前 token 统计仍会把 `tools` schema 一并计入
 
 ### 4.3 Event 工具链替换压缩
 

@@ -1,6 +1,6 @@
 # InDepth 配置参考
 
-更新时间：2026-04-15
+更新时间：2026-04-19
 
 ## 1. 目标
 
@@ -155,6 +155,10 @@ class RuntimeCompressionConfig:
 - `COMPACTION_MIN_KEEP_TURNS` 表示压缩后至少保留最近多少轮原文上下文
 - `model_context_window_tokens` 用于表达模型能力边界
 - `compression_trigger_window_tokens` 用于计算 Runtime 压缩触发的上下文占用率
+- 当前 step 级 token 统计采用 `tiktoken`
+- token 统计口径为本轮真实请求输入：`messages + tools`
+- `compression_trigger_window_tokens` 是 Runtime 安全预算，不等于模型物理上限
+- `model_context_window_tokens` 与 `compression_trigger_window_tokens` 继续保留双窗口语义
 
 ### 4.2.1 压缩器选择规则
 
@@ -253,6 +257,20 @@ if top_p is not None:
     payload["top_p"] = top_p
 # ... 其他参数同理
 ```
+
+### 5.4 Token 计算与模型选择
+
+当前 Runtime token 统计采用 `tiktoken.encoding_for_model(model)`。
+
+模型解析顺序：
+1. `GenerationConfig.provider_options["model"]`
+2. `model_provider.config.model_id`
+3. 若运行时缺少显式模型配置，当前实现会落到内部默认模型，用于测试与无 provider 环境
+
+这意味着：
+1. 正常运行时，`tiktoken` 会跟随真实请求模型选择 encoding
+2. step 级 token 统计与 mid-run 压缩判断使用同一模型口径
+3. `compressor_llm_max_tokens` 与 `event_summarizer_max_tokens` 仅控制生成输出上限，不参与历史上下文 token 统计
 
 ## 6. Provider 请求行为
 

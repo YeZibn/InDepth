@@ -6,3 +6,4 @@ lxml
 pyyaml
 python-dotenv
 ddgs
+tiktoken

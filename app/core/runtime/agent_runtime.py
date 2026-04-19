@@ -10,7 +10,6 @@ from app.config import (
     load_runtime_user_preference_config,
 )
 from app.core.runtime.runtime_utils import (
-    estimate_context_tokens,
     estimate_context_usage,
     extract_finish_reason_and_message,
     extract_missing_info_hints,
@@ -18,6 +17,11 @@ from app.core.runtime.runtime_utils import (
     preview,
     preview_json,
     slug,
+)
+from app.core.runtime.token_counter import (
+    build_request_token_metrics,
+    count_chat_input_tokens,
+    resolve_request_model_id,
 )
 from app.core.runtime.system_memory_lifecycle import (
     extract_title_topic,
@@ -838,14 +842,33 @@ class AgentRuntime:
         # Runtime 主循环只负责“编排”三件事：请求模型、执行工具、收敛本轮状态。
         # 具体的 todo 恢复、memory 生命周期、verification handoff 都尽量下沉到独立模块。
         for step in range(1, self.max_steps + 1):
+            tools = self.tool_registry.list_tool_schemas()
             messages = self._maybe_compact_mid_run(
                 step=step,
                 task_id=task_id,
                 run_id=run_id,
                 messages=messages,
+                tools=tools,
                 consecutive_tool_calls=consecutive_tool_calls,
             )
-            tools = self.tool_registry.list_tool_schemas()
+            request_metrics = self._build_request_token_metrics(messages=messages, tools=tools)
+            request_metrics["step"] = step
+            request_metrics["context_usage_ratio"] = round(
+                self._estimate_context_usage(int(request_metrics.get("input_tokens", 0) or 0)),
+                4,
+            )
+            request_metrics["compression_trigger_window_tokens"] = (
+                self.compression_config.compression_trigger_window_tokens
+            )
+            request_metrics["model_context_window_tokens"] = self.compression_config.model_context_window_tokens
+            emit_event(
+                task_id=task_id,
+                run_id=run_id,
+                actor="main",
+                role="general",
+                event_type="model_request_started",
+                payload=request_metrics,
+            )
             self._trace(f"[step {step}] model_request")
             try:
                 model_output = self.model_provider.generate(
@@ -1026,6 +1049,7 @@ class AgentRuntime:
         task_id: str,
         run_id: str,
         messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
         consecutive_tool_calls: int,
     ) -> List[Dict[str, Any]]:
         # context compaction 是 runtime 对上下文预算的调度策略，而不是 memory store 本身的职责。
@@ -1034,6 +1058,7 @@ class AgentRuntime:
             task_id=task_id,
             run_id=run_id,
             messages=messages,
+            tools=tools,
             consecutive_tool_calls=consecutive_tool_calls,
             memory_store=self.memory_store,
             compression_config=self.compression_config,
@@ -1555,8 +1580,32 @@ class AgentRuntime:
     def _preview_json(self, obj: Any, max_len: int = 200) -> str:
         return preview_json(obj, max_len=max_len)
 
-    def _estimate_context_tokens(self, messages: List[Dict[str, Any]]) -> int:
-        return estimate_context_tokens(messages)
+    def _resolve_request_model_id(self) -> str:
+        return resolve_request_model_id(
+            config=self.generation_config,
+            model_provider=self.model_provider,
+            default_model="gpt-4-turbo",
+        )
+
+    def _build_request_token_metrics(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        max_output_tokens = self.generation_config.max_tokens if self.generation_config else None
+        return build_request_token_metrics(
+            messages=messages,
+            tools=tools,
+            model=self._resolve_request_model_id(),
+            max_output_tokens=max_output_tokens,
+        )
+
+    def _estimate_context_tokens(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> int:
+        return count_chat_input_tokens(
+            messages=messages,
+            tools=tools,
+            model=self._resolve_request_model_id(),
+        )
 
     def _estimate_context_usage(self, estimated_tokens: int) -> float:
         return estimate_context_usage(

@@ -84,6 +84,7 @@ EVENT_TYPES = [
     "search_round_finished",
     "search_stopped",
     "search_budget_auto_overridden",
+    "model_request_started",
     "model_failed",
     "model_reasoning",
     "model_stopped_length",

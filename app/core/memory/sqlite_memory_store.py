@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.memory.context_compressor import ContextCompressor
 from app.core.memory.llm_tool_chain_summarizer import summarize_tool_chain_payload
 from app.core.model.base import ModelProvider
+from app.core.runtime.token_counter import count_chat_messages_tokens, resolve_request_model_id
 
 
 @dataclass
@@ -81,6 +82,10 @@ class SQLiteMemoryStore:
         self.event_summarizer_kind = str(event_summarizer_kind or "rule").strip().lower() or "rule"
         self.event_summarizer_max_tokens = max(int(event_summarizer_max_tokens), 120)
         self.event_summarizer_model_provider = event_summarizer_model_provider
+        self.token_count_model_id = resolve_request_model_id(
+            model_provider=event_summarizer_model_provider,
+            default_model="gpt-4-turbo",
+        )
         os.makedirs(os.path.dirname(db_file) or ".", exist_ok=True)
         self._init_db()
 
@@ -607,20 +612,27 @@ class SQLiteMemoryStore:
         return idx, ""
 
     def _estimate_rows_tokens(self, rows: List[_MessageRow]) -> int:
-        total = 0
-        for row in rows:
-            total += self._estimate_message_tokens(row.content, row.tool_calls_json)
-        return max(total, 1) if rows else 0
+        if not rows:
+            return 0
+        messages = [
+            self._normalize_message_row(
+                role=row.role,
+                content=row.content,
+                tool_call_id=row.tool_call_id,
+                tool_calls_json=row.tool_calls_json,
+            )
+            for row in rows
+        ]
+        return count_chat_messages_tokens(messages=messages, model=self.token_count_model_id)
 
     def _estimate_message_tokens(self, content: str, tool_calls_json: Optional[str]) -> int:
-        text = str(content or "")
-        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
-        latin_words = len(re.findall(r"[A-Za-z0-9_]+", text))
-        punctuation = len(re.findall(r"[^\w\s]", text))
-        tokens = cjk_count + latin_words + max(punctuation // 2, 0) + 8
-        if tool_calls_json:
-            tokens += max(len(tool_calls_json) // 4, 1)
-        return max(tokens, 1)
+        message = self._normalize_message_row(
+            role="assistant",
+            content=content,
+            tool_call_id="",
+            tool_calls_json=tool_calls_json,
+        )
+        return count_chat_messages_tokens(messages=[message], model=self.token_count_model_id)
 
     def _compact_event_tool_chain(self, conversation_id: str, mode: str) -> Dict[str, Any]:
         with closing(self._connect()) as conn:
