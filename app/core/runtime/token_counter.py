@@ -42,20 +42,47 @@ def resolve_request_model_id(
 
 
 def resolve_encoding_name(model: str) -> str:
-    tiktoken = _require_tiktoken()
-    try:
-        encoding = tiktoken.encoding_for_model(model)
-    except KeyError as exc:
-        raise RuntimeError(f"Unsupported model for tiktoken encoding resolution: {model}") from exc
+    encoding = _get_encoding(model)
     return str(getattr(encoding, "name", "") or model)
+
+
+def _candidate_model_aliases(model: str) -> List[str]:
+    model_norm = str(model or "").strip()
+    if not model_norm:
+        return []
+    aliases: List[str] = [model_norm]
+
+    # Family-level fallback for versioned GPT-5 names such as gpt-5.4, gpt-5-mini-2026-01-01, etc.
+    lower = model_norm.lower()
+    if lower.startswith("gpt-5"):
+        aliases.append("gpt-5")
+
+    # Drop dated/provider suffixes conservatively: foo-bar-2026-01-01 -> foo-bar
+    parts = model_norm.split("-")
+    if len(parts) >= 4 and all(part.isdigit() for part in parts[-3:]):
+        aliases.append("-".join(parts[:-3]))
+
+    deduped: List[str] = []
+    seen = set()
+    for alias in aliases:
+        key = alias.strip()
+        if not key or key in seen:
+            continue
+        deduped.append(key)
+        seen.add(key)
+    return deduped
 
 
 def _get_encoding(model: str):
     tiktoken = _require_tiktoken()
-    try:
-        return tiktoken.encoding_for_model(model)
-    except KeyError as exc:
-        raise RuntimeError(f"Unsupported model for tiktoken encoding resolution: {model}") from exc
+    last_error: Exception | None = None
+    for candidate in _candidate_model_aliases(model):
+        try:
+            return tiktoken.encoding_for_model(candidate)
+        except KeyError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(f"Unsupported model for tiktoken encoding resolution: {model}") from last_error
 
 
 def _stable_json(value: Any) -> str:

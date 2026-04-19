@@ -12,6 +12,7 @@ from app.core.runtime.token_counter import (
     count_chat_input_tokens,
     count_chat_message_tokens,
     count_chat_messages_tokens,
+    resolve_encoding_name,
 )
 from app.core.tools.registry import ToolRegistry
 
@@ -26,7 +27,7 @@ class _FakeEncoding:
 
 class _FakeTiktoken(types.SimpleNamespace):
     def encoding_for_model(self, model: str):
-        if model == "unsupported-model":
+        if model in {"unsupported-model", "gpt-5.4"}:
             raise KeyError(model)
         return _FakeEncoding(name=f"enc:{model}")
 
@@ -80,6 +81,19 @@ class TokenCounterTests(unittest.TestCase):
         with patch.dict(sys.modules, {"tiktoken": fake_module}):
             with self.assertRaises(RuntimeError):
                 count_chat_messages_tokens(messages=[{"role": "user", "content": "hi"}], model="unsupported-model")
+
+    def test_resolve_encoding_name_falls_back_from_versioned_gpt5_model(self):
+        fake_module = _FakeTiktoken()
+        with patch.dict(sys.modules, {"tiktoken": fake_module}):
+            encoding_name = resolve_encoding_name("gpt-5.4")
+        self.assertEqual(encoding_name, "enc:gpt-5")
+
+    def test_count_chat_messages_tokens_falls_back_from_versioned_gpt5_model(self):
+        fake_module = _FakeTiktoken()
+        messages = [{"role": "user", "content": "hello"}]
+        with patch.dict(sys.modules, {"tiktoken": fake_module}):
+            total = count_chat_messages_tokens(messages=messages, model="gpt-5.4")
+        self.assertGreater(total, 0)
 
     def test_agent_runtime_emits_model_request_started_before_generate(self):
         provider = MockModelProvider(
