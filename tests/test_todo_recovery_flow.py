@@ -341,6 +341,50 @@ class TodoRecoveryFlowTests(unittest.TestCase):
         self.assertEqual(parsed["subtasks"][2]["dependencies"], ["2"])
         self.assertTrue(parsed["subtasks"][0]["subtask_id"].startswith("st_"))
 
+    def test_append_followup_subtasks_supports_local_reference_aliases(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000004b_demo"),
+            ):
+                created = _create_todo(
+                    task_name="Demo Task",
+                    context="Append recovery steps with local references",
+                    split_reason="Need follow-up tasks after failure.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                appended = append_followup_subtasks.entrypoint(
+                    todo_id=created["todo_id"],
+                    follow_up_subtasks=[
+                        {
+                            "name": "Diagnose the failure",
+                            "goal": "Identify the root cause",
+                            "description": "Inspect logs and isolate the problem",
+                            "kind": "diagnose",
+                            "owner": "main",
+                            "depends_on": [1],
+                            "acceptance_criteria": ["Root cause documented"],
+                        },
+                        {
+                            "name": "Repair after diagnosis",
+                            "goal": "Apply the targeted fix",
+                            "description": "Use the diagnosis result to repair the task",
+                            "kind": "repair",
+                            "owner": "subagent:builder",
+                            "depends_on": ["prev", "new:1"],
+                            "acceptance_criteria": ["Repair implemented"],
+                        },
+                    ],
+                )
+
+                parsed = _parse_task_file(Path(created["filepath"]))
+
+        self.assertTrue(appended["success"])
+        self.assertEqual(len(parsed["subtasks"]), 3)
+        self.assertEqual(parsed["subtasks"][1]["dependencies"], ["1"])
+        self.assertEqual(parsed["subtasks"][2]["dependencies"], ["2"])
+
     def test_plan_task_recovery_marks_budget_exhausted_as_derived_recovery(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
@@ -463,6 +507,41 @@ class TodoRecoveryFlowTests(unittest.TestCase):
         self.assertEqual(len(parsed["subtasks"]), 2)
         self.assertEqual(parsed["subtasks"][1]["name"], "Draft introduction")
         self.assertEqual(parsed["subtasks"][1]["dependencies"], ["1"])
+
+    def test_plan_task_append_subtasks_remaps_local_batch_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000005b_demo"),
+            ):
+                created = _create_todo(
+                    task_name="Demo Task",
+                    context="Append a second local plan phase",
+                    split_reason="Need a shared tracked todo.",
+                    subtasks=[
+                        {"name": "Base step 1", "description": "Do the first base action"},
+                        {"name": "Base step 2", "description": "Do the second base action", "dependencies": [1]},
+                        {"name": "Base step 3", "description": "Do the third base action", "dependencies": [2]},
+                    ],
+                )
+                result = _append_subtasks(
+                    todo_id=created["todo_id"],
+                    split_reason="Add the next locally-numbered execution phase",
+                    subtasks=[
+                        {"title": "Phase 2 step 1", "description": "Start the next phase"},
+                        {"title": "Phase 2 step 2", "description": "Continue phase 2", "dependencies": [1]},
+                        {"title": "Phase 2 step 3", "description": "Finish phase 2", "dependencies": [2]},
+                    ],
+                )
+
+                parsed = _parse_task_file(Path(created["filepath"]))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(parsed["subtasks"]), 6)
+        self.assertEqual(parsed["subtasks"][3]["dependencies"], [])
+        self.assertEqual(parsed["subtasks"][4]["dependencies"], ["4"])
+        self.assertEqual(parsed["subtasks"][5]["dependencies"], ["5"])
 
     def test_plan_task_rejects_incomplete_subtasks(self):
         result = plan_task.entrypoint(

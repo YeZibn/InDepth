@@ -946,10 +946,17 @@ def _append_create_style_subtasks(
     rationale_prefix: str,
 ) -> List[Dict[str, Any]]:
     subtasks = list(existing_subtasks or [])
+    existing_count = len(subtasks)
     next_number = _next_subtask_number(subtasks)
     appended: List[Dict[str, Any]] = []
-    for item in new_items:
+    for idx, item in enumerate(new_items, 1):
         cloned = dict(item)
+        cloned["dependencies"] = _resolve_appended_dependency_refs(
+            raw_dependencies=cloned.get("dependencies", []),
+            source_task_refs=cloned.get("source_task_refs", []),
+            existing_count=existing_count,
+            local_index=idx,
+        )
         cloned["number"] = str(next_number)
         if not str(cloned.get("split_rationale", "")).strip():
             cloned["split_rationale"] = f"{rationale_prefix} Added through structured todo update."
@@ -1212,6 +1219,63 @@ def _next_subtask_number(subtasks: List[Dict[str, Any]]) -> int:
     if not subtasks:
         return 1
     return max(int(task["number"]) for task in subtasks) + 1
+
+
+def _resolve_appended_dependency_refs(
+    raw_dependencies: List[Any],
+    source_task_refs: List[str],
+    existing_count: int,
+    local_index: int,
+) -> List[str]:
+    resolved: List[str] = []
+
+    def _append_unique(value: str) -> None:
+        if value and value not in resolved:
+            resolved.append(value)
+
+    def _resolve_ref(text: str) -> Optional[str]:
+        ref = str(text or "").strip().lower()
+        if not ref:
+            return None
+        if ref in {"prev", "previous"}:
+            if local_index <= 1:
+                return None
+            return str(existing_count + local_index - 1)
+        new_match = re.fullmatch(r"(?:new|local):(\d+)", ref)
+        if new_match:
+            local_dep = int(new_match.group(1))
+            if 1 <= local_dep < local_index:
+                return str(existing_count + local_dep)
+            return new_match.group(1)
+        task_match = re.fullmatch(r"(?:task|global|existing):(\d+)", ref)
+        if task_match:
+            return task_match.group(1)
+        return None
+
+    for dep in raw_dependencies:
+        dep_text = str(dep or "").strip()
+        if not dep_text:
+            continue
+        if dep_text.isdigit():
+            dep_number = int(dep_text)
+            # When a new batch is appended, later items often reference earlier
+            # local indices (1, 2, 3...). Only remap strict backward refs so the
+            # first appended item can still point at an existing Task 1.
+            if 1 <= dep_number < local_index:
+                _append_unique(str(existing_count + dep_number))
+            else:
+                _append_unique(dep_text)
+            continue
+        resolved_ref = _resolve_ref(dep_text)
+        if resolved_ref:
+            _append_unique(resolved_ref)
+
+    for ref in source_task_refs:
+        resolved_ref = _resolve_ref(ref)
+        if resolved_ref:
+            _append_unique(resolved_ref)
+
+    return resolved
 
 
 def _normalize_followup_subtasks(subtasks: Any) -> List[Dict[str, Any]]:
@@ -1915,13 +1979,19 @@ def append_followup_subtasks(todo_id: str, follow_up_subtasks: List[Dict[str, An
 
     filepath = task_data["filepath"]
     subtasks = task_data.get("subtasks", [])
+    existing_count = len(subtasks)
     next_number = _next_subtask_number(subtasks)
     added_numbers: List[str] = []
 
-    for item in new_items:
+    for idx, item in enumerate(new_items, 1):
         item["number"] = str(next_number)
         item["split_rationale"] = f"Recovery follow-up generated to progress unfinished work via {item['kind']}."
-        item["dependencies"] = item.get("dependencies", [])
+        item["dependencies"] = _resolve_appended_dependency_refs(
+            raw_dependencies=item.get("dependencies", []),
+            source_task_refs=item.get("source_task_refs", []),
+            existing_count=existing_count,
+            local_index=idx,
+        )
         item["description"] = item["description"]
         item["status"] = "pending"
         subtasks.append(item)

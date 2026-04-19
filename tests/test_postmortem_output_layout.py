@@ -208,6 +208,80 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
             self.assertIn("todo_id=todo_123", content)
             self.assertIn("decision=retry_with_fix / level=auto", content)
 
+    def test_generate_postmortem_snapshots_related_todo_under_task_root(self):
+        events = [
+            {
+                "timestamp": "2026-04-10T10:00:00+00:00",
+                "event_type": "task_started",
+                "actor": "main",
+                "role": "general",
+                "status": "ok",
+                "run_id": "run_with_todo",
+                "payload": {},
+            },
+            {
+                "timestamp": "2026-04-10T10:00:02+00:00",
+                "event_type": "task_judged",
+                "actor": "main",
+                "role": "general",
+                "status": "ok",
+                "run_id": "run_with_todo",
+                "payload": {
+                    "verification_handoff": {
+                        "recovery": {
+                            "todo_id": "todo_123",
+                        }
+                    }
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            todo_dir = Path(td) / "todo"
+            todo_dir.mkdir(parents=True, exist_ok=True)
+            todo_file = todo_dir / "todo_123.md"
+            todo_file.write_text("# Task: Demo todo\n", encoding="utf-8")
+
+            with patch("app.observability.postmortem._find_project_root", return_value=td):
+                result = generate_postmortem(task_id="task-with-todo", run_id="run_with_todo", events=events)
+
+            self.assertTrue(result["success"])
+            copied = Path(td) / "observability-evals" / "task-with-todo" / "todo" / "todo_123.md"
+            self.assertTrue(copied.exists())
+            self.assertEqual(copied.read_text(encoding="utf-8"), "# Task: Demo todo\n")
+
+    def test_generate_postmortem_snapshots_todo_task_by_prefixed_task_id(self):
+        events = [
+            {
+                "timestamp": "2026-04-10T10:00:00+00:00",
+                "event_type": "task_started",
+                "actor": "main",
+                "role": "general",
+                "status": "ok",
+                "payload": {},
+            },
+            {
+                "timestamp": "2026-04-10T10:00:02+00:00",
+                "event_type": "task_finished",
+                "actor": "main",
+                "role": "general",
+                "status": "ok",
+                "payload": {},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            todo_dir = Path(td) / "todo"
+            todo_dir.mkdir(parents=True, exist_ok=True)
+            todo_file = todo_dir / "demo_todo.md"
+            todo_file.write_text("# Task: Todo from prefixed task id\n", encoding="utf-8")
+
+            with patch("app.observability.postmortem._find_project_root", return_value=td):
+                result = generate_postmortem(task_id="todo-id:demo_todo", run_id="todo-id:demo_todo", events=events)
+
+            self.assertTrue(result["success"])
+            copied = Path(td) / "observability-evals" / "todo-id_demo_todo" / "todo" / "demo_todo.md"
+            self.assertTrue(copied.exists())
+            self.assertIn("Todo from prefixed task id", copied.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

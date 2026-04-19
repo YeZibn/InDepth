@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +40,76 @@ def _task_root_dir(task_id: str) -> str:
     path = os.path.join(base, task_seg)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _get_project_todo_dir() -> str:
+    return os.path.join(_find_project_root(), "todo")
+
+
+def _extract_todo_ids_from_payload(payload: Any) -> List[str]:
+    found: List[str] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_text = str(key or "").strip().lower()
+                if key_text == "todo_id":
+                    todo_id = str(item or "").strip()
+                    if todo_id and todo_id != "unknown":
+                        found.append(todo_id)
+                _walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                _walk(item)
+
+    _walk(payload)
+    return found
+
+
+def _collect_related_todo_ids(task_id: str, rows: List[Dict[str, Any]]) -> List[str]:
+    related: List[str] = []
+    task_text = str(task_id or "").strip()
+    if task_text.startswith("todo-id:"):
+        todo_id = task_text[len("todo-id:") :].strip()
+        if todo_id:
+            related.append(todo_id)
+
+    for row in rows:
+        payload = row.get("payload", {})
+        if isinstance(payload, dict):
+            related.extend(_extract_todo_ids_from_payload(payload))
+
+    unique: List[str] = []
+    seen = set()
+    for item in related:
+        todo_id = str(item or "").strip()
+        if not todo_id or todo_id in seen:
+            continue
+        seen.add(todo_id)
+        unique.append(todo_id)
+    return unique
+
+
+def _snapshot_related_todos(task_root: str, task_id: str, rows: List[Dict[str, Any]]) -> List[str]:
+    todo_dir = _get_project_todo_dir()
+    if not os.path.isdir(todo_dir):
+        return []
+
+    related_ids = _collect_related_todo_ids(task_id=task_id, rows=rows)
+    if not related_ids:
+        return []
+
+    out_dir = os.path.join(task_root, "todo")
+    os.makedirs(out_dir, exist_ok=True)
+    copied: List[str] = []
+    for todo_id in related_ids:
+        src = os.path.join(todo_dir, f"{todo_id}.md")
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(out_dir, f"{todo_id}.md")
+        shutil.copy2(src, dst)
+        copied.append(dst)
+    return copied
 
 
 def _to_local_display(ts: Any) -> str:
@@ -416,6 +487,7 @@ def generate_postmortem(
             os.path.join(task_root, "task_judgement_history.jsonl"),
             all_task_rows,
         )
+        _snapshot_related_todos(task_root=task_root, task_id=task_id, rows=all_task_rows)
     except Exception:
         pass
 

@@ -2,17 +2,17 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-18T19:18:56+08:00
+- updated_at: 2026-04-19T21:47:54+08:00
 - enabled: true
 
 ## preferences
 
 ### goal_long_term
-- value: 帮写一篇3000字左右的论文，并分部分写入md文档以避免丢失
+- value: 写一个简单的计算器到项目主目录的work文件夹下
 - source: llm_extract_v1
-- confidence: 0.98
-- updated_at: 2026-04-18T19:18:56+08:00
-- note: evidence=我希望你帮我写一篇论文...我希望你可以根据此帮我写出一篇3000字左右的论文。建议：一部分一部分写，写出一部分就放到md文档中，避免丢失。
+- confidence: 0.96
+- updated_at: 2026-04-19T21:40:10+08:00
+- note: evidence=写一个简单的计算器到项目主目录的work文件夹下
 
 ### interest_topics
 - value: [基于pdf参考文件提出自己的评论与思考]
@@ -36,15 +36,15 @@ meta:
 - note: evidence=你好啊
 
 ### response_style
-- value: [细分生成, 不要一次性生成这么多]
+- value: 带有窗口按钮
 - source: llm_extract_v1
-- confidence: 0.95
-- updated_at: 2026-04-18T14:10:49+08:00
-- note: evidence=建议可以细分生成，不要一次性生成这么多，超时。
+- confidence: 0.91
+- updated_at: 2026-04-19T21:47:54+08:00
+- note: evidence=做一个带有窗口按钮的
 
 ### tooling_stack
-- value: md文档
+- value: [Python]
 - source: llm_extract_v1
-- confidence: 0.95
-- updated_at: 2026-04-18T19:18:56+08:00
-- note: evidence=写出一部分就放到md文档中
+- confidence: 0.98
+- updated_at: 2026-04-19T21:40:10+08:00
+- note: evidence=帮我写一个简单的python程序
