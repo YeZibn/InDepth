@@ -346,9 +346,9 @@ def _parse_task_file(filepath: str) -> Dict[str, Any]:
 
 def _calculate_progress(subtasks: List[Dict[str, Any]]) -> Tuple[int, int, int]:
     total = len(subtasks)
-    completed = sum(1 for task in subtasks if task.get("status") == "completed")
-    percentage = int((completed / total) * 100) if total > 0 else 0
-    return completed, total, percentage
+    closed = sum(1 for task in subtasks if task.get("status") in TERMINAL_SUBTASK_STATUSES)
+    percentage = int((closed / total) * 100) if total > 0 else 0
+    return closed, total, percentage
 
 
 def _compute_overall_status(subtasks: List[Dict[str, Any]]) -> str:

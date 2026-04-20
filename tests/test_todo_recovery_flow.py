@@ -6,6 +6,7 @@ from unittest.mock import patch
 from app.tool.todo_tool.todo_tool import (
     _parse_task_file,
     append_followup_subtasks,
+    get_task_progress,
     plan_task,
     plan_task_recovery,
     prepare_task,
@@ -650,6 +651,32 @@ class TodoRecoveryFlowTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(reparsed["subtasks"][0]["status"], "in-progress")
+
+    def test_abandoned_subtask_counts_toward_progress_and_completion(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("app.tool.todo_tool.todo_tool._get_todo_dir", return_value=tmpdir),
+                patch("app.tool.todo_tool.todo_tool._emit_obs"),
+                patch("app.tool.todo_tool.todo_tool._generate_todo_id", return_value="20260416_000008_demo"),
+            ):
+                created = _create_todo(
+                    task_name="Demo Task",
+                    context="Abandoned subtasks should still count as closed progress",
+                    split_reason="Need terminal progress to align with all_completed semantics.",
+                    subtasks=[{"name": "Main step", "description": "Do the main thing"}],
+                )
+                result = update_task_status.entrypoint(
+                    todo_id=created["todo_id"],
+                    subtask_number=1,
+                    status="abandoned",
+                )
+                progress = get_task_progress.entrypoint(todo_id=created["todo_id"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["progress"], "1/1 (100%)")
+        self.assertTrue(result["all_completed"])
+        self.assertTrue(progress["success"])
+        self.assertEqual(progress["progress"], "1/1 (100%)")
 
 
 if __name__ == "__main__":

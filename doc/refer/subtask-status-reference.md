@@ -72,6 +72,10 @@
    - `completed`
    - `abandoned`
 
+补充：
+- 当前 progress 也按终态口径统计
+- 也就是 `completed + abandoned` 都计入进度分子
+
 3. `status="blocked"`
    表示没有任何 ready subtask
    常见原因：
@@ -173,6 +177,10 @@
 - `timed_out` 不是终态
 
 系统语义是：这些状态表示“当前主线未顺利完成，但仍可能继续恢复或重开”。
+
+当前 progress 统计也与这组终态保持一致：
+- `completed` 计入 progress
+- `abandoned` 也计入 progress
 
 #### 会让 Todo 整体保持 active 的状态
 
