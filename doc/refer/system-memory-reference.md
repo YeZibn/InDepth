@@ -72,14 +72,39 @@ System Memory 负责“跨任务经验沉淀与召回”。
 
 当前流程：
 
-1. 基于 `user_input` 构造 recall query
-2. 从 `memory_card` 读取候选卡
-3. 可选地用 LLM 做 rerank
-4. 只把少量高相关卡以轻量 block 注入 prompt
-5. 注入内容默认只包含：
+1. 直接使用原始 `user_input` 作为 recall query
+2. 通过独立 embedding provider 生成 query embedding
+3. 在 Milvus 中执行向量检索
+4. 用 `memory_id` 回 SQLite 查询正式 `memory_card`
+5. 仅保留：
+   - `status = active`
+   - 未过期卡
+   - `score >= min_score` 的高相关卡
+6. 若回表发现卡片无效，则尝试从 Milvus 删除该条向量索引
+7. 只把少量高相关卡以轻量 block 注入 prompt
+8. 注入内容默认只包含：
    - `memory_id`
    - `recall_hint`
-6. 如果后续需要完整细节，再通过 `get_memory_card_by_id` 拉全卡
+9. 如果后续需要完整细节，再通过 `get_memory_card_by_id` 拉全卡
+
+当前默认排序方式：
+
+1. 仅按向量相似度排序
+2. 不再走 LLM rerank
+3. 默认 `top_k = 5`
+4. 默认 `min_score = 0.65`
+
+当前 embedding / index 配置支持：
+
+1. 主 LLM 与 embedding 通道独立配置
+2. `LLM_EMBEDDING_MODEL_ID / LLM_EMBEDDING_API_KEY / LLM_EMBEDDING_BASE_URL`
+3. 本地 Milvus 默认地址：`http://127.0.0.1:19530`
+
+当前已验证的 embedding 配置示例：
+
+1. provider：SiliconFlow
+2. model：`Qwen/Qwen3-Embedding-8B`
+3. dimension：`4096`
 
 ### 4.2 任务结束：persist
 
@@ -137,25 +162,47 @@ System Memory 负责“跨任务经验沉淀与召回”。
 
 ## 6. 检索方式
 
-`SystemMemoryStore.search_cards(...)` 当前是轻量关键词检索。
+当前 System Memory 有两条不同的检索路径：
 
-当前实现特点：
+### 6.1 Runtime run-start recall
 
-1. 检索字段覆盖：
+run-start recall 当前默认使用向量检索。
+
+实现特点：
+
+1. recall query 仅来自 `user_input`
+2. memory embedding 文本固定为：
    - `title`
    - `recall_hint`
-   - `content`
-2. 默认只返回：
-   - `status = active`
-   - 未过期卡
-3. 结果按 `updated_at DESC` 取候选，再结合简单分数排序
-4. Runtime recall 可选叠加 LLM rerank，以减少误召回
+3. 先在 Milvus 中检索，再回 SQLite 做真值校验
+4. 若回表发现卡片无效，会尝试删除 Milvus 中对应向量
+5. 最终只轻注入：
+   - `memory_id`
+   - `recall_hint`
 
 这意味着：
 
-- 现在还没有向量检索
-- 现在也不是旧版的重字段结构检索
-- `recall_hint` 是轻注入的主语义入口，`content` 用于补充召回面
+1. Runtime recall 现在不再依赖 SQLite 关键词检索做主召回
+2. Runtime recall 也不再走 LLM rerank
+3. `content` 仍保留在主表中，但不参与默认 embedding 文本构造
+
+### 6.2 手动检索工具
+
+`SystemMemoryStore.search_cards(...)` 和 `search_memory_cards` 工具仍保留为手动关键词检索入口。
+
+当前实现特点：
+
+1. 底层匹配字段：
+   - `title`
+   - `recall_hint`
+   - `content`
+2. 默认只返回 active 且未过期卡片
+3. `stage` 参数仅为兼容保留，不再参与检索分桶
+
+这意味着：
+
+1. Runtime 主召回已经切到向量路径
+2. 关键词检索仍适合人工排查、调试、离线治理
 
 ## 7. 和 Runtime Memory 的区别
 
@@ -199,4 +246,26 @@ System Memory 相关事件主要是：
 1. 只在任务结束后沉淀
 2. 只沉淀已经收敛的经验
 3. 让 recall 成本保持轻量
-4. 为以后接向量检索预留干净的卡片载体
+4. 用 SQLite 作为真值源，用 Milvus 作为向量索引
+
+## 10. 当前关键文件补充
+
+除主表与生命周期文件外，当前 V1 向量召回还依赖：
+
+- `app/core/memory/embedding_provider.py`
+- `app/core/memory/vector_index_store.py`
+- `scripts/check_system_memory_vector_recall.py`
+
+## 11. 当前状态总结
+
+当前 System Memory 的主链路可以简化理解为：
+
+1. 结束时：
+   - `verification_handoff.memory_seed -> SQLite memory_card`
+   - 同步写入 Milvus 向量索引
+2. 开始时：
+   - `user_input -> embedding -> Milvus search -> SQLite 回表 -> 轻注入`
+3. 异常时：
+   - embedding / Milvus 异常不阻塞主任务
+4. 失效时：
+   - 回表发现无效卡，尝试删除 Milvus 中对应向量

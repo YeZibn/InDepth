@@ -116,17 +116,70 @@ InDepth 的设计遵循以下原则：
 2. 配置模型环境变量
    - 必填：`LLM_MODEL_ID`、`LLM_API_KEY`、`LLM_BASE_URL`
    - 可选：`LLM_MODEL_MINI_ID`（未设置时回退到 `LLM_MODEL_ID`）
+   - System Memory 向量召回可选：
+     `LLM_EMBEDDING_MODEL_ID`、`LLM_EMBEDDING_API_KEY`、`LLM_EMBEDDING_BASE_URL`、`ENABLE_SYSTEM_MEMORY_VECTOR_RECALL`、`SYSTEM_MEMORY_MILVUS_URI`
    - 缺失任一必填项会在启动时抛出 `ValueError`
+   - 可参考项目根目录 `.env.example`
 3. 启动 CLI
    - `python app/agent/runtime_agent.py`
    - 默认加载 `app/skills/` 下全部技能（当前为 `memory-knowledge-skill`、`ppt-skill`、`skill-creator`）
-4. 常用 CLI 命令
+4. 检查向量召回依赖是否就绪
+   - `python scripts/check_system_memory_vector_recall.py`
+5. 常用 CLI 命令
    - `/help`：查看命令帮助
    - `/task <label>`：结束当前任务并启动下一任务
    - `/newtask <label>`：`/task` 的别名
    - `/new [label]`：结束当前任务并启动下一任务
    - `/status`：查看当前模式（固定 `task`）与 `task_id`
    - `/exit`：退出
+
+### 4.1.1 System Memory 向量召回配置示例
+
+当前实现支持把主 LLM 与 embedding 通道拆开配置。
+
+示例：
+
+```bash
+LLM_MODEL_ID=gpt-5.4
+LLM_MODEL_MINI_ID=gpt-5.4-mini
+LLM_API_KEY=...
+LLM_BASE_URL=https://kuaipao.ai/v1
+
+LLM_EMBEDDING_MODEL_ID=Qwen/Qwen3-Embedding-8B
+LLM_EMBEDDING_API_KEY=...
+LLM_EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+
+ENABLE_SYSTEM_MEMORY_VECTOR_RECALL=true
+SYSTEM_MEMORY_MILVUS_URI=http://127.0.0.1:19530
+SYSTEM_MEMORY_MILVUS_COLLECTION=system_memory_card_embedding
+SYSTEM_MEMORY_EMBEDDING_DIM=4096
+SYSTEM_MEMORY_VECTOR_TOP_N=10
+SYSTEM_MEMORY_RECALL_TOP_K=5
+SYSTEM_MEMORY_RECALL_MIN_SCORE=0.65
+```
+
+说明：
+- 推荐为 embedding 使用独立 provider，而不是复用主 LLM 通道。
+- `Qwen/Qwen3-Embedding-8B` 当前实测返回向量维度为 `4096`，因此 `SYSTEM_MEMORY_EMBEDDING_DIM` 应配置为 `4096`。
+- Milvus 本地默认监听 `http://127.0.0.1:19530`。
+- 若 Milvus 开启鉴权，可额外配置 `SYSTEM_MEMORY_MILVUS_TOKEN`。
+
+### 4.1.2 向量召回自检
+
+项目提供了一个最小自检脚本：
+
+- `python scripts/check_system_memory_vector_recall.py`
+
+脚本会自动读取项目根目录 `.env`，依次检查：
+1. 向量召回配置是否开启
+2. embedding provider 是否可用
+3. embedding 请求是否成功
+4. Milvus collection 是否可访问
+
+当前实现已验证：
+- 可使用独立 embedding 通道访问 SiliconFlow
+- 可连接本地 Milvus
+- 可完成 `embedding + Milvus search` 的最小链路
 
 ### 4.2 运行模式说明（Runtime CLI）
 

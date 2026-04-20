@@ -545,6 +545,7 @@ get_memory_card_by_id(
    - 用于按关键词检索 system memory card
    - 当前底层检索匹配 `title + recall_hint + content`
    - `stage` 参数仅为兼容保留，当前检索本身不按 stage 分桶
+   - 注意：这是手动关键词检索工具，不等于 Runtime run-start 的默认向量召回主链路
 2. `get_memory_card_by_id`
    - 用于在 recall 命中后按 id 拉取完整卡片
    - 当带上 `task_id/run_id` 时，会补记 `memory_retrieved` 观测事件

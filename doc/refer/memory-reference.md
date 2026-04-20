@@ -19,7 +19,7 @@
 | 模块 | 核心目标 | 存储 | 生命周期 | 典型内容 |
 |------|----------|------|----------|----------|
 | Runtime 会话记忆 | 管理当前 task 的上下文 | SQLite | task / run 内 | messages、summary、step 压缩事实 |
-| System 经验记忆 | 沉淀跨任务可复用经验 | SQLite | 跨 task 长期存在 | memory card、recall_hint、经验卡片 |
+| System 经验记忆 | 沉淀跨任务可复用经验 | SQLite + Milvus 向量索引 | 跨 task 长期存在 | memory card、recall_hint、经验卡片 |
 | User Preference 记忆 | 记录用户个人偏好 | Markdown 单文件 | 跨 task 长期存在 | 语言偏好、回答风格、工具栈、兴趣 |
 
 ## 3. 边界划分
@@ -112,8 +112,9 @@ Runtime 会话记忆持续写入：
 1. Runtime 会话记忆
    - 面向“当前 task 还能不能继续跑”
 2. System 经验记忆
-   - 面向“未来类似 task 能不能少走弯路”
-   - 正式沉淀发生在 `finalizing(handoff)` 之后
+  - 面向“未来类似 task 能不能少走弯路”
+  - 正式沉淀发生在 `finalizing(handoff)` 之后
+  - SQLite 是事实源，Milvus 是向量索引
 3. User Preference 记忆
    - 面向“以后和这个用户协作时能不能更贴合”
 

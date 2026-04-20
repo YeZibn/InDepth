@@ -169,6 +169,8 @@ app/
 │   │   ├── sqlite_memory_store.py  # 会话记忆
 │   │   ├── system_memory_store.py  # 系统记忆
 │   │   ├── recall_service.py       # 记忆召回能力
+│   │   ├── embedding_provider.py   # embedding 通道
+│   │   ├── vector_index_store.py   # Milvus 向量索引
 │   │   ├── memory_metadata_service.py # 记忆元数据能力
 │   │   ├── user_preference_store.py # 用户偏好存储（新增）
 │   │   └── context_compressor.py   # 压缩逻辑

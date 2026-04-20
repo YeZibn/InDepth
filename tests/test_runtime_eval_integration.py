@@ -1,11 +1,38 @@
 import unittest
 import threading
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from app.core.memory.system_memory_store import SystemMemoryStore
 from app.core.model.mock_provider import MockModelProvider
 from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.tools.registry import ToolRegistry
 from app.eval.schema import RunJudgement
+
+
+class _FakeEmbeddingProvider:
+    def __init__(self, embedding):
+        self.embedding = embedding
+        self.calls = []
+
+    def embed_text(self, text):
+        self.calls.append(text)
+        return list(self.embedding)
+
+
+class _FakeVectorIndex:
+    def __init__(self, hits):
+        self.hits = hits
+        self.deleted_ids = []
+        self.search_calls = []
+
+    def search_memory_vectors(self, query_embedding, top_k):
+        self.search_calls.append({"query_embedding": list(query_embedding), "top_k": top_k})
+        return list(self.hits)
+
+    def delete_memory_vector(self, memory_id):
+        self.deleted_ids.append(memory_id)
 
 
 class RuntimeEvalIntegrationTests(unittest.TestCase):
@@ -142,11 +169,16 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
             ]
         )
 
-        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
-            mock_store = mock_store_cls.return_value
-            mock_store.search_cards.return_value = []
-            runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
-            result = runtime.run("请执行任务", task_id="runtime_mem_task", run_id="runtime_mem_run")
+        embedding_provider = _FakeEmbeddingProvider([0.1, 0.2, 0.3])
+        vector_index = _FakeVectorIndex([])
+        runtime = AgentRuntime(
+            model_provider=provider,
+            tool_registry=ToolRegistry(),
+            max_steps=2,
+            system_memory_embedding_provider=embedding_provider,
+            system_memory_vector_index=vector_index,
+        )
+        result = runtime.run("请执行任务", task_id="runtime_mem_task", run_id="runtime_mem_run")
 
         self.assertEqual(result, "任务正常完成")
         self.assertTrue(provider.requests)
@@ -156,15 +188,11 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
             if m.get("role") == "system" and "系统记忆召回" in str(m.get("content", ""))
         ]
         self.assertEqual(len(memory_msgs), 0)
-        self.assertTrue(mock_store.search_cards.called)
+        self.assertEqual(len(vector_index.search_calls), 1)
 
-    def test_runtime_start_recall_injects_memory_block_for_high_precision_matches(self):
+    def test_runtime_start_recall_injects_memory_block_for_high_precision_vector_matches(self):
         provider = MockModelProvider(
             scripted_outputs=[
-                {
-                    "content": '{"selected":[{"id":"mem_high_1","score":0.91,"reason":"payment retry semantic match"}]}',
-                    "raw": {"mock": True},
-                },
                 {
                     "content": "任务正常完成",
                     "raw": {
@@ -179,26 +207,41 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
             ]
         )
 
-        with patch("app.core.runtime.agent_runtime.SystemMemoryStore") as mock_store_cls:
-            mock_store = mock_store_cls.return_value
-            mock_store.search_cards.return_value = [
+        with TemporaryDirectory() as td:
+            db = str(Path(td) / "system_memory.db")
+            store = SystemMemoryStore(db_file=db)
+            store.upsert_card(
                 {
                     "id": "mem_high_1",
                     "title": "支付重试幂等检查",
                     "recall_hint": "支付重试前先校验幂等键",
-                    "retrieval_score": 0.88,
-                },
+                    "content": "支付重试前先校验幂等键",
+                    "status": "active",
+                }
+            )
+            store.upsert_card(
                 {
                     "id": "mem_low_1",
                     "title": "低相关卡片",
-                    "retrieval_score": 0.4,
-                },
-            ]
+                    "recall_hint": "与支付重试无关",
+                    "content": "低相关内容",
+                    "status": "active",
+                }
+            )
+            embedding_provider = _FakeEmbeddingProvider([0.8, 0.1, 0.1])
+            vector_index = _FakeVectorIndex(
+                hits=[
+                    type("Hit", (), {"memory_id": "mem_high_1", "score": 0.91})(),
+                    type("Hit", (), {"memory_id": "mem_low_1", "score": 0.40})(),
+                ]
+            )
             runtime = AgentRuntime(
                 model_provider=provider,
                 tool_registry=ToolRegistry(),
                 max_steps=2,
-                enable_memory_recall_reranker=True,
+                system_memory_store=store,
+                system_memory_embedding_provider=embedding_provider,
+                system_memory_vector_index=vector_index,
             )
             result = runtime.run("请执行支付重试逻辑检查", task_id="runtime_mem_task", run_id="runtime_mem_run")
 
@@ -216,6 +259,52 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         self.assertIn("memory_id=mem_high_1", joined)
         self.assertIn("recall_hint=支付重试前先校验幂等键", joined)
         self.assertNotIn("低相关卡片", joined)
+
+    def test_runtime_start_recall_deletes_invalid_memory_vector_after_sqlite_check(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": "任务正常完成",
+                    "raw": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "任务正常完成"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+
+        with TemporaryDirectory() as td:
+            db = str(Path(td) / "system_memory.db")
+            store = SystemMemoryStore(db_file=db)
+            store.upsert_card(
+                {
+                    "id": "mem_invalid_1",
+                    "title": "已归档卡片",
+                    "recall_hint": "不应再被召回",
+                    "content": "归档内容",
+                    "status": "archived",
+                }
+            )
+            embedding_provider = _FakeEmbeddingProvider([0.6, 0.3, 0.1])
+            vector_index = _FakeVectorIndex(
+                hits=[type("Hit", (), {"memory_id": "mem_invalid_1", "score": 0.99})()]
+            )
+            runtime = AgentRuntime(
+                model_provider=provider,
+                tool_registry=ToolRegistry(),
+                max_steps=2,
+                system_memory_store=store,
+                system_memory_embedding_provider=embedding_provider,
+                system_memory_vector_index=vector_index,
+            )
+            result = runtime.run("请执行任务", task_id="runtime_mem_task_invalid", run_id="runtime_mem_run_invalid")
+
+        self.assertEqual(result, "任务正常完成")
+        self.assertEqual(vector_index.deleted_ids, ["mem_invalid_1"])
 
     def test_runtime_forces_task_end_memory_finalization(self):
         provider = MockModelProvider(

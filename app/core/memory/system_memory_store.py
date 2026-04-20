@@ -3,12 +3,23 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+from app.core.memory.recall_service import build_memory_vector_text
+
 
 class SystemMemoryStore:
     """SQLite store for lightweight recall-oriented memory cards."""
 
-    def __init__(self, db_file: str = "db/system_memory.db"):
+    def __init__(
+        self,
+        db_file: str = "db/system_memory.db",
+        vector_index: Any = None,
+        embedding_provider: Any = None,
+        embedding_model_id: str = "",
+    ):
         self.db_file = db_file
+        self.vector_index = vector_index
+        self.embedding_provider = embedding_provider
+        self.embedding_model_id = str(embedding_model_id or "").strip()
         os.makedirs(os.path.dirname(db_file) or ".", exist_ok=True)
         self._init_db()
 
@@ -132,6 +143,7 @@ class SystemMemoryStore:
             conn.commit()
         finally:
             conn.close()
+        self._sync_vector_index(normalized)
         return {"success": True, "id": normalized["id"]}
 
     def get_card(self, card_id: str, only_active: bool = False) -> Optional[Dict[str, Any]]:
@@ -412,3 +424,23 @@ class SystemMemoryStore:
             return str(row[0] or "").strip() if row else ""
         finally:
             conn.close()
+
+    def _sync_vector_index(self, card: Dict[str, Any]) -> None:
+        if self.vector_index is None or self.embedding_provider is None:
+            return
+        title = str(card.get("title", "") or "").strip()
+        recall_hint = str(card.get("recall_hint", "") or "").strip()
+        memory_id = str(card.get("id", "") or "").strip()
+        if not memory_id or not title or not recall_hint:
+            return
+        vector_text = build_memory_vector_text(title=title, recall_hint=recall_hint)
+        try:
+            embedding = self.embedding_provider.embed_text(vector_text)
+            self.vector_index.upsert_memory_vector(
+                memory_id=memory_id,
+                vector_text=vector_text,
+                embedding=embedding,
+                model=self.embedding_model_id,
+            )
+        except Exception:
+            return

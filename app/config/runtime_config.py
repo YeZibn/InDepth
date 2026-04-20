@@ -48,6 +48,21 @@ class RuntimeUserPreferenceConfig:
     conflict_min_confidence: float
 
 
+@dataclass(frozen=True)
+class RuntimeSystemMemoryVectorConfig:
+    enabled: bool
+    embedding_model_id: str
+    embedding_api_key: str
+    embedding_base_url: str
+    milvus_uri: str
+    milvus_token: str
+    collection_name: str
+    embedding_dim: int
+    search_top_n: int
+    recall_top_k: int
+    min_score: float
+
+
 def _first_non_empty(*values: Optional[str]) -> str:
     for value in values:
         if value and value.strip():
@@ -191,4 +206,34 @@ def load_runtime_user_preference_config() -> RuntimeUserPreferenceConfig:
         enable_llm_extract=_env_bool("ENABLE_USER_PREFERENCE_LLM_EXTRACT", True),
         auto_write_min_confidence=_env_float("USER_PREFERENCE_AUTO_WRITE_MIN_CONFIDENCE", 0.75),
         conflict_min_confidence=_env_float("USER_PREFERENCE_CONFLICT_MIN_CONFIDENCE", 0.90),
+    )
+
+
+def load_runtime_system_memory_vector_config() -> RuntimeSystemMemoryVectorConfig:
+    embedding_model_id = _first_non_empty(
+        os.getenv("LLM_EMBEDDING_MODEL_ID"),
+        os.getenv("LLM_MODEL_MINI_ID"),
+        os.getenv("LLM_MODEL_ID"),
+    )
+    return RuntimeSystemMemoryVectorConfig(
+        enabled=_env_bool("ENABLE_SYSTEM_MEMORY_VECTOR_RECALL", False),
+        embedding_model_id=embedding_model_id,
+        embedding_api_key=_first_non_empty(
+            os.getenv("LLM_EMBEDDING_API_KEY"),
+            os.getenv("LLM_API_KEY"),
+        ),
+        embedding_base_url=_first_non_empty(
+            os.getenv("LLM_EMBEDDING_BASE_URL"),
+            os.getenv("LLM_BASE_URL"),
+        ),
+        milvus_uri=_first_non_empty(os.getenv("SYSTEM_MEMORY_MILVUS_URI")),
+        milvus_token=_first_non_empty(os.getenv("SYSTEM_MEMORY_MILVUS_TOKEN")),
+        collection_name=_first_non_empty(
+            os.getenv("SYSTEM_MEMORY_MILVUS_COLLECTION"),
+            "system_memory_card_embedding",
+        ),
+        embedding_dim=_env_int("SYSTEM_MEMORY_EMBEDDING_DIM", 1536, min_value=8),
+        search_top_n=_env_int("SYSTEM_MEMORY_VECTOR_TOP_N", 10, min_value=1),
+        recall_top_k=_env_int("SYSTEM_MEMORY_RECALL_TOP_K", 5, min_value=1),
+        min_score=_env_float("SYSTEM_MEMORY_RECALL_MIN_SCORE", 0.65),
     )

@@ -6,6 +6,31 @@ from datetime import date, timedelta
 from app.core.memory.system_memory_store import SystemMemoryStore
 
 
+class _FakeEmbeddingProvider:
+    def __init__(self, embedding):
+        self.embedding = embedding
+        self.calls = []
+
+    def embed_text(self, text):
+        self.calls.append(text)
+        return list(self.embedding)
+
+
+class _FakeVectorIndex:
+    def __init__(self):
+        self.upserts = []
+
+    def upsert_memory_vector(self, memory_id, vector_text, embedding, model):
+        self.upserts.append(
+            {
+                "memory_id": memory_id,
+                "vector_text": vector_text,
+                "embedding": list(embedding),
+                "model": model,
+            }
+        )
+
+
 class SystemMemoryStoreTests(unittest.TestCase):
     def test_upsert_and_search_cards(self):
         with tempfile.TemporaryDirectory() as td:
@@ -174,6 +199,36 @@ class SystemMemoryStoreTests(unittest.TestCase):
             self.assertEqual(card.get("title"), "旧卡片")
             self.assertEqual(card.get("recall_hint"), "旧提示")
             self.assertEqual(card.get("content"), "旧内容")
+
+    def test_upsert_card_syncs_vector_index_when_provider_is_configured(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = str(Path(td) / "system_memory.db")
+            vector_index = _FakeVectorIndex()
+            embedding_provider = _FakeEmbeddingProvider([0.11, 0.22, 0.33])
+            store = SystemMemoryStore(
+                db_file=db,
+                vector_index=vector_index,
+                embedding_provider=embedding_provider,
+                embedding_model_id="text-embedding-test",
+            )
+
+            store.upsert_card(
+                {
+                    "id": "mem_vector_sync_001",
+                    "title": "支付重试必须幂等键先行",
+                    "recall_hint": "支付重试前先校验幂等键，再执行扣款写操作",
+                    "content": "测试内容",
+                    "status": "active",
+                }
+            )
+
+            self.assertEqual(len(embedding_provider.calls), 1)
+            self.assertIn("title: 支付重试必须幂等键先行", embedding_provider.calls[0])
+            self.assertIn("recall_hint: 支付重试前先校验幂等键，再执行扣款写操作", embedding_provider.calls[0])
+            self.assertEqual(len(vector_index.upserts), 1)
+            self.assertEqual(vector_index.upserts[0]["memory_id"], "mem_vector_sync_001")
+            self.assertEqual(vector_index.upserts[0]["embedding"], [0.11, 0.22, 0.33])
+            self.assertEqual(vector_index.upserts[0]["model"], "text-embedding-test")
 
 
 if __name__ == "__main__":

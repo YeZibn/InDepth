@@ -1,5 +1,4 @@
 import json
-import re
 from typing import Any, Callable, Dict, List
 
 from app.config import load_runtime_model_config
@@ -14,43 +13,13 @@ from app.core.model.base import GenerationConfig, ModelProvider
 
 
 def build_recall_query(user_input: str) -> str:
-    base = f"{user_input}".lower()
-    tokens = re.findall(r"[a-z0-9_\-\u4e00-\u9fff]+", base)
-    stop = {
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "to",
-        "for",
-        "of",
-        "in",
-        "on",
-        "with",
-        "请",
-        "帮我",
-        "一下",
-        "麻烦",
-        "需要",
-        "现在",
-        "这个",
-        "那个",
-        "进行",
-        "完成",
-    }
-    out: List[str] = []
-    for token in tokens:
-        val = token.strip()
-        if not val or len(val) <= 1:
-            continue
-        if val in stop:
-            continue
-        if val not in out:
-            out.append(val)
-        if len(out) >= 12:
-            break
-    return " ".join(out)
+    return str(user_input or "").strip()
+
+
+def build_memory_vector_text(title: str, recall_hint: str) -> str:
+    title_text = str(title or "").strip()
+    hint_text = str(recall_hint or "").strip()
+    return f"title: {title_text}\nrecall_hint: {hint_text}".strip()
 
 
 def render_memory_recall_block(cards: List[Dict[str, Any]], preview: Callable[[str, int], str]) -> str:

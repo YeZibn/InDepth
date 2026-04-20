@@ -4,11 +4,14 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.config import (
     RuntimeCompressionConfig,
+    RuntimeSystemMemoryVectorConfig,
     RuntimeUserPreferenceConfig,
     load_runtime_compression_config,
     load_runtime_model_config,
+    load_runtime_system_memory_vector_config,
     load_runtime_user_preference_config,
 )
+from app.core.memory.embedding_provider import build_system_memory_embedding_provider
 from app.core.runtime.runtime_utils import (
     estimate_context_usage,
     extract_finish_reason_and_message,
@@ -72,6 +75,7 @@ from app.core.model.base import GenerationConfig, ModelProvider
 from app.core.memory.base import MemoryStore
 from app.core.memory.system_memory_store import SystemMemoryStore
 from app.core.memory.user_preference_store import UserPreferenceStore
+from app.core.memory.vector_index_store import build_system_memory_vector_index_store
 from app.core.tools.registry import ToolRegistry
 from app.observability.events import emit_event
 from app.observability.postmortem import generate_postmortem
@@ -140,7 +144,7 @@ PHASE_OVERLAY_PROMPTS = {
 class AgentRuntime:
     START_RECALL_TOP_K = 5
     START_RECALL_MIN_SCORE = 0.65
-    START_RECALL_CANDIDATE_POOL = 50
+    START_RECALL_SEARCH_TOP_N = 10
     TODO_BINDING_GUARD_MODE = "warn"
     TODO_BINDING_EXEMPT_TOOLS = {
         "plan_task",
@@ -178,6 +182,9 @@ class AgentRuntime:
         clarification_judge_confidence_threshold: float = 0.60,
         enable_clarification_heuristic_fallback: bool = True,
         system_memory_store: Optional[SystemMemoryStore] = None,
+        system_memory_vector_index: Any = None,
+        system_memory_embedding_provider: Any = None,
+        system_memory_vector_config: Optional[RuntimeSystemMemoryVectorConfig] = None,
         compression_config: Optional[RuntimeCompressionConfig] = None,
         user_preference_config: Optional[RuntimeUserPreferenceConfig] = None,
         task_token_store: Optional[TaskTokenStore] = None,
@@ -197,6 +204,13 @@ class AgentRuntime:
             llm_judge_config=generation_config,
         )
         self.system_memory_store = system_memory_store
+        self.system_memory_vector_config = system_memory_vector_config or load_runtime_system_memory_vector_config()
+        self.system_memory_vector_index = system_memory_vector_index or build_system_memory_vector_index_store(
+            self.system_memory_vector_config
+        )
+        self.system_memory_embedding_provider = system_memory_embedding_provider or build_system_memory_embedding_provider(
+            self.system_memory_vector_config
+        )
         self.compression_config = compression_config or load_runtime_compression_config()
         self.user_preference_config = user_preference_config or load_runtime_user_preference_config()
         self.task_token_store = task_token_store
@@ -211,11 +225,7 @@ class AgentRuntime:
                 self.user_preference_store = UserPreferenceStore(file_path=self.user_preference_config.file_path)
             except Exception:
                 self.user_preference_store = None
-        if enable_memory_recall_reranker is None:
-            # Default on for real providers, off for deterministic test mock provider.
-            self.enable_memory_recall_reranker = self.model_provider.__class__.__name__ != "MockModelProvider"
-        else:
-            self.enable_memory_recall_reranker = bool(enable_memory_recall_reranker)
+        self.enable_memory_recall_reranker = False
         if enable_memory_card_metadata_llm is None:
             # Default on for real providers, off for deterministic test mock provider.
             self.enable_memory_card_metadata_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
@@ -1324,7 +1334,11 @@ class AgentRuntime:
         store = self.system_memory_store
         if store is None:
             try:
-                store = SystemMemoryStore()
+                store = SystemMemoryStore(
+                    vector_index=self.system_memory_vector_index,
+                    embedding_provider=self.system_memory_embedding_provider,
+                    embedding_model_id=self.system_memory_vector_config.embedding_model_id,
+                )
             except Exception:
                 store = None
         finalize_task_memory(
@@ -1337,6 +1351,9 @@ class AgentRuntime:
             tool_failures=tool_failures,
             verification_handoff=verification_handoff,
             system_memory_store=store,
+            memory_vector_index=self.system_memory_vector_index,
+            memory_embedding_provider=self.system_memory_embedding_provider,
+            memory_embedding_model_id=self.system_memory_vector_config.embedding_model_id,
             preview=self._preview,
             slug=self._slug,
             emit_event=emit_event,
@@ -1352,7 +1369,11 @@ class AgentRuntime:
         store = self.system_memory_store
         if store is None:
             try:
-                store = SystemMemoryStore()
+                store = SystemMemoryStore(
+                    vector_index=self.system_memory_vector_index,
+                    embedding_provider=self.system_memory_embedding_provider,
+                    embedding_model_id=self.system_memory_vector_config.embedding_model_id,
+                )
             except Exception:
                 store = None
         return inject_system_memory_recall(
@@ -1361,14 +1382,13 @@ class AgentRuntime:
             user_input=user_input,
             messages=messages,
             system_memory_store=store,
+            memory_vector_index=self.system_memory_vector_index,
+            memory_embedding_provider=self.system_memory_embedding_provider,
             emit_event=emit_event,
-            model_provider=self.model_provider,
-            enable_memory_recall_reranker=self.enable_memory_recall_reranker,
-            parse_json_dict=self._parse_json_dict,
             preview=self._preview,
-            start_recall_candidate_pool=self.START_RECALL_CANDIDATE_POOL,
-            start_recall_top_k=self.START_RECALL_TOP_K,
-            start_recall_min_score=self.START_RECALL_MIN_SCORE,
+            search_top_n=self.system_memory_vector_config.search_top_n or self.START_RECALL_SEARCH_TOP_N,
+            start_recall_top_k=self.system_memory_vector_config.recall_top_k or self.START_RECALL_TOP_K,
+            start_recall_min_score=self.system_memory_vector_config.min_score or self.START_RECALL_MIN_SCORE,
         )
 
     def _inject_user_preference_recall(

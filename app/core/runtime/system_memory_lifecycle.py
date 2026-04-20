@@ -3,13 +3,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.core.memory.memory_metadata_service import extract_title_topic
 from app.core.memory.recall_service import (
-    build_memory_reranker_config,
     build_recall_query,
     render_memory_recall_block,
-    rerank_memory_candidates_llm,
 )
 from app.core.memory.system_memory_store import SystemMemoryStore
-from app.core.model.base import ModelProvider
 
 
 # 这个模块保留在 runtime 下，是因为它表达的是“system memory 在 runtime 生命周期中的触发时机”。
@@ -26,12 +23,19 @@ def finalize_task_memory(
     tool_failures: List[Dict[str, str]],
     verification_handoff: Dict[str, Any],
     system_memory_store: Optional[SystemMemoryStore],
+    memory_vector_index: Any,
+    memory_embedding_provider: Any,
+    memory_embedding_model_id: str,
     preview: Callable[[str, int], str],
     slug: Callable[[str], str],
     emit_event: Callable[..., Dict[str, Any]],
 ) -> None:
     try:
-        store = system_memory_store or SystemMemoryStore()
+        store = system_memory_store or SystemMemoryStore(
+            vector_index=memory_vector_index,
+            embedding_provider=memory_embedding_provider,
+            embedding_model_id=memory_embedding_model_id,
+        )
     except Exception:
         return
 
@@ -120,12 +124,11 @@ def inject_system_memory_recall(
     user_input: str,
     messages: List[Dict[str, Any]],
     system_memory_store: Optional[SystemMemoryStore],
+    memory_vector_index: Any,
+    memory_embedding_provider: Any,
     emit_event: Callable[..., Dict[str, Any]],
-    model_provider: ModelProvider,
-    enable_memory_recall_reranker: bool,
-    parse_json_dict: Callable[[str], Dict[str, Any]],
     preview: Callable[[str, int], str],
-    start_recall_candidate_pool: int,
+    search_top_n: int,
     start_recall_top_k: int,
     start_recall_min_score: float,
 ) -> List[Dict[str, Any]]:
@@ -134,6 +137,8 @@ def inject_system_memory_recall(
     try:
         store = system_memory_store or SystemMemoryStore()
     except Exception:
+        return messages
+    if memory_vector_index is None or memory_embedding_provider is None:
         return messages
 
     query = build_recall_query(user_input=user_input)
@@ -149,18 +154,21 @@ def inject_system_memory_recall(
             "source": "runtime_start_recall",
             "source_event": "runtime_start_recall",
             "query": query,
+            "query_text": user_input,
+            "retrieval_mode": "milvus_vector",
+            "top_n": int(search_top_n),
+            "top_k": int(start_recall_top_k),
+            "min_score": float(start_recall_min_score),
         },
     )
     trigger_event_id = str(triggered.get("event_id", "")).strip()
 
     try:
-        rows = store.search_cards(
-            query="",
-            limit=max(start_recall_candidate_pool, start_recall_top_k),
-            only_active=True,
+        query_embedding = memory_embedding_provider.embed_text(query)
+        hits = memory_vector_index.search_memory_vectors(
+            query_embedding=query_embedding,
+            top_k=max(int(search_top_n), int(start_recall_top_k)),
         )
-        if not isinstance(rows, list):
-            rows = []
     except Exception as e:
         if trigger_event_id:
             emit_event(
@@ -179,31 +187,25 @@ def inject_system_memory_recall(
         return messages
 
     selected: List[Dict[str, Any]] = []
-    if rows and enable_memory_recall_reranker:
-        reranked = rerank_memory_candidates_llm(
-            model_provider=model_provider,
-            user_input=user_input,
-            candidates=rows,
-            start_recall_candidate_pool=start_recall_candidate_pool,
-            start_recall_top_k=start_recall_top_k,
-            build_memory_reranker_config=build_memory_reranker_config,
-            parse_json_dict=parse_json_dict,
-        )
-        card_map: Dict[str, Dict[str, Any]] = {
-            str(card.get("id", "")).strip(): card for card in rows if str(card.get("id", "")).strip()
-        }
-        for item in reranked:
-            mid = str(item.get("id", "")).strip()
-            score = float(item.get("score", 0.0) or 0.0)
-            if not mid or mid not in card_map:
-                continue
-            if score < start_recall_min_score:
-                continue
-            card = dict(card_map[mid])
-            card["retrieval_score"] = score
-            selected.append(card)
-            if len(selected) >= start_recall_top_k:
-                break
+    for hit in hits or []:
+        memory_id = str(getattr(hit, "memory_id", "") or "").strip()
+        score = float(getattr(hit, "score", 0.0) or 0.0)
+        if not memory_id:
+            continue
+        card = store.get_card(memory_id, only_active=False)
+        if not _is_card_recallable(card):
+            try:
+                memory_vector_index.delete_memory_vector(memory_id)
+            except Exception:
+                pass
+            continue
+        if score < start_recall_min_score:
+            continue
+        row = dict(card)
+        row["retrieval_score"] = score
+        selected.append(row)
+        if len(selected) >= start_recall_top_k:
+            break
 
     if trigger_event_id:
         if not selected:
@@ -216,7 +218,7 @@ def inject_system_memory_recall(
                 payload={
                     "trigger_event_id": trigger_event_id,
                     "decision": "skipped",
-                    "reason": "no_llm_recall_match",
+                    "reason": "no_vector_recall_match",
                 },
             )
         else:
@@ -232,6 +234,7 @@ def inject_system_memory_recall(
                         "memory_id": card.get("id", ""),
                         "score": float(card.get("retrieval_score", 0.0) or 0.0),
                         "source": "runtime_start_recall",
+                        "retrieval_mode": "milvus_vector",
                     },
                 )
             emit_event(
@@ -243,7 +246,7 @@ def inject_system_memory_recall(
                 payload={
                     "trigger_event_id": trigger_event_id,
                     "decision": "accepted",
-                    "reason": f"recalled_{len(selected)}_high_precision_cards",
+                    "reason": f"recalled_{len(selected)}_vector_cards",
                 },
             )
 
@@ -261,3 +264,22 @@ def inject_system_memory_recall(
         out[0] = first
         return out
     return [{"role": "system", "content": memory_block}] + out
+
+
+def _is_card_recallable(card: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(card, dict) or not card:
+        return False
+    lifecycle = card.get("lifecycle", {}) if isinstance(card.get("lifecycle", {}), dict) else {}
+    status = str(card.get("status", "") or lifecycle.get("status", "") or "").strip().lower()
+    if status != "active":
+        return False
+    expire_at = card.get("expire_at") or lifecycle.get("expire_at")
+    if expire_at is None:
+        return True
+    expire_text = str(expire_at).strip()
+    if not expire_text:
+        return True
+    try:
+        return datetime.now().date() <= datetime.fromisoformat(expire_text).date()
+    except Exception:
+        return True
