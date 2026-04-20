@@ -28,7 +28,6 @@ def build_default_registry() -> ToolRegistry:
     from app.tool.history_recall_tool import history_recall
     from app.tool.read_file_tool import read_file
     from app.tool.memory_query_tool import get_memory_card_by_id
-    from app.tool.runtime_memory_harvest_tool import capture_runtime_memory_candidate
     from app.tool.write_file_tool import write_file
     from app.tool.search_tool.search_guard import get_guarded_search_tools
     from app.tool.sub_agent_tool.sub_agent_tool import get_sub_agent_tools
@@ -41,7 +40,6 @@ def build_default_registry() -> ToolRegistry:
         history_recall,
         read_file,
         write_file,
-        capture_runtime_memory_candidate,
         get_memory_card_by_id,
     ]
     all_tools += get_guarded_search_tools()

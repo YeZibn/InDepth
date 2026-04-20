@@ -56,14 +56,13 @@ def finalize_completed_run(
     last_tool_failures: List[Dict[str, str]],
     verification_handoff: Optional[Dict[str, Any]],
     handoff_source: str,
-    build_verification_handoff: Callable[..., tuple[Dict[str, Any], str]],
     auto_manage_todo_recovery: Callable[..., None],
     append_recovery_summary_for_user: Callable[[str], str],
     has_latest_todo_recovery: Callable[[], bool],
     eval_orchestrator: Any,
     emit_event: Callable[..., Dict[str, Any]],
 ) -> Dict[str, Any]:
-    # task_finished 必须在 verifier 前发出，确保终态事件顺序稳定。
+    # finalizing(handoff) 完成后，task_finished 必须在 verifier 前发出，确保终态事件顺序稳定。
     emit_event(
         task_id=task_id,
         run_id=run_id,
@@ -96,13 +95,8 @@ def finalize_completed_run(
     task_finished_status = task_status
     try:
         if verification_handoff is None:
-            verification_handoff, handoff_source = build_verification_handoff(
-                user_input=user_input,
-                final_answer=final_answer,
-                stop_reason=stop_reason,
-                runtime_status=task_status,
-                tool_failures=last_tool_failures,
-            )
+            verification_handoff = {}
+            handoff_source = handoff_source or "fallback_rule"
         run_outcome = RunOutcome(
             task_id=task_id,
             run_id=run_id,

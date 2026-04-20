@@ -61,21 +61,21 @@ FROM memory_decision_event
 GROUP BY 1
 ORDER BY 1;
 
--- A4. Freshness Rate (need memory_card table)
--- expected table: memory_card(id, status, created_at, last_reviewed_at)
+-- A4. Freshness Rate (based on current lightweight memory_card table)
+-- expected table: memory_card(id, status, updated_at)
 SELECT
   date('now') AS snapshot_date,
   SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_cnt,
   SUM(
     CASE
-      WHEN status = 'active' AND date(COALESCE(last_reviewed_at, created_at)) >= date('now', '-90 day') THEN 1
+      WHEN status = 'active' AND date(updated_at) >= date('now', '-90 day') THEN 1
       ELSE 0
     END
   ) AS fresh_active_cnt,
   ROUND(
     SUM(
       CASE
-        WHEN status = 'active' AND date(COALESCE(last_reviewed_at, created_at)) >= date('now', '-90 day') THEN 1
+        WHEN status = 'active' AND date(updated_at) >= date('now', '-90 day') THEN 1
         ELSE 0
       END
     ) * 1.0 / NULLIF(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0),
@@ -88,8 +88,8 @@ FROM memory_card;
 -- ========================================
 
 -- B1. Expired but still active cards
--- expected table: memory_card(id, title, owner_team, status, expire_at)
-SELECT id, title, owner_team, expire_at
+-- expected table: memory_card(id, title, status, expire_at)
+SELECT id, title, expire_at
 FROM memory_card
 WHERE status = 'active'
   AND date(expire_at) < date('now')

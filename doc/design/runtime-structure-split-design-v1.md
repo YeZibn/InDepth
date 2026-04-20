@@ -1,7 +1,10 @@
 # AgentRuntime 结构拆分设计方案（V1）
 
 更新时间：2026-04-15  
-状态：Implemented（已完成）
+状态：Historical（部分实现路径已被后续版本替换）
+
+> 注意：本文档中的 `verification_handoff.py`、candidate memory 参数增强等表述反映的是中间拆分阶段。
+> 当前 handoff 与 memory 的最终实现请以 [`finalizing-handoff-driven-memory-design-v1.md`](/Users/yezibin/Project/InDepth/doc/design/finalizing-handoff-driven-memory-design-v1.md) 和当前代码为准。
 
 当前落地状态（2026-04-15）：
 1. Phase 1 已落地：`runtime_utils.py` 下沉纯工具函数。

@@ -2,285 +2,54 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://indepth.local/schema/memory_card.schema.json",
   "title": "MemoryCard",
-  "description": "System memory card for retrievable, triggerable, and measurable experience knowledge.",
+  "description": "Lightweight system memory card used by the current V1 runtime.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "id",
     "title",
     "recall_hint",
-    "memory_type",
-    "domain",
-    "scenario",
-    "problem_pattern",
-    "solution",
-    "constraints",
-    "anti_pattern",
-    "evidence",
-    "owner",
-    "lifecycle",
-    "confidence"
+    "content"
   ],
   "properties": {
     "id": {
       "type": "string",
-      "pattern": "^mem_[a-z0-9_\\-]{8,64}$",
-      "description": "Stable memory id, e.g. mem_payment_timeout_retry"
+      "pattern": "^mem_[a-z0-9_\\-]{4,128}$",
+      "description": "Stable memory id."
     },
     "title": {
       "type": "string",
-      "minLength": 5,
+      "minLength": 1,
       "maxLength": 120
     },
     "recall_hint": {
       "type": "string",
-      "minLength": 10,
-      "maxLength": 300,
-      "description": "Concise recall hint used for start-of-run lightweight injection."
+      "minLength": 1,
+      "maxLength": 220,
+      "description": "Short high-signal hint used for lightweight recall injection."
     },
-    "memory_type": {
+    "content": {
       "type": "string",
-      "enum": ["experience", "principle", "runbook", "checklist"]
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "Full memory content stored for later full-card retrieval."
     },
-    "domain": {
+    "status": {
       "type": "string",
-      "description": "Business or technical domain, e.g. payment, recommendation, infra"
+      "enum": ["active", "inactive", "archived"],
+      "default": "active"
     },
-    "tags": {
-      "type": "array",
-      "items": {"type": "string", "minLength": 1, "maxLength": 40},
-      "uniqueItems": true,
-      "maxItems": 20,
-      "default": []
-    },
-    "scenario": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["stage", "trigger_hint"],
-      "properties": {
-        "stage": {
-          "type": "string",
-          "enum": [
-            "requirement_review",
-            "design_review",
-            "development",
-            "pull_request",
-            "pre_release",
-            "incident_response",
-            "postmortem"
-          ]
-        },
-        "trigger_hint": {
-          "type": "string",
-          "maxLength": 200,
-          "description": "Short natural language hint for trigger recall"
-        },
-        "roles": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": ["pm", "dev", "reviewer", "qa", "sre", "oncall", "architect"]
-          },
-          "uniqueItems": true,
-          "default": []
-        }
-      }
-    },
-    "problem_pattern": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["symptoms", "root_cause_hypothesis"],
-      "properties": {
-        "symptoms": {
-          "type": "array",
-          "items": {"type": "string", "maxLength": 200},
-          "minItems": 1,
-          "maxItems": 10
-        },
-        "root_cause_hypothesis": {
-          "type": "string",
-          "maxLength": 300
-        },
-        "risk_level": {
-          "type": "string",
-          "enum": ["P0", "P1", "P2", "P3"],
-          "default": "P2"
-        }
-      }
-    },
-    "solution": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["steps", "expected_outcome"],
-      "properties": {
-        "steps": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 3,
-            "maxLength": 300
-          },
-          "minItems": 1,
-          "maxItems": 12
-        },
-        "expected_outcome": {
-          "type": "string",
-          "maxLength": 250
-        },
-        "rollback": {
-          "type": "string",
-          "maxLength": 250
-        }
-      }
-    },
-    "constraints": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["applicable_if"],
-      "properties": {
-        "applicable_if": {
-          "type": "array",
-          "items": {"type": "string", "maxLength": 200},
-          "minItems": 1,
-          "maxItems": 10
-        },
-        "dependencies": {
-          "type": "array",
-          "items": {"type": "string", "maxLength": 120},
-          "default": []
-        }
-      }
-    },
-    "anti_pattern": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["not_applicable_if"],
-      "properties": {
-        "not_applicable_if": {
-          "type": "array",
-          "items": {"type": "string", "maxLength": 200},
-          "minItems": 1,
-          "maxItems": 10
-        },
-        "danger_signals": {
-          "type": "array",
-          "items": {"type": "string", "maxLength": 200},
-          "default": []
-        }
-      }
-    },
-    "evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source_links", "verified_at"],
-      "properties": {
-        "source_links": {
-          "type": "array",
-          "items": {"type": "string", "format": "uri"},
-          "minItems": 1,
-          "maxItems": 20
-        },
-        "verified_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "verifier": {
-          "type": "string",
-          "maxLength": 80
-        }
-      }
-    },
-    "impact": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "baseline": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "defect_rate": {"type": "number", "minimum": 0},
-            "lead_time_hours": {"type": "number", "minimum": 0},
-            "incident_repeat_rate": {"type": "number", "minimum": 0}
-          }
-        },
-        "after": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "defect_rate": {"type": "number", "minimum": 0},
-            "lead_time_hours": {"type": "number", "minimum": 0},
-            "incident_repeat_rate": {"type": "number", "minimum": 0}
-          }
-        },
-        "measurement_window_days": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 365,
-          "default": 30
-        }
-      },
-      "default": {}
-    },
-    "owner": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["team", "primary"],
-      "properties": {
-        "team": {"type": "string", "maxLength": 80},
-        "primary": {"type": "string", "maxLength": 80},
-        "reviewers": {
-          "type": "array",
-          "items": {"type": "string", "maxLength": 80},
-          "uniqueItems": true,
-          "default": []
-        }
-      }
-    },
-    "lifecycle": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "version", "effective_from", "expire_at"],
-      "properties": {
-        "status": {
-          "type": "string",
-          "enum": ["draft", "active", "deprecated", "archived"]
-        },
-        "version": {
-          "type": "string",
-          "pattern": "^v[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
-        },
-        "effective_from": {
-          "type": "string",
-          "format": "date"
-        },
-        "expire_at": {
-          "type": "string",
-          "format": "date"
-        },
-        "last_reviewed_at": {
-          "type": "string",
-          "format": "date"
-        },
-        "change_log": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["version", "changed_at", "summary"],
-            "properties": {
-              "version": {"type": "string"},
-              "changed_at": {"type": "string", "format": "date-time"},
-              "summary": {"type": "string", "maxLength": 300}
-            }
-          },
-          "default": []
-        }
-      }
-    },
-    "confidence": {
+    "updated_at": {
       "type": "string",
-      "enum": ["A", "B", "C"],
-      "description": "A=strongly validated, C=hypothesis"
+      "description": "Managed by the store at write time."
+    },
+    "expire_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date",
+      "description": "Optional expiration date in YYYY-MM-DD."
     }
   }
 }

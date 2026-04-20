@@ -17,17 +17,9 @@ class MemoryQueryToolTests(unittest.TestCase):
                     "id": "mem_tool_fetch_001",
                     "title": "工具拉取完整记忆",
                     "recall_hint": "当注入记忆关键时，按 id 拉完整卡片",
-                    "memory_type": "runbook",
-                    "domain": "runtime",
-                    "scenario": {"stage": "development", "trigger_hint": "记忆关键"},
-                    "owner": {"team": "runtime", "primary": "agent"},
-                    "lifecycle": {
-                        "status": "active",
-                        "version": "v1.0",
-                        "effective_from": date.today().isoformat(),
-                        "expire_at": (date.today() + timedelta(days=30)).isoformat(),
-                    },
-                    "confidence": "B",
+                    "content": "当召回记忆变得关键时，可以按 id 拉完整记忆内容。",
+                    "status": "active",
+                    "expire_at": (date.today() + timedelta(days=30)).isoformat(),
                 }
             )
             result = get_memory_card_by_id.entrypoint(memory_id="mem_tool_fetch_001", db_file=db)
@@ -44,17 +36,9 @@ class MemoryQueryToolTests(unittest.TestCase):
                     "id": "mem_tool_fetch_002",
                     "title": "已归档记忆",
                     "recall_hint": "不应默认返回",
-                    "memory_type": "experience",
-                    "domain": "runtime",
-                    "scenario": {"stage": "development", "trigger_hint": "归档"},
-                    "owner": {"team": "runtime", "primary": "agent"},
-                    "lifecycle": {
-                        "status": "archived",
-                        "version": "v1.0",
-                        "effective_from": date.today().isoformat(),
-                        "expire_at": (date.today() - timedelta(days=1)).isoformat(),
-                    },
-                    "confidence": "C",
+                    "content": "这是一条已归档记忆。",
+                    "status": "archived",
+                    "expire_at": (date.today() - timedelta(days=1)).isoformat(),
                 }
             )
             miss = get_memory_card_by_id.entrypoint(memory_id="mem_tool_fetch_002", db_file=db)

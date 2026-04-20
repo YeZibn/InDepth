@@ -202,7 +202,7 @@ InDepth.md               # 运行协议
 | 检索门禁 | `init_search_guard`、`guarded_ddg_search`、`update_search_progress`、`build_search_conclusion` | 受控检索与预算治理 |
 | 子代理协同 | `create_sub_agent`、`run_sub_agent`、`run_sub_agents_parallel` | 角色化并行执行 |
 | Todo 编排 | `plan_task`、`update_task_status`、`record_task_fallback`、`plan_task_recovery`、`append_followup_subtasks`、`get_next_task`、`generate_task_report` | 以 `plan_task` 作为对外主入口的子任务管理、失败恢复与进度跟踪；失败出口会触发单次 `LLM recovery assessment`，再由 guardrails 落地恢复决策 |
-| 记忆工具 | `capture_runtime_memory_candidate`、`search_memory_cards` | 经验捕获与检索 |
+| 记忆工具 | `search_memory_cards`、`get_memory_card_by_id` | 只读经验检索与按需展开 |
 
 ### 4.6 观测与产物落点
 
@@ -234,8 +234,10 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
      - 命中澄清意图时进入 `awaiting_user_input`，等待用户补充后在同一 run 恢复
      - 执行 tool-calling 分支并回写工具结果
      - 处理 stop/length/content_filter 等收敛分支
-     - 在运行中触发上下文压缩，在结束时执行最终压缩
-   - 输出：`final_answer`、`stop_reason`、运行状态，以及后续评估所需执行证据。
+     - 在运行中触发上下文压缩，在结束时进入显式 finalizing 双 step
+     - `finalizing(answer)` 面向用户产出最终回答
+     - `finalizing(handoff)` 面向系统产出结构化 handoff
+   - 输出：`final_answer`、`verification_handoff`、`stop_reason`、运行状态，以及后续评估所需执行证据。
 
 3. 能力层（L3）
    - 作用：把抽象计划落成具体动作（命令、文件、检索、任务编排）。
@@ -250,6 +252,7 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
      - subtask 约束：以“单一可验证动作”为粒度；未完成项不得伪装为 `completed`；失败出口会自动写入最小 `fallback_record`，并在部分场景下自动追加恢复子任务
      - 绑定感知：Runtime 会维护 active subtask 上下文；当 todo 已创建但普通工具调用尚未绑定 active subtask 时，会发出 warning 事件；若此时失败，会进入 `orphan failure`
      - 并行协同：SubAgent 角色化执行（researcher/builder/reviewer/verifier）
+     - 经验检索：`search_memory_cards` / `get_memory_card_by_id` 提供只读 system memory 访问；运行中候补记忆不再是默认主链路能力
    - 输出：结构化工具结果、子任务状态变化、可追溯执行日志。
 
 4. 验证层（L4）
@@ -270,10 +273,11 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
      - **用户偏好：`app/core/memory/user_preference_store.py`（新增）**
    - 主要机制：
      - 运行中压缩分两路：`token` 触发写入 `summary_json`；`event` 触发将连续工具调用段替换为单条摘要消息（状态工具豁免、保留最近工具单元）
-     - 任务开始前执行 system memory 高精度召回（最多 5 条，摘要注入，未命中不阻塞）
-     - 运行中候选记忆捕获保持 tool 显式调用（`capture_runtime_memory_candidate`）
-     - 任务结束强制沉淀经验卡（`memory_card`）
-     - 记忆事件（triggered/retrieved/decision）进入 observability 链路
+     - 任务开始前执行 system memory 轻量召回，注入 `memory_id + recall_hint`，必要时再按 id 拉取完整卡片
+     - Finalizing 显式拆成 `answer -> handoff` 双 step，handoff 成为 verification 与 memory 的共同事实源
+     - 任务结束后仅从 `verification_handoff.memory_seed` 沉淀正式经验卡（`memory_card`）
+     - `memory_card` 当前简化为 `id/title/recall_hint/content/status/updated_at/expire_at`
+     - 记忆事件（triggered/retrieved/decision）进入 observability 链路；事件表保留，主卡表简化
      - **用户偏好记忆：Markdown 单文件存储，支持置信度与来源追踪，用于个性化提示词注入**
    - 输出：结构化历史摘要、系统经验卡、**用户偏好画像**、可统计的记忆治理数据。
 
@@ -304,11 +308,11 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 
 ## 7. 常用测试入口
 
-- 运行全部测试：`python -m unittest`
-- Runtime 关键链路：`python -m unittest tests.test_runtime_eval_integration tests.test_runtime_context_compression`
-- Todo 恢复链路：`python -m unittest tests.test_runtime_todo_recovery_integration tests.test_todo_recovery_flow`
-- 工具与协同：`python -m unittest tests.test_sub_agent_tool tests.test_sub_agent_role_tools`
-- 检索门禁自动扩容：`python -m unittest tests.test_search_guard_auto_override`
+- 运行全部测试：`python -m pytest -q`
+- Runtime 关键链路：`python -m pytest -q tests/test_runtime_eval_integration.py tests/test_runtime_context_compression.py`
+- Todo 恢复链路：`python -m pytest -q tests/test_runtime_todo_recovery_integration.py tests/test_todo_recovery_flow.py`
+- 工具与协同：`python -m pytest -q tests/test_sub_agent_tool.py tests/test_sub_agent_role_tools.py`
+- 检索门禁自动扩容：`python -m pytest -q tests/test_search_guard_auto_override.py`
 
 补充说明：
 - 若本地已安装 `pytest`，也可以用 `pytest` 运行同一批测试文件

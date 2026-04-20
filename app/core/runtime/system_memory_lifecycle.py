@@ -1,12 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from app.core.memory.memory_metadata_service import (
-    build_memory_metadata_config,
-    build_semantic_memory_title,
-    extract_title_topic,
-    generate_memory_card_metadata_llm,
-)
+from app.core.memory.memory_metadata_service import extract_title_topic
 from app.core.memory.recall_service import (
     build_memory_reranker_config,
     build_recall_query,
@@ -18,7 +13,7 @@ from app.core.model.base import ModelProvider
 
 
 # 这个模块保留在 runtime 下，是因为它表达的是“system memory 在 runtime 生命周期中的触发时机”。
-# 真正的 recall / rerank / metadata 能力已经下沉到 memory 目录，本模块只负责装配它们。
+# 真正的 recall / rerank 能力已经下沉到 memory 目录，本模块只负责装配它们。
 
 
 def finalize_task_memory(
@@ -29,10 +24,8 @@ def finalize_task_memory(
     stop_reason: str,
     runtime_status: str,
     tool_failures: List[Dict[str, str]],
+    verification_handoff: Dict[str, Any],
     system_memory_store: Optional[SystemMemoryStore],
-    model_provider: ModelProvider,
-    enable_memory_card_metadata_llm: bool,
-    parse_json_dict: Callable[[str], Dict[str, Any]],
     preview: Callable[[str, int], str],
     slug: Callable[[str], str],
     emit_event: Callable[..., Dict[str, Any]],
@@ -43,99 +36,27 @@ def finalize_task_memory(
         return
 
     now = datetime.now().astimezone()
-    today = now.date().isoformat()
     expire_at = (now.date() + timedelta(days=180)).isoformat()
     mem_id = f"mem_task_{slug(task_id)}_{slug(run_id)}"
     stage = "postmortem"
+    handoff = verification_handoff if isinstance(verification_handoff, dict) else {}
+    memory_seed = handoff.get("memory_seed", {}) if isinstance(handoff.get("memory_seed", {}), dict) else {}
+    title = preview(str(memory_seed.get("title", "") or "").strip(), 120)
+    recall_hint = preview(str(memory_seed.get("recall_hint", "") or "").strip(), 220)
+    content = preview(str(memory_seed.get("content", "") or "").strip(), 500)
+    if not any([title, recall_hint, content]):
+        return
     risk_level = "P1" if runtime_status == "error" else "P3"
-    short_answer = preview(final_answer, 500)
-    failure_brief = "; ".join(
-        [f"{x.get('tool', 'unknown')}: {x.get('error', '')}" for x in (tool_failures or [])[:3]]
-    ).strip()
-    fallback_title = build_semantic_memory_title(
-        user_input=user_input,
-        runtime_status=runtime_status,
-        stop_reason=stop_reason,
-        extract_title_topic=lambda user_input: extract_title_topic(user_input=user_input, preview=preview),
-        preview=preview,
-    )
-    fallback_recall_hint = preview(
-        f"任务结束状态={runtime_status}，优先复用本次成功路径并规避失败工具链：{failure_brief or short_answer}",
-        200,
-    )
-    generated = generate_memory_card_metadata_llm(
-        model_provider=model_provider,
-        enabled=enable_memory_card_metadata_llm,
-        build_memory_metadata_config=build_memory_metadata_config,
-        parse_json_dict=parse_json_dict,
-        preview=preview,
-        mode="finalize",
-        user_input=user_input,
-        runtime_status=runtime_status,
-        stop_reason=stop_reason,
-        failure_brief=failure_brief,
-        answer_brief=short_answer,
-        fallback_title=fallback_title,
-        fallback_recall_hint=fallback_recall_hint,
-    )
-    generated_title = str(generated.get("title", "") or "").strip()
-    generated_recall_hint = str(generated.get("recall_hint", "") or "").strip()
 
     card = {
         "id": mem_id,
-        "title": generated_title or fallback_title,
-        "recall_hint": generated_recall_hint or fallback_recall_hint,
-        "memory_type": "experience",
-        "domain": "runtime",
-        "tags": ["task-finish", runtime_status, stop_reason],
-        "scenario": {
-            "stage": stage,
-            "trigger_hint": f"Task {task_id} finished with status={runtime_status}",
-            "roles": ["dev", "reviewer", "verifier"],
-        },
-        "problem_pattern": {
-            "symptoms": [preview(user_input, 200) or "task request"],
-            "root_cause_hypothesis": failure_brief or "See task output summary",
-            "risk_level": risk_level,
-        },
-        "solution": {
-            "steps": [
-                "Review final answer and runtime stop reason",
-                "Reuse successful pattern or avoid failed tool path in similar tasks",
-            ],
-            "expected_outcome": short_answer or "Task finished with no explicit answer.",
-            "rollback": "Fallback to manual troubleshooting when similar failures repeat",
-        },
-        "constraints": {
-            "applicable_if": ["Same or similar runtime task context appears"],
-            "dependencies": [],
-        },
-        "anti_pattern": {
-            "not_applicable_if": ["Task scope differs significantly from this run context"],
-            "danger_signals": [failure_brief] if failure_brief else [],
-        },
-        "evidence": {
-            "source_links": [f"urn:runtime:{task_id}:{run_id}"],
-            "verified_at": now.isoformat(),
-            "verifier": "runtime-framework",
-        },
-        "impact": {},
-        "owner": {"team": "runtime", "primary": "main-agent", "reviewers": []},
+        "title": title,
+        "recall_hint": recall_hint,
+        "content": content,
         "lifecycle": {
             "status": "active",
-            "version": "v1.0",
-            "effective_from": today,
             "expire_at": expire_at,
-            "last_reviewed_at": today,
-            "change_log": [
-                {
-                    "version": "v1.0",
-                    "changed_at": now.isoformat(),
-                    "summary": "Auto-finalized by runtime framework at task completion",
-                }
-            ],
         },
-        "confidence": "B" if runtime_status == "ok" else "C",
     }
     try:
         store.upsert_card(card)
@@ -166,10 +87,11 @@ def finalize_task_memory(
                 role="general",
                 event_type="memory_retrieved",
                 payload={
-                    "trigger_event_id": trigger_event_id,
-                    "memory_id": mem_id,
-                    "score": 1.0,
+                "trigger_event_id": trigger_event_id,
+                "memory_id": mem_id,
+                "score": 1.0,
                     "stage": stage,
+                    "handoff_source": "verification_handoff",
                     "reason": "task_end_finalization",
                     "source": "runtime_finalize_upsert",
                 },
@@ -184,8 +106,8 @@ def finalize_task_memory(
                     "trigger_event_id": trigger_event_id,
                     "memory_id": mem_id,
                     "decision": "accepted",
-                    "reason": "framework forced finalization",
-                    "stage": stage,
+                    "reason": "persisted_from_verification_handoff",
+                    "stage": "postmortem",
                 },
             )
     except Exception:

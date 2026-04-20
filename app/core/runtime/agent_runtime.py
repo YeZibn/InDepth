@@ -947,18 +947,6 @@ class AgentRuntime:
         verification_handoff: Optional[Dict[str, Any]] = None
         handoff_source = "fallback_rule"
 
-        def _build_handoff_if_needed() -> None:
-            nonlocal verification_handoff, handoff_source
-            if verification_handoff is not None:
-                return
-            verification_handoff, handoff_source = self._build_verification_handoff(
-                user_input=user_input,
-                final_answer=final_answer or "",
-                stop_reason=stop_reason,
-                runtime_status=task_status,
-                tool_failures=last_tool_failures,
-            )
-
         # Runtime 主循环只负责“编排”三件事：请求模型、执行工具、收敛本轮状态。
         # 具体的 todo 恢复、memory 生命周期、verification handoff 都尽量下沉到独立模块。
         for step in range(1, self.max_steps + 1):
@@ -1019,7 +1007,6 @@ class AgentRuntime:
                     status="error",
                     payload={"error": str(e)},
                 )
-                _build_handoff_if_needed()
                 break
             content = model_output.content.strip()
             finish_reason, raw_message = self._extract_finish_reason_and_message(model_output.raw)
@@ -1106,8 +1093,6 @@ class AgentRuntime:
                 task_status = stop_outcome["task_status"]
                 stop_reason = stop_outcome["stop_reason"]
                 runtime_state = stop_outcome["runtime_state"]
-                if stop_outcome.get("should_build_handoff"):
-                    _build_handoff_if_needed()
                 self._trace(f"[step {step}] completed finish_reason=stop final={self._preview(final_answer)}")
                 break
 
@@ -1138,7 +1123,6 @@ class AgentRuntime:
                 task_status = non_stop_outcome["task_status"]
                 stop_reason = non_stop_outcome["stop_reason"]
                 runtime_state = non_stop_outcome["runtime_state"]
-                _build_handoff_if_needed()
                 trace_label = str(non_stop_outcome.get("trace_label", "stop")).strip() or "stop"
                 if trace_label in {"length", "content_filter"}:
                     self._trace(f"[step {step}] stopped finish_reason={trace_label}")
@@ -1153,9 +1137,6 @@ class AgentRuntime:
             stop_reason = max_steps_outcome["stop_reason"]
             runtime_state = max_steps_outcome["runtime_state"]
             self._trace("[runtime] max_steps_reached")
-            if max_steps_outcome.get("should_build_handoff"):
-                _build_handoff_if_needed()
-
         finalizing_outcome = self._run_finalizing_pipeline(
             task_id=task_id,
             run_id=run_id,
@@ -1165,6 +1146,7 @@ class AgentRuntime:
             runtime_state=runtime_state,
             task_status=task_status,
             last_tool_failures=last_tool_failures,
+            context_messages=messages,
             verification_handoff=verification_handoff,
             handoff_source=handoff_source,
         )
@@ -1176,6 +1158,11 @@ class AgentRuntime:
             return final_answer
 
         task_finished_status = str(finalizing_outcome.get("task_finished_status", task_status) or task_status)
+        verification_handoff = (
+            finalizing_outcome.get("verification_handoff", {})
+            if isinstance(finalizing_outcome.get("verification_handoff", {}), dict)
+            else {}
+        )
 
         self._trace(f"[runtime] task_finished final={self._preview(final_answer)}")
         self._run_parallel_completed_finalizers(
@@ -1186,6 +1173,7 @@ class AgentRuntime:
             stop_reason=stop_reason,
             runtime_status=task_finished_status,
             tool_failures=last_tool_failures,
+            verification_handoff=verification_handoff,
             final_answer_written=final_answer_written,
         )
         self._active_todo_context = finalize_active_todo_context(
@@ -1228,6 +1216,7 @@ class AgentRuntime:
         stop_reason: str,
         runtime_status: str,
         tool_failures: List[Dict[str, str]],
+        context_messages: List[Dict[str, Any]],
     ) -> tuple[Dict[str, Any], str]:
         # verification handoff 的触发时机属于 runtime，但 handoff 的构造/归一化属于 eval 能力层。
         return build_verification_handoff(
@@ -1236,6 +1225,7 @@ class AgentRuntime:
             stop_reason=stop_reason,
             runtime_status=runtime_status,
             tool_failures=tool_failures,
+            context_messages=context_messages,
             recovery_context=self._latest_todo_recovery,
             model_provider=self.model_provider,
             enabled=self.enable_verification_handoff_llm,
@@ -1255,6 +1245,7 @@ class AgentRuntime:
         runtime_state: str,
         task_status: str,
         last_tool_failures: List[Dict[str, str]],
+        context_messages: List[Dict[str, Any]],
         verification_handoff: Optional[Dict[str, Any]],
         handoff_source: str,
     ) -> Dict[str, Any]:
@@ -1281,6 +1272,20 @@ class AgentRuntime:
                 "task_finished_status": task_status,
             }
 
+        self._trace("[runtime] finalizing(answer) started")
+        self._trace("[runtime] finalizing(answer) completed")
+        if verification_handoff is None:
+            self._trace("[runtime] finalizing(handoff) started")
+            verification_handoff, handoff_source = self._build_verification_handoff(
+                user_input=user_input,
+                final_answer=final_answer,
+                stop_reason=stop_reason,
+                runtime_status=task_status,
+                tool_failures=last_tool_failures,
+                context_messages=context_messages,
+            )
+            self._trace(f"[runtime] finalizing(handoff) completed source={handoff_source}")
+
         completed_outcome = finalize_completed_run(
             task_id=task_id,
             run_id=run_id,
@@ -1292,7 +1297,6 @@ class AgentRuntime:
             last_tool_failures=last_tool_failures,
             verification_handoff=verification_handoff,
             handoff_source=handoff_source,
-            build_verification_handoff=self._build_verification_handoff,
             auto_manage_todo_recovery=self._auto_manage_todo_recovery,
             append_recovery_summary_for_user=self._append_recovery_summary_for_user,
             has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
@@ -1302,6 +1306,7 @@ class AgentRuntime:
         return {
             "mode": "completed",
             "final_answer": completed_outcome["final_answer"],
+            "verification_handoff": completed_outcome.get("verification_handoff", {}),
             "task_finished_status": completed_outcome["task_finished_status"],
         }
 
@@ -1314,6 +1319,7 @@ class AgentRuntime:
         stop_reason: str,
         runtime_status: str,
         tool_failures: List[Dict[str, str]],
+        verification_handoff: Dict[str, Any],
     ) -> None:
         store = self.system_memory_store
         if store is None:
@@ -1329,10 +1335,8 @@ class AgentRuntime:
             stop_reason=stop_reason,
             runtime_status=runtime_status,
             tool_failures=tool_failures,
+            verification_handoff=verification_handoff,
             system_memory_store=store,
-            model_provider=self.model_provider,
-            enable_memory_card_metadata_llm=self.enable_memory_card_metadata_llm,
-            parse_json_dict=self._parse_json_dict,
             preview=self._preview,
             slug=self._slug,
             emit_event=emit_event,
@@ -1411,6 +1415,7 @@ class AgentRuntime:
         stop_reason: str,
         runtime_status: str,
         tool_failures: List[Dict[str, str]],
+        verification_handoff: Dict[str, Any],
         final_answer_written: bool,
     ) -> None:
         tasks: List[tuple[str, Callable[[], None]]] = [
@@ -1425,6 +1430,7 @@ class AgentRuntime:
                     stop_reason=stop_reason,
                     runtime_status=runtime_status,
                     tool_failures=tool_failures,
+                    verification_handoff=verification_handoff,
                 ),
             ),
             (

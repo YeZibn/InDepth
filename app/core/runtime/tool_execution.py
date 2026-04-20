@@ -119,39 +119,4 @@ def enrich_runtime_tool_args(
         if not str(out.get("db_file", "") or "").strip() and memory_store_db_file:
             out["db_file"] = memory_store_db_file
         return out
-    if tool_name != "capture_runtime_memory_candidate":
-        return tool_args
-    if not enable_memory_card_metadata_llm:
-        return tool_args
-    if not isinstance(tool_args, dict):
-        return {}
-    title = str(tool_args.get("title", "") or "").strip()
-    observation = str(tool_args.get("observation", "") or "").strip()
-    proposed_action = str(tool_args.get("proposed_action", "") or "").strip()
-    if not any([title, observation, proposed_action]):
-        return tool_args
-    fallback_title = title or extract_title_topic(observation)
-    fallback_recall_hint = preview(
-        observation or proposed_action or title,
-        200,
-    )
-    generated = generate_memory_card_metadata_llm(
-        mode="capture",
-        user_input=observation or title,
-        runtime_status="runtime_capture",
-        stop_reason="tool_capture",
-        failure_brief="",
-        answer_brief=proposed_action,
-        fallback_title=fallback_title,
-        fallback_recall_hint=fallback_recall_hint,
-        task_id=task_id,
-        run_id=run_id,
-    )
-    out = dict(tool_args)
-    new_title = str(generated.get("title", "") or "").strip()
-    new_recall_hint = str(generated.get("recall_hint", "") or "").strip()
-    if new_title:
-        out["title"] = new_title
-    if new_recall_hint:
-        out["recall_hint"] = new_recall_hint
-    return out
+    return tool_args

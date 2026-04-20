@@ -14,7 +14,7 @@
 其中与整体运行节点关系最紧密的工具链路包括：
 - 普通执行工具：真正推进业务动作
 - Todo 工具：绑定 task 周期、选择 active subtask、记录失败、规划恢复
-- Memory 工具：沉淀运行中经验
+- Memory 工具：提供 system memory 的只读检索与按需展开
 
 因此，工具不只是“可调用函数列表”，而是 Runtime 编排与状态推进的重要触发器。
 
@@ -185,8 +185,8 @@
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                      Memory 工具组                                │   │
 │  │                                                                  │   │
-│  │  capture_runtime_memory_candidate                                 │   │
 │  │  search_memory_cards                                             │   │
+│  │  get_memory_card_by_id                                           │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -521,24 +521,36 @@ record_task_fallback()
 
 ### 6.6 Memory 工具组
 
+当前默认 Runtime 工具集中的 memory 工具是只读的：
+
 ```python
-# 捕获候选记忆
-capture_runtime_memory_candidate(
-    task_id: str,
-    run_id: str,
-    title: str,
-    observation: str,
-    stage: Optional[str] = "lifecycle",
-    tags: Optional[List[str]] = None,
+search_memory_cards(
+    query: str = "",
+    stage: str = "",
+    limit: int = 5,
+    include_inactive: bool = False,
 ) -> Dict
 
-# 查询记忆
-search_memory_cards(
-    query: str,
-    stage: Optional[str] = None,
-    limit: int = 5,
+get_memory_card_by_id(
+    memory_id: str,
+    include_inactive: bool = False,
+    task_id: str = "",
+    run_id: str = "",
 ) -> Dict
 ```
+
+说明：
+
+1. `search_memory_cards`
+   - 用于按关键词检索 system memory card
+   - 当前底层检索匹配 `title + recall_hint + content`
+   - `stage` 参数仅为兼容保留，当前检索本身不按 stage 分桶
+2. `get_memory_card_by_id`
+   - 用于在 recall 命中后按 id 拉取完整卡片
+   - 当带上 `task_id/run_id` 时，会补记 `memory_retrieved` 观测事件
+3. `capture_runtime_memory_candidate`
+   - 仍然存在于独立工具文件与测试中
+   - 但已不属于默认主 Runtime registry，不再是推荐的正式沉淀路径
 
 ## 7. 角色工具隔离
 

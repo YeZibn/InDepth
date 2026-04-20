@@ -1,6 +1,6 @@
 # InDepth System 经验记忆参考
 
-更新时间：2026-04-19
+更新时间：2026-04-20
 
 返回总览：
 - [Memory 总览](./memory-reference.md)
@@ -9,73 +9,58 @@
 
 System Memory 负责“跨任务经验沉淀与召回”。
 
-它的目标不是保存完整会话，而是把值得复用的任务经验沉淀成结构化 card，在后续类似任务开始时轻量召回。
+它不保存完整会话，也不承担用户偏好管理，而是把任务结束后值得复用的经验收敛成轻量卡片，供未来类似任务在开始阶段参考。
 
 适合放进这里的内容：
-- 某类任务的成功经验
-- 常见失败模式与规避方式
-- 可复用的处理路径
-- 值得长期保留的 runtime postmortem 事实
+- 可跨任务复用的经验
+- 稳定的做法、避坑点、风险提示
+- 来自最终交付与收尾阶段的高价值结论
 
 不适合放进这里的内容：
-- 当前 task 的完整消息历史
-- 用户个人偏好
+- 当前 run 的完整消息历史
+- 运行中尚未收敛的中间判断
+- 用户个人长期偏好
 
 ## 2. 关键文件
 
 - `app/core/memory/system_memory_store.py`
 - `app/core/runtime/system_memory_lifecycle.py`
 - `app/core/memory/recall_service.py`
-- `app/core/memory/memory_metadata_service.py`
+- `app/eval/verification_handoff_service.py`
 
-## 3. 存储
+## 3. 存储模型
 
 默认数据库：
 
 - `db/system_memory.db`
 
-核心表：
+主表：
 
 1. `memory_card`
-   - 主体经验卡
-   - 关键字段包括：
+   - 当前使用轻量 schema
+   - 字段固定为：
      - `id`
      - `title`
      - `recall_hint`
-     - `memory_type`
-     - `domain`
-     - `scenario_stage`
+     - `content`
      - `status`
+     - `updated_at`
      - `expire_at`
-     - `payload_json`
 
-System Memory 的主读写单位是“card”，不是“message”。
+事件表：
 
-## 4. 两个核心阶段
+1. `memory_trigger_event`
+2. `memory_retrieval_event`
+3. `memory_decision_event`
 
-### 4.1 finalize：任务结束后沉淀经验
+说明：
+- 主卡表已经简化，只保留召回和治理真正需要的字段。
+- 三张事件表继续保留，用于观测、指标和 postmortem。
+- `SystemMemoryStore` 内置了旧版 `memory_card` 到轻量 schema 的自动迁移。
 
-入口：
+## 4. 生命周期
 
-- `finalize_task_memory(...)`
-
-触发时机：
-
-- task 结束收尾阶段
-
-它会做的事：
-
-1. 生成经验卡基础内容
-2. 为卡片生成：
-   - `title`
-   - `recall_hint`
-3. 调用 `SystemMemoryStore.upsert_card(...)`
-4. 发出 memory 事件三连：
-   - `memory_triggered`
-   - `memory_retrieved`
-   - `memory_decision_made`
-
-### 4.2 recall：新任务开始时召回经验
+### 4.1 任务开始：recall
 
 入口：
 
@@ -83,74 +68,111 @@ System Memory 的主读写单位是“card”，不是“message”。
 
 触发时机：
 
-- `AgentRuntime.run()` 启动早期
+- `AgentRuntime.run()` 早期，在首轮主请求前
 
-它会做的事：
+当前流程：
 
-1. 基于当前 `user_input` 构造 recall query
-2. 从 `memory_card` 中取候选卡
-3. 可选地用 LLM rerank
-4. 选出少量高相关 card
-5. 渲染成轻量 recall block
-6. 注入 system prompt
+1. 基于 `user_input` 构造 recall query
+2. 从 `memory_card` 读取候选卡
+3. 可选地用 LLM 做 rerank
+4. 只把少量高相关卡以轻量 block 注入 prompt
+5. 注入内容默认只包含：
+   - `memory_id`
+   - `recall_hint`
+6. 如果后续需要完整细节，再通过 `get_memory_card_by_id` 拉全卡
 
-## 5. 数据语义
+### 4.2 任务结束：persist
 
-一张 system memory card 本质上是一条“经验记录”。
+入口：
 
-当前实现里比较重要的语义字段：
+- `finalize_task_memory(...)`
 
-1. `title`
-   - 经验卡标题
-2. `recall_hint`
-   - 给 runtime 注入时真正使用的高信号提示
-3. `scenario`
-   - 经验适用场景
-4. `problem_pattern`
-   - 经验对应的问题模式
-5. `solution`
-   - 推荐路径
-6. `constraints`
-   - 适用条件与依赖
-7. `anti_pattern`
-   - 不适用条件或风险信号
-8. `lifecycle`
-   - `status / expire_at / last_reviewed_at`
+触发时机：
+
+- Runtime 结束后的 finalization 阶段
+
+当前流程：
+
+1. Runtime 先完成 `finalizing(answer)`
+2. 再完成 `finalizing(handoff)`
+3. verification 与 memory 都消费同一份 `verification_handoff`
+4. memory 只读取 `verification_handoff.memory_seed`
+5. 若 `memory_seed.title / recall_hint / content` 全空，则不写卡
+6. 否则 upsert 一张正式 `memory_card`
+
+关键约束：
+
+- 不再有“运行中候补记忆卡片”的默认主链路写入
+- 正式 memory 只能在任务结束后由 handoff 派生
+- handoff 是 verification 与 memory 的共同事实源
+
+## 5. handoff 与 memory 的关系
+
+当前系统里，handoff 不再只是给 verifier 的附加材料。
+
+它现在承担两件事：
+
+1. 给 Eval 提供结构化交接事实
+2. 给 System Memory 提供 `memory_seed`
+
+当前 handoff 中和 memory 最相关的部分是：
+
+```json
+{
+  "memory_seed": {
+    "title": "string",
+    "recall_hint": "string",
+    "content": "string"
+  }
+}
+```
+
+卡片字段映射关系：
+
+1. `memory_card.title <- verification_handoff.memory_seed.title`
+2. `memory_card.recall_hint <- verification_handoff.memory_seed.recall_hint`
+3. `memory_card.content <- verification_handoff.memory_seed.content`
+4. `memory_card.status <- active`
+5. `memory_card.expire_at <- 默认 180 天后`
 
 ## 6. 检索方式
 
-当前 `SystemMemoryStore.search_cards(...)` 的检索是轻量的。
+`SystemMemoryStore.search_cards(...)` 当前是轻量关键词检索。
 
-重点：
-- title 驱动
-- 只搜 active card
-- 过期卡默认不参与
+当前实现特点：
 
-如果开启 reranker，`inject_system_memory_recall(...)` 会进一步筛选。
+1. 检索字段覆盖：
+   - `title`
+   - `recall_hint`
+   - `content`
+2. 默认只返回：
+   - `status = active`
+   - 未过期卡
+3. 结果按 `updated_at DESC` 取候选，再结合简单分数排序
+4. Runtime recall 可选叠加 LLM rerank，以减少误召回
 
-最终注入 prompt 的不是完整 card，而是：
-- `memory_id`
-- `recall_hint`
+这意味着：
 
-这是为了控制注入成本，避免 system memory 自己把上下文撑爆。
+- 现在还没有向量检索
+- 现在也不是旧版的重字段结构检索
+- `recall_hint` 是轻注入的主语义入口，`content` 用于补充召回面
 
-## 7. 和 Runtime Memory 的关系
+## 7. 和 Runtime Memory 的区别
 
-它们很容易混，但语义完全不同：
+两者容易混淆，但职责完全不同：
 
 1. Runtime Memory
-   - 保存当前 task 的历史上下文
-   - 为“当前任务继续跑”服务
+   - 服务当前任务继续执行
+   - 保存消息、摘要、压缩结果
 
 2. System Memory
-   - 保存跨任务经验卡
-   - 为“未来类似任务更快复用”服务
+   - 服务未来任务复用经验
+   - 保存轻量经验卡
 
 一个简单判断方法：
 
-如果内容随着当前 task 结束就可以被折叠掉，它更像 Runtime Memory。
-
-如果内容值得在未来别的 task 中再次召回，它更像 System Memory。
+- 随当前 run 结束即可折叠的内容，属于 Runtime Memory
+- 未来相似任务仍值得召回的内容，属于 System Memory
 
 ## 8. 观测
 
@@ -160,25 +182,21 @@ System Memory 相关事件主要是：
 - `memory_retrieved`
 - `memory_decision_made`
 
-这些事件同时落：
-- JSONL
-- SQLite memory event store
+这些事件用于：
 
-详情见：
-- [Observability 参考](./observability-reference.md)
+1. 记录 recall 与持久化链路
+2. 支撑指标计算
+3. 为 postmortem 提供可追溯事实
 
-## 9. 你应该用它来回答什么问题
+## 9. 当前推荐理解
 
-System Memory 最适合回答：
+可以把 System Memory 理解成一条很窄但很稳定的链路：
 
-- 为什么这个新任务一开始就注入了某些经验
-- 某条经验卡是怎么生成的
-- 某条经验为什么会被召回
-- 某张 card 现在是否 active / 是否过期
+`run start recall -> task execution -> finalizing(answer) -> finalizing(handoff) -> verification -> memory persist`
 
-如果你的问题是下面这些，就不该优先看这里：
+重点不是“多存字段”，而是：
 
-- “当前上下文为什么被压缩”
-  - 去看 [Runtime 会话记忆](./runtime-memory-reference.md)
-- “用户为什么总想要中文、简洁回答”
-  - 去看 [User Preference 记忆](./user-preference-reference.md)
+1. 只在任务结束后沉淀
+2. 只沉淀已经收敛的经验
+3. 让 recall 成本保持轻量
+4. 为以后接向量检索预留干净的卡片载体

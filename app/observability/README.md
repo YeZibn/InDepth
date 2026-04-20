@@ -26,8 +26,9 @@
 
 ## System Memory 接入点（阶段二）
 
-- 运行中由 `memory-knowledge-skill` 触发候选记忆事件（`capture_runtime_memory_candidate`）
-- 任务结束由 Runtime 框架触发强制沉淀事件
+- 任务开始时，Runtime 会发出 start recall 相关记忆事件
+- 任务结束后，Runtime 基于 `verification_handoff.memory_seed` 触发正式沉淀事件
+- `memory_card` 主表已经简化；事件表继续承担 recall / decision 观测职责
 
 ## 快速示例
 

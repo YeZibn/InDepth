@@ -1,6 +1,6 @@
 # InDepth Memory 总览
 
-更新时间：2026-04-19
+更新时间：2026-04-20
 
 ## 1. 这份文档的定位
 
@@ -101,7 +101,7 @@ Runtime 会话记忆持续写入：
 结束阶段会走两条长期链路：
 
 1. System Memory finalize
-   - 生成或更新经验卡
+   - 基于 `verification_handoff.memory_seed` 生成或更新经验卡
 2. User Preference capture
    - 从当前用户输入里抽取明确偏好并写回
 
@@ -113,6 +113,7 @@ Runtime 会话记忆持续写入：
    - 面向“当前 task 还能不能继续跑”
 2. System 经验记忆
    - 面向“未来类似 task 能不能少走弯路”
+   - 正式沉淀发生在 `finalizing(handoff)` 之后
 3. User Preference 记忆
    - 面向“以后和这个用户协作时能不能更贴合”
 

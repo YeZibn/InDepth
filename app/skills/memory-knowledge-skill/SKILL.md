@@ -1,19 +1,20 @@
 ---
 name: memory-knowledge-skill
-description: "Unified system memory skill: runtime candidate capture + structured memory_card governance in SQLite."
+description: "Lightweight system memory skill: govern memory_card data, inspect recall results, and manage the simplified SQLite schema."
 ---
 
-# Memory Knowledge Skill (V2)
+# Memory Knowledge Skill
 
 ## Overview
 
-This skill is now fully aligned with the system-memory architecture:
+This skill is aligned with the current V1 memory architecture:
 
-1. Structured memory card storage (`memory_card`)
-2. Runtime forced finalization at task end
-3. Stage-triggered observability and evaluation
+1. `memory_card` is the only long-lived system memory card table
+2. Formal memory is persisted only after task end
+3. The persistence source is `verification_handoff.memory_seed`
+4. Runtime default memory access is read-only recall plus fetch-by-id
 
-Legacy markdown memory files are no longer part of this skill.
+This skill is mainly for governance, inspection, and offline maintenance of system memory data.
 
 ## Primary Entry
 
@@ -22,20 +23,6 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py --help
 ```
 
 ## Core Operations
-
-### 0) Capture runtime candidate memory
-
-Use tool `capture_runtime_memory_candidate` during execution when a reusable pattern emerges.
-
-Required fields:
-- `task_id`, `run_id`
-- `title`
-- `observation`
-
-Optional fields:
-- `proposed_action`
-- `stage` (`pull_request` / `pre_release` / `postmortem` / etc.)
-- `tags` (comma-separated)
 
 ### 1) Upsert a card from JSON
 
@@ -66,10 +53,30 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
   - `memory_retrieval_event`
   - `memory_decision_event`
 
+## Current Card Schema
+
+`memory_card` only keeps lightweight fields:
+
+1. `id`
+2. `title`
+3. `recall_hint`
+4. `content`
+5. `status`
+6. `updated_at`
+7. `expire_at`
+
 ## Runtime Integration
 
-- Runtime injects memory recall at task start (LLM title-based, up to 5 cards, light inject: `memory_id + recall_hint`).
-- Runtime forces task-end memory finalization in framework.
-- This skill captures candidate memories during execution via explicit tool call `capture_runtime_memory_candidate`.
-- Runtime supports full card retrieval by id via `get_memory_card_by_id`.
-- Trigger/retrieval/decision events are persisted for KPI tracking.
+- Runtime performs start-of-run memory recall injection
+- Recall is lightweight by default: inject `memory_id + recall_hint`
+- If a recalled card becomes important, Runtime can fetch the full card with `get_memory_card_by_id`
+- Runtime finalization is explicitly split into `finalizing(answer)` and `finalizing(handoff)`
+- Formal memory persistence happens only after `finalizing(handoff)`
+- Persistence reads only `verification_handoff.memory_seed`
+- Trigger, retrieval, and decision events are persisted for observability
+
+## Important Notes
+
+- Runtime candidate memory is no longer the default mainline path
+- This skill should not describe runtime-time candidate capture as the recommended architecture
+- Vector retrieval is not part of the current V1 implementation

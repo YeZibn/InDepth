@@ -1,70 +1,100 @@
-# System Memory Blueprint (PoC)
+# System Memory Blueprint (V1)
 
-本目录用于把经验沉淀从“文档库存”升级为“可检索 + 可触发 + 可评估收益”的系统记忆。
+本目录描述当前已经落地的轻量 system memory 方案，而不是早期的候补记忆或重字段卡片设计。
 
 ## 目录
 
-- `memory_card.schema.json`: 经验卡统一数据契约（可校验）
-- `memory_card.example.json`: 经验卡实例（可作为录入模板）
-- `metrics_sqlite.sql`: SQLite 版指标 SQL（可直接跑在 `db/system_memory.db`）
+- `memory_card.schema.json`: 当前 `memory_card` 轻量数据契约
+- `memory_card.example.json`: 当前卡片样例
+- `metrics_sqlite.sql`: 基于现有 SQLite 表结构的指标 SQL
 
-## 1) 信息模型落地
+## 1) 当前设计目标
 
-经验卡采用结构化字段，最关键的是以下 6 组：
+当前 V1 设计优先解决三件事：
 
-1. 检索字段：`domain/tags/scenario/problem_pattern`
-2. 触发字段：`scenario.stage/problem_pattern.risk_level`
-3. 执行字段：`solution.steps/constraints/anti_pattern`
-4. 证据字段：`evidence.source_links/verified_at`
-5. 治理字段：`owner/lifecycle`
-6. 收益字段：`impact.baseline/impact.after`
+1. 让正式经验只在任务结束后沉淀
+2. 让 verification 与 memory 共用同一份 handoff 事实源
+3. 让 `memory_card` 保持轻量，便于后续接向量索引
 
-## 2) 运行策略（当前）
+## 2) 当前运行策略
 
-1. 任务开始执行高精度记忆召回注入（最多 5 条，摘要化注入，未命中不阻塞）。
-2. 运行中由 `memory-knowledge-skill` 自主捕获候选记忆（`capture_runtime_memory_candidate`）。
-3. 任务结束由框架强制沉淀最终任务记忆。
+1. 任务开始时做 system memory recall
+2. recall 默认只轻量注入：
+   - `memory_id`
+   - `recall_hint`
+3. 如有需要，再按 id 拉取完整卡片
+4. 任务结束时，Runtime 显式执行：
+   - `finalizing(answer)`
+   - `finalizing(handoff)`
+5. 正式 memory 仅从 `verification_handoff.memory_seed` 派生
 
-## 3) 指标闭环落地
+## 3) 当前卡片模型
 
-先跑 6 个过程指标，再看 3 个北极星指标：
+`memory_card` 只保留这些字段：
 
-- 过程指标：命中率、采纳率、噪音率、新鲜度、覆盖率、有效率
-- 北极星指标：缺陷率下降、交付周期下降、重复事故率下降
+1. `id`
+2. `title`
+3. `recall_hint`
+4. `content`
+5. `status`
+6. `updated_at`
+7. `expire_at`
 
-`metrics_sqlite.sql` 提供了可直接执行的查询模板。
+这表示当前系统不再把 `memory_type`、`domain`、`scenario_stage`、`payload_json` 作为主表必备字段。
 
-## 4) 与现有仓库对齐建议
+## 4) 当前事实源
 
-你当前项目已有：
+正式 memory 的唯一主来源是：
 
-- 结构化记忆存储与检索：`app/core/memory/system_memory_store.py`
-- 可观测事件：`app/observability`
+```json
+{
+  "verification_handoff": {
+    "memory_seed": {
+      "title": "string",
+      "recall_hint": "string",
+      "content": "string"
+    }
+  }
+}
+```
 
-建议的最小改造路径：
+如果 `memory_seed` 为空，当前 run 不会生成正式 memory card。
 
-1. 以 `memory_card` 作为唯一运行态记忆载体。
-2. 在 `app/observability/events.py` 增加三类事件：`memory_triggered`、`memory_retrieved`、`memory_decision_made`。
-3. 运行中通过 skill 工具捕获候选记忆并记录事件。
-4. 每周跑一次 `metrics_sqlite.sql` 并处理低价值/过期记忆。
+## 5) 当前代码接入点
 
-当前代码接入（已实现）：
-
-- 结构化存储：`app/core/memory/system_memory_store.py`（`memory_card` SQLite CRUD + 检索）
-- 事件落库：`app/observability/store.py::SystemMemoryEventStore`
-- 主链路沉淀：`app/core/runtime/agent_runtime.py`（任务结束强制沉淀）
+- 结构化存储：`app/core/memory/system_memory_store.py`
+- recall 生命周期：`app/core/runtime/system_memory_lifecycle.py`
+- handoff 生成：`app/eval/verification_handoff_service.py`
+- finalizing 编排：`app/core/runtime/agent_runtime.py`
 - CLI：`app/skills/memory-knowledge-skill/scripts/memory_card_cli.py`
-- Runtime 获取：`app/skills/memory-knowledge-skill/SKILL.md` + `app/tool/runtime_memory_harvest_tool.py`（运行中自主捕获候选记忆）
+- 事件落库：`app/observability/store.py::SystemMemoryEventStore`
 
-Runtime 规则（当前）：
+## 6) 观测闭环
 
-- 任务开始执行高精度记忆召回注入（最多 5 条，摘要化注入）
-- 运行中由 skill 自主决策是否捕获候选记忆
-- 任务结束由框架强制沉淀最终任务记忆
+当前保留三类 system memory 事件：
 
-## 5) 本周启动清单
+1. `memory_triggered`
+2. `memory_retrieved`
+3. `memory_decision_made`
 
-1. 补充 10 条高质量 `memory_card` 样例。
-2. 在真实任务中验证候选捕获 skill 的触发质量。
-3. 每周审查一次 draft 记忆并升级/淘汰。
-4. 运行 `metrics_sqlite.sql` 并追踪噪音率与采纳率。
+这些事件主要用于：
+
+1. recall 链路观测
+2. 持久化链路审计
+3. KPI 与 postmortem 分析
+
+## 7) 现阶段不包含什么
+
+当前 V1 明确不包含：
+
+1. 默认主链路中的运行中候补记忆写入
+2. 向量检索
+3. 重字段 memory_card 主表
+4. 复杂的 handoff context builder
+
+## 8) 推荐治理动作
+
+1. 持续补充高质量 `memory_card` 样例
+2. 审查过期或低价值卡片
+3. 跟踪 recall 命中率、采纳率和噪音率
+4. 后续如接向量索引，优先复用当前轻量卡片作为索引输入

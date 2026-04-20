@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import sqlite3
@@ -6,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 
 class SystemMemoryStore:
-    """SQLite store for structured memory cards."""
+    """SQLite store for lightweight recall-oriented memory cards."""
 
     def __init__(self, db_file: str = "db/system_memory.db"):
         self.db_file = db_file
@@ -19,56 +18,95 @@ class SystemMemoryStore:
     def _init_db(self) -> None:
         conn = self._connect()
         try:
+            cols = self._table_columns(conn, "memory_card")
+            if cols and not self._is_lightweight_schema(cols):
+                self._migrate_legacy_memory_card(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory_card (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     recall_hint TEXT NOT NULL DEFAULT '',
-                    memory_type TEXT NOT NULL,
-                    domain TEXT NOT NULL,
-                    tags_json TEXT NOT NULL,
-                    scenario_stage TEXT NOT NULL,
-                    trigger_hint TEXT NOT NULL,
-                    problem_pattern_json TEXT NOT NULL,
-                    solution_json TEXT NOT NULL,
-                    constraints_json TEXT NOT NULL,
-                    anti_pattern_json TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    impact_json TEXT NOT NULL,
-                    owner_team TEXT NOT NULL,
-                    owner_primary TEXT NOT NULL,
-                    owner_reviewers_json TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    version TEXT NOT NULL,
-                    effective_from TEXT,
-                    expire_at TEXT,
-                    last_reviewed_at TEXT,
-                    confidence TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                    content TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                    expire_at TEXT
                 )
                 """
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_memory_card_stage_status ON memory_card(scenario_stage, status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_memory_card_expire_at ON memory_card(expire_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_memory_card_title_domain ON memory_card(title, domain)"
-            )
-            self._ensure_memory_card_columns(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_card_status ON memory_card(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_card_expire_at ON memory_card(expire_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_card_title ON memory_card(title)")
             conn.commit()
         finally:
             conn.close()
 
-    def _ensure_memory_card_columns(self, conn: sqlite3.Connection) -> None:
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(memory_card)").fetchall()}
-        if "recall_hint" not in cols:
-            conn.execute("ALTER TABLE memory_card ADD COLUMN recall_hint TEXT NOT NULL DEFAULT ''")
+    def _table_columns(self, conn: sqlite3.Connection, table: str) -> List[str]:
+        try:
+            return [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        except Exception:
+            return []
+
+    def _is_lightweight_schema(self, cols: List[str]) -> bool:
+        expected = {"id", "title", "recall_hint", "content", "status", "updated_at", "expire_at"}
+        return set(cols) == expected
+
+    def _migrate_legacy_memory_card(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT id, title, recall_hint, payload_json, status, expire_at, updated_at
+            FROM memory_card
+            """
+        ).fetchall()
+        conn.execute("ALTER TABLE memory_card RENAME TO memory_card_legacy")
+        conn.execute(
+            """
+            CREATE TABLE memory_card (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                recall_hint TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                expire_at TEXT
+            )
+            """
+        )
+        for row in rows:
+            normalized = self._normalize_legacy_row(row)
+            conn.execute(
+                """
+                INSERT INTO memory_card (id, title, recall_hint, content, status, updated_at, expire_at)
+                VALUES (:id, :title, :recall_hint, :content, :status, :updated_at, :expire_at)
+                """,
+                normalized,
+            )
+        conn.execute("DROP TABLE memory_card_legacy")
+
+    def _normalize_legacy_row(self, row: Any) -> Dict[str, Any]:
+        card_id = str(row[0] or "").strip()
+        title = self._preview_text(str(row[1] or "").strip(), 120) or "任务经验摘要"
+        payload_raw = row[3] if len(row) > 3 else ""
+        payload = self._parse_payload(payload_raw)
+        recall_hint = self._preview_text(
+            str(row[2] or "").strip() or self._safe_text(payload.get("recall_hint"), default=""),
+            220,
+        )
+        status = self._safe_status(row[4] if len(row) > 4 else payload.get("status"))
+        expire_at = self._nullable_text(row[5] if len(row) > 5 else payload.get("expire_at"))
+        updated_at = self._nullable_text(row[6] if len(row) > 6 else None) or self._now_text()
+        content = self._build_content_from_payload(payload=payload, title=title, recall_hint=recall_hint)
+        if not recall_hint:
+            recall_hint = self._preview_text(content, 220)
+        return {
+            "id": card_id,
+            "title": title,
+            "recall_hint": recall_hint,
+            "content": content,
+            "status": status,
+            "updated_at": updated_at,
+            "expire_at": expire_at,
+        }
 
     def upsert_card(self, card: Dict[str, Any]) -> Dict[str, Any]:
         normalized = self._normalize_card(card)
@@ -77,42 +115,16 @@ class SystemMemoryStore:
             conn.execute(
                 """
                 INSERT INTO memory_card (
-                    id, title, recall_hint, memory_type, domain, tags_json, scenario_stage, trigger_hint,
-                    problem_pattern_json, solution_json, constraints_json, anti_pattern_json,
-                    evidence_json, impact_json, owner_team, owner_primary, owner_reviewers_json,
-                    status, version, effective_from, expire_at, last_reviewed_at, confidence,
-                    payload_json, created_at, updated_at
+                    id, title, recall_hint, content, status, updated_at, expire_at
                 ) VALUES (
-                    :id, :title, :recall_hint, :memory_type, :domain, :tags_json, :scenario_stage, :trigger_hint,
-                    :problem_pattern_json, :solution_json, :constraints_json, :anti_pattern_json,
-                    :evidence_json, :impact_json, :owner_team, :owner_primary, :owner_reviewers_json,
-                    :status, :version, :effective_from, :expire_at, :last_reviewed_at, :confidence,
-                    :payload_json, datetime('now','localtime'), datetime('now','localtime')
+                    :id, :title, :recall_hint, :content, :status, datetime('now','localtime'), :expire_at
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     recall_hint = excluded.recall_hint,
-                    memory_type = excluded.memory_type,
-                    domain = excluded.domain,
-                    tags_json = excluded.tags_json,
-                    scenario_stage = excluded.scenario_stage,
-                    trigger_hint = excluded.trigger_hint,
-                    problem_pattern_json = excluded.problem_pattern_json,
-                    solution_json = excluded.solution_json,
-                    constraints_json = excluded.constraints_json,
-                    anti_pattern_json = excluded.anti_pattern_json,
-                    evidence_json = excluded.evidence_json,
-                    impact_json = excluded.impact_json,
-                    owner_team = excluded.owner_team,
-                    owner_primary = excluded.owner_primary,
-                    owner_reviewers_json = excluded.owner_reviewers_json,
+                    content = excluded.content,
                     status = excluded.status,
-                    version = excluded.version,
-                    effective_from = excluded.effective_from,
                     expire_at = excluded.expire_at,
-                    last_reviewed_at = excluded.last_reviewed_at,
-                    confidence = excluded.confidence,
-                    payload_json = excluded.payload_json,
                     updated_at = datetime('now','localtime')
                 """,
                 normalized,
@@ -122,18 +134,14 @@ class SystemMemoryStore:
             conn.close()
         return {"success": True, "id": normalized["id"]}
 
-    def get_card(
-        self,
-        card_id: str,
-        only_active: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    def get_card(self, card_id: str, only_active: bool = False) -> Optional[Dict[str, Any]]:
         card_id_norm = (card_id or "").strip()
         if not card_id_norm:
             return None
         conn = self._connect()
         try:
             sql = """
-                SELECT id, payload_json, scenario_stage, title, status, expire_at, recall_hint
+                SELECT id, title, recall_hint, content, status, updated_at, expire_at
                 FROM memory_card
                 WHERE id = ?
             """
@@ -143,9 +151,7 @@ class SystemMemoryStore:
             row = conn.execute(sql, tuple(args)).fetchone()
         finally:
             conn.close()
-        if not row:
-            return None
-        return self._row_to_card(row)
+        return self._row_to_card(row) if row else None
 
     def search_cards(
         self,
@@ -154,7 +160,6 @@ class SystemMemoryStore:
         limit: int = 5,
         only_active: bool = True,
     ) -> List[Dict[str, Any]]:
-        # stage is accepted for backward compatibility, but retrieval is title-only.
         _ = stage
         clauses: List[str] = ["1=1"]
         args: List[Any] = []
@@ -164,15 +169,15 @@ class SystemMemoryStore:
             query_tokens = [t for t in query_norm.split() if t]
             for token in query_tokens:
                 like = f"%{token}%"
-                clauses.append("(lower(title) LIKE ?)")
-                args.append(like)
+                clauses.append("(lower(title) LIKE ? OR lower(recall_hint) LIKE ? OR lower(content) LIKE ?)")
+                args.extend([like, like, like])
 
         if only_active:
             clauses.append("status = 'active'")
             clauses.append("(expire_at IS NULL OR date(expire_at) >= date('now','localtime'))")
 
         sql = f"""
-            SELECT id, payload_json, scenario_stage, title, status, expire_at, recall_hint
+            SELECT id, title, recall_hint, content, status, updated_at, expire_at
             FROM memory_card
             WHERE {' AND '.join(clauses)}
             ORDER BY updated_at DESC
@@ -202,7 +207,7 @@ class SystemMemoryStore:
         try:
             rows = conn.execute(
                 """
-                SELECT id, payload_json, scenario_stage, title, status, expire_at, recall_hint
+                SELECT id, title, recall_hint, content, status, updated_at, expire_at
                 FROM memory_card
                 WHERE status = 'active'
                   AND expire_at IS NOT NULL
@@ -219,101 +224,96 @@ class SystemMemoryStore:
     def _normalize_card(self, card: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(card, dict):
             raise ValueError("card must be an object")
-
         card_id = self._require_text(card.get("id"), "id")
         raw_title = self._require_text(card.get("title"), "title")
-        title = self._normalize_title(raw_title, card=card)
-        memory_type = self._safe_text(card.get("memory_type"), default="experience")
-        domain = self._safe_text(card.get("domain"), default="general")
-
-        scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
-        scenario_stage = self._safe_text(scenario.get("stage"), default="development")
-        trigger_hint = self._safe_text(scenario.get("trigger_hint"), default="")
-
-        owner = card.get("owner", {}) if isinstance(card.get("owner", {}), dict) else {}
-        owner_team = self._safe_text(owner.get("team"), default="unknown")
-        owner_primary = self._safe_text(owner.get("primary"), default="unknown")
-        owner_reviewers = owner.get("reviewers", []) if isinstance(owner.get("reviewers", []), list) else []
-
-        lifecycle = card.get("lifecycle", {}) if isinstance(card.get("lifecycle", {}), dict) else {}
-        status = self._safe_text(lifecycle.get("status"), default="active")
-        version = self._safe_text(lifecycle.get("version"), default="v1.0")
-        effective_from = self._nullable_text(lifecycle.get("effective_from"))
-        expire_at = self._nullable_text(lifecycle.get("expire_at"))
-        last_reviewed_at = self._nullable_text(lifecycle.get("last_reviewed_at"))
-
-        tags = card.get("tags", []) if isinstance(card.get("tags", []), list) else []
-        confidence = self._safe_text(card.get("confidence"), default="C")
+        title = self._normalize_title(raw_title)
         recall_hint = self._safe_text(card.get("recall_hint"), default="")
         if not recall_hint:
-            # Backward compatibility: allow legacy summary field as source.
             recall_hint = self._safe_text(card.get("summary"), default="")
+        content = self._safe_text(card.get("content"), default="")
+        if not content:
+            content = self._build_content_from_payload(payload=card, title=title, recall_hint=recall_hint)
         if not recall_hint:
+            trigger_hint = ""
+            scenario = card.get("scenario", {}) if isinstance(card.get("scenario", {}), dict) else {}
+            if isinstance(scenario, dict):
+                trigger_hint = self._safe_text(scenario.get("trigger_hint"), default="")
             recall_hint = self._compose_recall_hint(card=card, title=title, trigger_hint=trigger_hint)
-        card_payload = dict(card)
-        card_payload["title"] = title
-        card_payload["recall_hint"] = recall_hint
-        if "summary" in card_payload and not card_payload.get("summary"):
-            card_payload.pop("summary", None)
-
+        lifecycle = card.get("lifecycle", {}) if isinstance(card.get("lifecycle", {}), dict) else {}
+        status = self._safe_status(card.get("status") or lifecycle.get("status"))
+        expire_at = self._nullable_text(card.get("expire_at") or lifecycle.get("expire_at"))
         return {
             "id": card_id,
             "title": title,
-            "recall_hint": recall_hint,
-            "memory_type": memory_type,
-            "domain": domain,
-            "tags_json": json.dumps(tags, ensure_ascii=False),
-            "scenario_stage": scenario_stage,
-            "trigger_hint": trigger_hint,
-            "problem_pattern_json": json.dumps(card.get("problem_pattern", {}), ensure_ascii=False),
-            "solution_json": json.dumps(card.get("solution", {}), ensure_ascii=False),
-            "constraints_json": json.dumps(card.get("constraints", {}), ensure_ascii=False),
-            "anti_pattern_json": json.dumps(card.get("anti_pattern", {}), ensure_ascii=False),
-            "evidence_json": json.dumps(card.get("evidence", {}), ensure_ascii=False),
-            "impact_json": json.dumps(card.get("impact", {}), ensure_ascii=False),
-            "owner_team": owner_team,
-            "owner_primary": owner_primary,
-            "owner_reviewers_json": json.dumps(owner_reviewers, ensure_ascii=False),
+            "recall_hint": self._preview_text(recall_hint, 220),
+            "content": self._preview_text(content, 2000),
             "status": status,
-            "version": version,
-            "effective_from": effective_from,
             "expire_at": expire_at,
-            "last_reviewed_at": last_reviewed_at,
-            "confidence": confidence,
-            "payload_json": json.dumps(card_payload, ensure_ascii=False),
         }
 
     def _row_to_card(self, row: Any) -> Optional[Dict[str, Any]]:
         if not row:
             return None
-        payload_raw = row[1]
-        try:
-            card = json.loads(payload_raw) if isinstance(payload_raw, str) else {}
-        except json.JSONDecodeError:
-            card = {}
-        if not isinstance(card, dict):
-            card = {}
-        card.setdefault("id", row[0])
-        card.setdefault("title", row[3])
-        card.setdefault("recall_hint", row[6] if len(row) > 6 else "")
-        card.setdefault("scenario", {})
-        if isinstance(card["scenario"], dict):
-            card["scenario"].setdefault("stage", row[2])
-        card.setdefault("lifecycle", {})
-        if isinstance(card["lifecycle"], dict):
-            card["lifecycle"].setdefault("status", row[4])
-            card["lifecycle"].setdefault("expire_at", row[5])
+        card = {
+            "id": str(row[0] or "").strip(),
+            "title": str(row[1] or "").strip(),
+            "recall_hint": str(row[2] or "").strip(),
+            "content": str(row[3] or "").strip(),
+            "status": str(row[4] or "").strip() or "active",
+            "updated_at": str(row[5] or "").strip(),
+            "expire_at": row[6],
+        }
+        card["lifecycle"] = {
+            "status": card["status"],
+            "expire_at": card["expire_at"],
+        }
         return card
 
     def _score_card(self, card: Dict[str, Any], query: str) -> float:
+        if not query:
+            return 0.0
+        title = str(card.get("title", "")).lower()
+        recall_hint = str(card.get("recall_hint", "")).lower()
+        content = str(card.get("content", "")).lower()
         score = 0.0
-
-        if query:
-            text = str(card.get("title", "")).lower()
-            for token in [t for t in query.split() if t]:
-                if token in text:
-                    score += 0.1
+        for token in [t for t in query.split() if t]:
+            if token in title:
+                score += 0.6
+            elif token in recall_hint:
+                score += 0.3
+            elif token in content:
+                score += 0.1
         return round(min(score, 1.0), 4)
+
+    def _build_content_from_payload(self, payload: Dict[str, Any], title: str, recall_hint: str) -> str:
+        if not isinstance(payload, dict):
+            return recall_hint or title
+        pieces: List[str] = []
+        direct_content = self._safe_text(payload.get("content"), default="")
+        if direct_content:
+            return self._preview_text(direct_content, 2000)
+        payload_hint = self._safe_text(payload.get("recall_hint"), default="")
+        if payload_hint and not recall_hint:
+            recall_hint = payload_hint
+        trigger_hint = ""
+        scenario = payload.get("scenario", {}) if isinstance(payload.get("scenario", {}), dict) else {}
+        if isinstance(scenario, dict):
+            trigger_hint = self._safe_text(scenario.get("trigger_hint"), default="")
+        solution = payload.get("solution", {}) if isinstance(payload.get("solution", {}), dict) else {}
+        expected_outcome = self._safe_text(solution.get("expected_outcome"), default="")
+        steps = solution.get("steps", []) if isinstance(solution.get("steps", []), list) else []
+        first_step = ""
+        for step in steps:
+            text = self._safe_text(step, default="")
+            if text:
+                first_step = text
+                break
+        for item in [title, recall_hint, trigger_hint, first_step, expected_outcome]:
+            text = self._safe_text(item, default="")
+            if text and text not in pieces:
+                pieces.append(text)
+        joined = "；".join(pieces).strip()
+        return self._preview_text(joined or title, 2000)
 
     def _compose_recall_hint(self, card: Dict[str, Any], title: str, trigger_hint: str) -> str:
         solution = card.get("solution", {}) if isinstance(card.get("solution", {}), dict) else {}
@@ -324,8 +324,6 @@ class SystemMemoryStore:
             if text:
                 first_step = text
                 break
-        pieces = [title, trigger_hint, first_step]
-        summary = "；".join([p.strip() for p in pieces if p and str(p).strip()])
         problem_pattern = card.get("problem_pattern", {}) if isinstance(card.get("problem_pattern", {}), dict) else {}
         constraints = card.get("constraints", {}) if isinstance(card.get("constraints", {}), dict) else {}
         anti_pattern = card.get("anti_pattern", {}) if isinstance(card.get("anti_pattern", {}), dict) else {}
@@ -346,14 +344,23 @@ class SystemMemoryStore:
             f"动作：{action_text}；"
             f"风险：{risk_text}。"
         )
-        return self._preview_text(structured, max_len=220)
+        return self._preview_text(structured, 220)
 
-    def _normalize_title(self, title: str, card: Dict[str, Any]) -> str:
+    def _parse_payload(self, payload_raw: Any) -> Dict[str, Any]:
+        if not isinstance(payload_raw, str) or not payload_raw.strip():
+            return {}
+        import json
+
+        try:
+            parsed = json.loads(payload_raw)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _normalize_title(self, title: str) -> str:
         text = self._safe_text(title, default="")
         if not text:
             return "经验复用策略"
-
-        # Remove pipeline noise tokens while preserving semantic nouns/verbs.
         noise_patterns = [
             r"\btask[_\-]?[a-z0-9_\-]{4,}\b",
             r"\brun[_\-]?[a-z0-9_\-]{4,}\b",
@@ -366,15 +373,13 @@ class SystemMemoryStore:
             text = re.sub(p, " ", text, flags=re.IGNORECASE)
         text = re.sub(r"[|｜]+", " ", text)
         text = re.sub(r"\s+", " ", text).strip(" ,;:，；：-")
+        return self._preview_text(text or "经验复用策略", 120)
 
-        if not text:
-            problem_pattern = card.get("problem_pattern", {}) if isinstance(card.get("problem_pattern", {}), dict) else {}
-            symptoms = problem_pattern.get("symptoms", []) if isinstance(problem_pattern.get("symptoms", []), list) else []
-            if symptoms:
-                text = str(symptoms[0]).strip()
-        if not text:
-            text = "经验复用策略"
-        return self._preview_text(text, max_len=120)
+    def _safe_status(self, value: Any) -> str:
+        text = self._safe_text(value, default="active").lower()
+        if text not in {"active", "archived", "draft"}:
+            return "active"
+        return text
 
     def _require_text(self, value: Any, field: str) -> str:
         text = self._safe_text(value, default="")
@@ -399,3 +404,11 @@ class SystemMemoryStore:
         if len(text) <= max_len:
             return text
         return text[:max_len].rstrip() + "..."
+
+    def _now_text(self) -> str:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT datetime('now','localtime')").fetchone()
+            return str(row[0] or "").strip() if row else ""
+        finally:
+            conn.close()

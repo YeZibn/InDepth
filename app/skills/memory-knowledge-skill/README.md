@@ -1,15 +1,12 @@
-# Memory Knowledge Skill (V2)
+# Memory Knowledge Skill
 
-This skill now uses **structured system memory cards** as the only source of truth.
+This skill manages the current lightweight system memory design.
 
 ## Core Commands
 
 ```bash
 # Show help
 python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py --help
-
-# Runtime capture (tool call inside runtime)
-# capture_runtime_memory_candidate(task_id, run_id, title, observation, ...)
 
 # Upsert one memory card from JSON
 python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
@@ -30,10 +27,23 @@ python app/skills/memory-knowledge-skill/scripts/memory_card_cli.py \
 - Main table: `memory_card`
 - Event tables: `memory_trigger_event`, `memory_retrieval_event`, `memory_decision_event`
 
+## Current Rules
+
+- Formal memory persistence happens only after task end
+- Persistence source is `verification_handoff.memory_seed`
+- Runtime default memory tools are `search_memory_cards` and `get_memory_card_by_id`
+- Recall is lightweight by default: `memory_id + recall_hint`
+- `memory_card` uses the simplified schema:
+  - `id`
+  - `title`
+  - `recall_hint`
+  - `content`
+  - `status`
+  - `updated_at`
+  - `expire_at`
+
 ## Notes
 
-- Legacy markdown-based memory workflow has been removed.
-- Runtime now performs start-of-run system memory recall injection (LLM title-based, up to 5 cards, light inject: `memory_id + recall_hint`).
-- Runtime forces memory finalization at task end.
-- Runtime candidate capture remains an explicit tool path (`capture_runtime_memory_candidate`), not implicit auto-capture.
-- Runtime can fetch full card by id via tool `get_memory_card_by_id` when a recalled memory becomes critical.
+- Legacy markdown-based memory workflow has been removed
+- Runtime candidate memory is not the recommended default path anymore
+- Event tables are still retained for KPI tracking and postmortem analysis

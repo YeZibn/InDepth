@@ -30,7 +30,7 @@ class RuntimeMemoryHarvestToolTests(unittest.TestCase):
             )
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].get("lifecycle", {}).get("status"), "draft")
-            self.assertEqual(rows[0].get("confidence"), "C")
+            self.assertIn("部署后先清缓存再重建导致读放大", str(rows[0].get("content", "")))
 
     def test_capture_runtime_memory_candidate_accepts_recall_hint_override(self):
         with tempfile.TemporaryDirectory() as td:

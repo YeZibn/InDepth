@@ -242,8 +242,9 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         self.assertEqual(result, "发布检查已完成")
         self.assertTrue(mock_store.upsert_card.called)
         upsert_card = mock_store.upsert_card.call_args.args[0]
-        self.assertEqual(upsert_card.get("memory_type"), "experience")
-        self.assertEqual(upsert_card.get("scenario", {}).get("stage"), "postmortem")
+        self.assertEqual(upsert_card.get("title"), "请做上线前发布检查")
+        self.assertIn("发布检查已完成", str(upsert_card.get("content", "")))
+        self.assertEqual(upsert_card.get("lifecycle", {}).get("status"), "active")
 
     def test_runtime_parallelizes_completed_finalizers_and_waits_before_return(self):
         provider = MockModelProvider(
@@ -334,7 +335,7 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
             {"postmortem", "task_memory", "user_preferences", "final_compaction"},
         )
 
-    def test_runtime_finalize_uses_llm_generated_memory_metadata_when_enabled(self):
+    def test_runtime_finalize_persists_memory_from_verification_handoff_memory_seed(self):
         provider = MockModelProvider(
             scripted_outputs=[
                 {
@@ -349,7 +350,13 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                     },
                 },
                 {
-                    "content": '{"title":"发布检查失败回滚前先校验依赖状态","recall_hint":"问题：发布前依赖状态不一致导致流程中断；适用：涉及多服务联动发布；动作：先校验依赖健康再执行发布；风险：跳过前置检查会触发连锁回滚。"}',
+                    "content": (
+                        '{"goal":"请做上线前发布检查","task_summary":"完成发布检查并形成收尾结论","final_status":"pass",'
+                        '"constraints":[],"expected_artifacts":[],"claimed_done_items":["发布检查已完成"],'
+                        '"key_tool_results":[],"known_gaps":[],"memory_seed":{"title":"发布前先做依赖健康检查",'
+                        '"recall_hint":"多服务联动发布前，先检查依赖状态一致性。","content":"在发布前先做依赖健康检查，再执行后续发布动作，可降低回滚风险。"},'
+                        '"self_confidence":0.9,"soft_score_threshold":0.7,"rubric":"评估任务完成度、约束满足度、证据充分性。"}'
+                    ),
                     "raw": {"mock": True},
                 },
             ]
@@ -361,15 +368,16 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                 model_provider=provider,
                 tool_registry=ToolRegistry(),
                 max_steps=2,
-                enable_memory_card_metadata_llm=True,
+                enable_verification_handoff_llm=True,
             )
             runtime.run("请做上线前发布检查", task_id="runtime_pre_release_task", run_id="runtime_pre_release_run")
 
         upsert_card = mock_store.upsert_card.call_args.args[0]
-        self.assertEqual(upsert_card.get("title"), "发布检查失败回滚前先校验依赖状态")
-        self.assertIn("适用：涉及多服务联动发布", str(upsert_card.get("recall_hint", "")))
+        self.assertEqual(upsert_card.get("title"), "发布前先做依赖健康检查")
+        self.assertIn("先检查依赖状态一致性", str(upsert_card.get("recall_hint", "")))
+        self.assertIn("依赖健康检查", str(upsert_card.get("content", "")))
 
-    def test_runtime_finalize_falls_back_when_llm_metadata_is_invalid(self):
+    def test_runtime_finalize_uses_fallback_handoff_memory_seed_when_handoff_llm_is_invalid(self):
         provider = MockModelProvider(
             scripted_outputs=[
                 {
@@ -396,13 +404,14 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                 model_provider=provider,
                 tool_registry=ToolRegistry(),
                 max_steps=2,
-                enable_memory_card_metadata_llm=True,
+                enable_verification_handoff_llm=True,
             )
             runtime.run("请做上线前发布检查", task_id="runtime_pre_release_task", run_id="runtime_pre_release_run")
 
         upsert_card = mock_store.upsert_card.call_args.args[0]
-        self.assertIn("复用策略", str(upsert_card.get("title", "")))
-        self.assertIn("任务结束状态", str(upsert_card.get("recall_hint", "")))
+        self.assertEqual(upsert_card.get("title"), "请做上线前发布检查")
+        self.assertIn("相似的任务", str(upsert_card.get("recall_hint", "")))
+        self.assertIn("发布检查已完成", str(upsert_card.get("content", "")))
 
     def test_runtime_emits_verification_events_and_judgement_payload(self):
         provider = MockModelProvider(

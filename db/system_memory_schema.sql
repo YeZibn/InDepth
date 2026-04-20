@@ -53,31 +53,13 @@ CREATE TABLE IF NOT EXISTS memory_card (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     recall_hint TEXT NOT NULL DEFAULT '',
-    memory_type TEXT NOT NULL,
-    domain TEXT NOT NULL,
-    tags_json TEXT NOT NULL,
-    scenario_stage TEXT NOT NULL,
-    trigger_hint TEXT NOT NULL,
-    problem_pattern_json TEXT NOT NULL,
-    solution_json TEXT NOT NULL,
-    constraints_json TEXT NOT NULL,
-    anti_pattern_json TEXT NOT NULL,
-    evidence_json TEXT NOT NULL,
-    impact_json TEXT NOT NULL,
-    owner_team TEXT NOT NULL,
-    owner_primary TEXT NOT NULL,
-    owner_reviewers_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    version TEXT NOT NULL,
-    effective_from TEXT,
+    content TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     expire_at TEXT,
-    last_reviewed_at TEXT,
-    confidence TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_memory_card_stage_status ON memory_card(scenario_stage, status);
+CREATE INDEX IF NOT EXISTS idx_memory_card_status ON memory_card(status);
 CREATE INDEX IF NOT EXISTS idx_memory_card_expire_at ON memory_card(expire_at);
-CREATE INDEX IF NOT EXISTS idx_memory_card_title_domain ON memory_card(title, domain);
+CREATE INDEX IF NOT EXISTS idx_memory_card_title ON memory_card(title);

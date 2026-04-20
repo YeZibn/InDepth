@@ -1,7 +1,10 @@
 # System Memory Runtime Cycle 设计方案（V1）
 
 更新时间：2026-04-14  
-状态：Draft（待评审）
+状态：Superseded（已过时，保留作历史记录）
+
+> 注意：本文档描述的是早期方案，包含“运行中 capture 候选记忆”“旧版检索/卡片设计”等已被替换的内容。
+> 当前实现请以 [`finalizing-handoff-driven-memory-design-v1.md`](/Users/yezibin/Project/InDepth/doc/design/finalizing-handoff-driven-memory-design-v1.md) 为准。
 
 当前落地状态（2026-04-14）：
 1. Phase 1 已落地：run 开始召回注入 + run 结束强制沉淀。
