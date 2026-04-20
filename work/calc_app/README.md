@@ -1,6 +1,6 @@
 # Python 高级计算器
 
-这是一个放在 `work` 目录下的高级 Python 计算器程序，支持安全表达式求值、科学函数、变量、历史记录、内存寄存器以及交互式 REPL。
+这是一个放在 `work` 目录下的高级 Python 计算器程序，支持安全表达式求值、科学函数、变量、历史记录、内存寄存器，以及两种交互方式：**REPL 命令行交互** 和 **菜单式交互**。
 
 ## 文件说明
 
@@ -38,15 +38,19 @@
    - 基于 Python AST 做受限表达式解析
    - 不允许任意执行 Python 代码
 
+8. **交互模式**
+   - 普通 REPL：适合连续直接输入表达式或命令
+   - 菜单模式：适合按功能编号操作，更直观
+
 ## 运行方式
 
-### 1. 交互模式
+### 1. REPL 交互模式
 
 ```bash
 python3 work/calculator.py
 ```
 
-启动后可连续输入表达式或命令：
+示例：
 
 ```text
 calc> x = 7
@@ -59,9 +63,37 @@ calc> mr
 calc> history
 1. 7 = 7
 2. ans * 3 = 21
+calc> quit
+Bye
 ```
 
-### 2. 单次执行模式
+### 2. 菜单式交互模式
+
+```bash
+python3 work/calculator.py --menu
+```
+
+示例流程：
+
+```text
+欢迎使用高级计算器菜单模式。
+请选择功能编号: 1
+请输入表达式: sin(pi/2) + 2**8
+257
+
+请选择功能编号: 2
+变量名: x
+变量值表达式: 12
+x = 12
+
+请选择功能编号: 4
+x = 12
+
+请选择功能编号: 0
+Bye
+```
+
+### 3. 单次执行模式
 
 ```bash
 python3 work/calculator.py "sin(pi/2) + 2**8"
@@ -75,12 +107,28 @@ python3 work/calculator.py "sin(pi/2) + 2**8"
 
 ## 支持的命令
 
+### REPL 命令
+
 - `help`：显示帮助
 - `history`：查看历史记录
 - `vars`：查看变量
 - `precision N`：设置输出精度（0 到 20）
 - `mr` / `mc` / `m+` / `m-`：内存操作
 - `quit` / `exit`：退出程序
+
+### 菜单功能
+
+- `1`：计算表达式
+- `2`：变量赋值
+- `3`：查看历史记录
+- `4`：查看变量
+- `5`：读取内存
+- `6`：内存增加
+- `7`：内存减少
+- `8`：清空内存
+- `9`：设置输出精度
+- `10`：显示帮助
+- `0`：退出
 
 ## 使用示例
 
@@ -122,6 +170,8 @@ calc> 10 / 3
 - `SafeEvaluator`：基于 AST 的安全表达式求值器
 - `AdvancedCalculator`：封装状态、命令解析与交互逻辑
 - `CalculatorState`：保存变量、历史、内存、精度和上一结果
+- `repl()`：普通命令行交互模式
+- `menu_mode()`：菜单式交互模式
 
 ## 限制说明
 
@@ -136,6 +186,7 @@ calc> 10 / 3
 ```bash
 python3 work/calculator.py "sin(pi/2) + 2**8"
 printf 'x = 7\nans * 3\nm+\nmr\nhistory\nquit\n' | python3 work/calculator.py
+printf '1\nsin(pi/2)+2**8\n2\nx\n12\n4\n0\n' | python3 work/calculator.py --menu
 ```
 
 ## 编译 / 检查命令

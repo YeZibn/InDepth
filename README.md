@@ -350,9 +350,12 @@ InDepth 的执行过程可以理解为一条连续的生产线：先定义边界
 | [Prompt](doc/refer/prompt-reference.md) | Prompt 组装、运行时注入顺序、主/子 Agent 提示词来源 |
 | [Skills](doc/refer/skills-reference.md) | 技能加载、`<skills_system>` 注入、技能访问工具 |
 | [Memory](doc/refer/memory-reference.md) | 压缩、结构化摘要、系统记忆 |
+| [Runtime Memory](doc/refer/runtime-memory-reference.md) | 当前 task 会话记忆、上下文压缩、step token ledger 与预算语义 |
+| [System Memory](doc/refer/system-memory-reference.md) | 跨任务经验卡、召回链路、finalize 沉淀与 recall 注入 |
 | [**User Preference**](doc/refer/user-preference-reference.md) | **用户偏好记忆存储、API 与使用场景（新增）** |
 | [Tools](doc/refer/tools-reference.md) | 工具声明/注册/调用链 |
 | [Todo](doc/refer/todo-reference.md) | Todo 编排、subtask 设计、依赖流转、与 SubAgent 协作边界 |
+| [Subtask Status](doc/refer/subtask-status-reference.md) | 当前如何选择应执行的 subtask，以及三种基础更新动作与状态联动 |
 | [Search Guard](doc/refer/search-guard-reference.md) | 检索门禁、预算与自动扩容策略 |
 | [Eval](doc/refer/eval-reference.md) | 判定模型、verifier 链路 |
 | [Observability](doc/refer/observability-reference.md) | 事件模型、postmortem 生成 |
