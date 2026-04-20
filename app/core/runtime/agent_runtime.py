@@ -13,6 +13,7 @@ from app.config import (
 )
 from app.core.memory.embedding_provider import build_system_memory_embedding_provider
 from app.core.runtime.runtime_utils import (
+    clamp_float,
     estimate_context_usage,
     extract_finish_reason_and_message,
     extract_missing_info_hints,
@@ -66,10 +67,6 @@ from app.core.runtime.tool_execution import (
     enrich_runtime_tool_args,
     handle_native_tool_calls,
 )
-from app.eval.verification_handoff_service import (
-    build_verification_handoff,
-    clamp_float,
-)
 from app.eval.orchestrator import EvalOrchestrator
 from app.core.model.base import GenerationConfig, ModelProvider
 from app.core.memory.base import MemoryStore
@@ -80,64 +77,163 @@ from app.core.tools.registry import ToolRegistry
 from app.observability.events import emit_event
 from app.observability.postmortem import generate_postmortem
 
+PREPARING_PHASE_PROMPT = """[当前阶段：Prepare]
+你当前处于准备阶段。目标不是直接完成任务，而是建立正确的执行入口。
 
-PREPARE_PLANNER_SYSTEM_PROMPT = """你是 Runtime 的前置 Todo 规划器。
+本阶段应完成：
+1. 明确任务目标、范围、约束、交付物、验收口径与时间基准。
+2. 判断是否需要 todo 编排。
+3. 判断是否存在 active todo，需要承接、更新还是废弃旧计划。
+4. 判断是否需要前置观察，例如检索、读取、时间确认、历史回看。
+5. 判断是否需要 subagent，并给出最小可行执行骨架。
 
-你的职责只有思考，不执行，不调用工具，不读取文件，不探索环境。
+todo 规则：
+1. 若任务存在多个可识别步骤、跨文件修改、较长执行链路、依赖关系或并行机会，应优先考虑 todo。
+2. 若需要 todo，应产出可验证的 subtasks，而不是只写宽泛说明。
+3. 若已有 active todo，应优先承接当前现状，不要机械从零重建。
 
-请基于输入事实判断：
-1. 当前请求是否需要使用 todo 跟踪
-2. 如果需要，输出一份可直接交给 plan_task 的完整计划
-3. 如果输入已提供 current_state_summary，请把它视为“当前已有内容”的事实基础，不要把已存在的工作重新规划成从零开始
+subagent 规则：
+1. 是否使用 subagent，必须在 prepare 阶段决定。
+2. 若决定使用 subagent，这个决定必须体现在 subtasks 中，不能只写在说明文字里。
+3. 与 subagent 相关的编排动作必须进入子任务清单；至少应能追踪“创建/配置”“启动执行”，必要时还应包含“结果回收/汇总”。
+4. 并行 subagent 必须映射到独立子任务。
+5. 不允许出现“计划里说要用 subagent，但 subtasks 中没有对应动作”的情况。
 
-要求：
-1. 只输出 JSON
-2. 不要输出 markdown
-3. 不要请求调用任何工具
-4. 若 active_todo_exists=true，优先沿用 active_todo_id，不要重新开始新 todo
-5. 当 should_use_todo=true 时，必须一次性给出 task_name/context/split_reason/subtasks
-6. subtasks 至少 1 项，每项至少包含 name、description、split_rationale
-7. 若已有 active todo，可用一个“承接当前请求并继续推进”的 bootstrap 子任务作为最小更新骨架
+若当前上下文要求你充当前置规划器：
+1. 你的职责只有思考，不执行，不调用工具，不读取文件，不探索环境。
+2. 只输出结构化规划结果；若上下文明确要求 JSON，则必须只输出 JSON。
+3. 若 active_todo_exists=true，应优先沿用 active_todo_id，不要重新开始新 todo。
+4. 若需要 todo，输出内容必须足以直接映射到 task_name、context、split_reason、subtasks。
+5. 若计划包含 subagent，相关编排动作必须进入 subtasks；不得出现“计划提到 subagent，但 subtasks 没有对应动作”的情况。
 
-输出 JSON 结构：
+本阶段禁止：
+1. 直接把大部分执行工作做完。
+2. 在没有必要时做大范围探索。
+3. 把尚未编排的关键动作偷偷带入执行阶段。
+"""
+
+EXECUTING_PHASE_PROMPT = """[当前阶段：Execute]
+你当前处于执行阶段。目标是推进任务并形成可验证结果。
+
+执行要求：
+1. 以当前计划、当前子任务或当前主线目标推进。
+2. 使用工具后根据结果更新判断。
+3. 尽量形成局部闭环，而不是只停留在分析。
+4. 偏离原计划时，先说明偏离原因；若计划已明显失效，应先更新计划，再继续推进。
+5. 若遇到阻塞，优先缩小问题、保留证据、说明下一步。
+
+todo 约束：
+1. 执行阶段应以子任务清单为主线推进。
+2. 清单外关键动作应先补入计划，再执行。
+3. 不要无理由重新做大规划。
+
+subagent 约束：
+1. Execute 阶段不得私自启用 subagent。
+2. 只有 prepare 已明确决定使用 subagent，且 subtasks 中已有对应编排动作，才允许按计划执行。
+3. 若执行中发现当前计划缺少必要的 subagent 编排，必须先更新计划或 todo，再继续。
+4. 不允许把“执行中的临时判断”直接变成未登记的 subagent 行动。
+
+本阶段禁止：
+1. 在没有证据时宣称完成。
+2. 做与当前目标无关的扩展。
+"""
+
+FINALIZING_PHASE_PROMPT = """[当前阶段：Finalize]
+你当前处于收尾阶段。目标是诚实总结，而不是扩展任务。
+
+收尾要求：
+1. 清楚区分已完成事项、未完成事项、未验证事项、已保留产物、已知风险与推荐下一步。
+2. 正常结束时，应说明做了什么、产物在哪里、如何验证。
+3. 未完全完成时，必须说明当前进度、停止原因、哪些产物仍然可用，以及接下来应如何推进。
+4. 不得在 closeout 阶段继续扩大任务范围。
+5. 不得把未验证内容表述为既成事实。
+
+你的输出必须包含两部分：
+1. `[Final Answer]`：面向用户的自然语言总结。
+2. `[Structured Handoff]`：严格 JSON，对应系统消费的结构化交接内容。
+
+`[Structured Handoff]` 必须忠实于当前上下文，不得臆造文件、测试、命令结果或成功结论。
+若证据不足，必须写入 `known_gaps`。
+若任务未完全完成，`final_status` 必须为 `partial` 或 `fail`。
+必须包含 `memory_seed`。
+
+字段填写规则：
+1. `goal` 表示原始任务目标，不是最终总结。
+2. `task_summary` 表示本次 run 当前做到什么程度。
+3. `final_status` 只能是 `pass|partial|fail`：
+   - `pass`：主要任务完成，且证据足够支持。
+   - `partial`：有部分有效结果，但未完全闭环。
+   - `fail`：关键目标失败或未形成可用交付。
+4. `constraints` 写执行时必须遵守的约束；如果上下文没有明确约束，可为空数组。
+5. `expected_artifacts` 只写你有把握存在或明确交付的关键产物，不要把不确定存在的文件写进去。
+6. `key_evidence` 写支持结论成立的关键证据，优先写文件、命令、测试等可验证证据；若没有足够证据，必须在 `known_gaps` 承认。
+7. `claimed_done_items` 只写真正已完成的事项，不得把计划中事项、建议事项、未验证事项写成已完成。
+8. `key_tool_results` 只保留关键工具结果摘要，不要机械罗列所有调用。
+9. `known_gaps` 写当前明确知道但未解决、未验证或未覆盖的缺口；只要证据不足，就必须写。
+10. `risks` 写任务结束后仍可能暴露的问题或不确定性。
+11. `recovery` 用于 todo/subtask 恢复信息；若没有恢复上下文，可输出空对象 `{}`。
+12. `memory_seed` 必须始终存在：
+   - `title`：这次经验的标题
+   - `recall_hint`：未来什么场景应召回
+   - `content`：可复用的结果摘要或经验
+13. `self_confidence` 表示你对 handoff 完整度与真实性的自评分，不等于任务成功率。
+14. `soft_score_threshold` 表示 verifier 的软评分参考阈值。
+15. `rubric` 表示 verifier 应优先按什么标准来判断这次任务。
+16. 如果你把 `final_status` 写成 `pass`，通常应给出足够的 `claimed_done_items`，并尽量提供 `key_evidence`；若仍有明显未验证部分，必须写入 `known_gaps`。
+
+`[Structured Handoff]` JSON schema:
 {
-  "should_use_todo": true,
-  "task_name": "string",
-  "context": "string",
-  "split_reason": "string",
-  "subtasks": [
+  "goal": "string",
+  "task_summary": "string",
+  "final_status": "pass|partial|fail",
+  "constraints": ["string"],
+  "expected_artifacts": [
     {
-      "name": "string",
-      "description": "string",
-      "split_rationale": "string",
-      "dependencies": ["optional task number strings"],
-      "acceptance_criteria": ["optional string array"]
+      "path": "string",
+      "must_exist": true,
+      "non_empty": true,
+      "contains": "string(optional)"
     }
   ],
-  "notes": ["string"]
+  "key_evidence": [
+    {
+      "type": "file|command|test|reasoning",
+      "name": "string",
+      "summary": "string"
+    }
+  ],
+  "claimed_done_items": ["string"],
+  "key_tool_results": [
+    {
+      "tool": "string",
+      "status": "ok|error",
+      "summary": "string"
+    }
+  ],
+  "known_gaps": ["string"],
+  "risks": ["string"],
+  "recovery": {
+    "todo_id": "string",
+    "subtask_id": "string",
+    "subtask_number": 0,
+    "fallback_record": {},
+    "recovery_decision": {}
+  },
+  "memory_seed": {
+    "title": "string",
+    "recall_hint": "string",
+    "content": "string"
+  },
+  "self_confidence": 0.0,
+  "soft_score_threshold": 0.7,
+  "rubric": "string"
 }
 """
 
 PHASE_OVERLAY_PROMPTS = {
-    "preparing": (
-        "[Current Phase]\n"
-        "You are currently in preparing phase.\n"
-        "Primary goal: understand the task, decide whether todo tracking is needed, and shape the execution skeleton.\n"
-        "You may use lightweight observational abilities when genuinely helpful, such as checking time, reviewing history, and reading current runtime facts.\n"
-        "Do not expand into full execution, broad exploration, or deliver final artifacts in this phase."
-    ),
-    "executing": (
-        "[Current Phase]\n"
-        "You are currently in executing phase.\n"
-        "Primary goal: advance the task, use tools when needed, and complete the requested work.\n"
-        "Do not restart broad planning unless execution is genuinely blocked."
-    ),
-    "finalizing": (
-        "[Current Phase]\n"
-        "You are currently in finalizing phase.\n"
-        "Primary goal: evaluate existing results, summarize honestly, and close out this run.\n"
-        "Do not expand task scope during closeout."
-    ),
+    "preparing": PREPARING_PHASE_PROMPT,
+    "executing": EXECUTING_PHASE_PROMPT,
+    "finalizing": FINALIZING_PHASE_PROMPT,
 }
 
 
@@ -419,7 +515,7 @@ class AgentRuntime:
         )
         output = self.model_provider.generate(
             messages=[
-                {"role": "system", "content": PREPARE_PLANNER_SYSTEM_PROMPT},
+                {"role": "system", "content": PREPARING_PHASE_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             tools=[],
@@ -869,6 +965,7 @@ class AgentRuntime:
     ) -> str:
         self.last_run_id = run_id
         self.last_task_id = task_id
+        self.last_user_input = user_input
         self.last_runtime_state = "running"
         self.last_stop_reason = ""
         self._runtime_phase = ""
@@ -1219,30 +1316,190 @@ class AgentRuntime:
             emit_event=emit_event,
         )
 
-    def _build_verification_handoff(
+    def _extract_finalizing_sections(
         self,
+        content: str,
+        fallback_answer: str,
+    ) -> tuple[str, Dict[str, Any], bool]:
+        text = str(content or "").strip()
+        if not text:
+            return fallback_answer, self._build_minimal_handoff(fallback_answer, fallback_answer, "partial", []), False
+
+        final_answer = fallback_answer
+        handoff: Dict[str, Any] = {}
+        final_marker = "[Final Answer]"
+        handoff_marker = "[Structured Handoff]"
+        if final_marker in text and handoff_marker in text:
+            final_start = text.find(final_marker) + len(final_marker)
+            handoff_start = text.find(handoff_marker)
+            final_part = text[final_start:handoff_start].strip()
+            handoff_part = text[handoff_start + len(handoff_marker):].strip()
+            if final_part:
+                final_answer = final_part
+            if handoff_part.startswith("```json"):
+                handoff_part = handoff_part[len("```json"):].strip()
+            if handoff_part.startswith("```"):
+                handoff_part = handoff_part[len("```"):].strip()
+            if handoff_part.endswith("```"):
+                handoff_part = handoff_part[:-3].strip()
+            handoff = self._parse_json_dict(handoff_part)
+        else:
+            handoff = self._parse_json_dict(text)
+            if not handoff:
+                final_answer = fallback_answer
+
+        if not isinstance(handoff, dict) or not handoff:
+            return final_answer, self._build_minimal_handoff(final_answer, fallback_answer, "partial", []), False
+        normalized = self._normalize_main_chain_handoff(
+            candidate=handoff,
+            fallback=self._build_minimal_handoff(final_answer, fallback_answer, "partial", []),
+        )
+        return final_answer, normalized, True
+
+    def _build_minimal_handoff(
+        self,
+        final_answer: str,
+        fallback_answer: str,
+        final_status: str,
+        known_gaps: List[str],
+    ) -> Dict[str, Any]:
+        recovery = self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {}
+        answer_text = str(final_answer or fallback_answer or "").strip()
+        return {
+            "goal": self._preview(self.last_user_input if hasattr(self, "last_user_input") else "", 280),
+            "task_summary": self._preview(answer_text, 280),
+            "final_status": final_status if final_status in {"pass", "partial", "fail"} else "partial",
+            "constraints": [],
+            "expected_artifacts": [],
+            "key_evidence": [],
+            "claimed_done_items": [self._preview(answer_text, 280)] if answer_text else [],
+            "key_tool_results": [],
+            "known_gaps": [self._preview(item, 120) for item in known_gaps if str(item).strip()],
+            "risks": [],
+            "recovery": recovery,
+            "memory_seed": {
+                "title": self._preview(self.last_user_input if hasattr(self, "last_user_input") else "任务经验摘要", 120)
+                or "任务经验摘要",
+                "recall_hint": self._preview(
+                    f"当遇到与“{getattr(self, 'last_user_input', '') or '当前任务'}”相似的任务时，优先参考本次最终交付与收尾结果。",
+                    200,
+                ),
+                "content": self._preview(answer_text or "本次任务已结束，但结构化交接信息不完整。", 500),
+            },
+            "self_confidence": 0.5,
+            "soft_score_threshold": 0.7,
+            "rubric": "评估任务完成度、约束满足度、证据充分性。",
+        }
+
+    def _normalize_main_chain_handoff(
+        self,
+        candidate: Dict[str, Any],
+        fallback: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        out = dict(fallback)
+        goal = self._preview(str(candidate.get("goal", "") or "").strip(), 280)
+        if goal:
+            out["goal"] = goal
+        task_summary = self._preview(str(candidate.get("task_summary", "") or "").strip(), 280)
+        if task_summary:
+            out["task_summary"] = task_summary
+        final_status = str(candidate.get("final_status", "") or "").strip().lower()
+        if final_status in {"pass", "partial", "fail"}:
+            out["final_status"] = final_status
+        for key in ["constraints", "claimed_done_items", "known_gaps", "risks"]:
+            value = candidate.get(key, [])
+            if isinstance(value, list):
+                cleaned = [
+                    self._preview(str(item).strip(), 280 if key == "claimed_done_items" else 120)
+                    for item in value
+                    if str(item).strip()
+                ]
+                if key == "claimed_done_items":
+                    if cleaned:
+                        out[key] = cleaned
+                else:
+                    out[key] = cleaned
+        expected_artifacts = candidate.get("expected_artifacts", [])
+        if isinstance(expected_artifacts, list):
+            out["expected_artifacts"] = [item for item in expected_artifacts if isinstance(item, dict)]
+        key_evidence = candidate.get("key_evidence", [])
+        if isinstance(key_evidence, list):
+            out["key_evidence"] = [item for item in key_evidence if isinstance(item, dict)]
+        key_tool_results = candidate.get("key_tool_results", [])
+        if isinstance(key_tool_results, list):
+            out["key_tool_results"] = [item for item in key_tool_results if isinstance(item, dict)]
+        recovery = candidate.get("recovery", {})
+        if isinstance(recovery, dict):
+            out["recovery"] = recovery
+        memory_seed = candidate.get("memory_seed", {})
+        if isinstance(memory_seed, dict):
+            title = self._preview(str(memory_seed.get("title", "") or "").strip(), 120)
+            recall_hint = self._preview(str(memory_seed.get("recall_hint", "") or "").strip(), 200)
+            content = self._preview(str(memory_seed.get("content", "") or "").strip(), 500)
+            out["memory_seed"] = {
+                "title": title or out["memory_seed"].get("title", "任务经验摘要"),
+                "recall_hint": recall_hint or out["memory_seed"].get("recall_hint", ""),
+                "content": content or out["memory_seed"].get("content", ""),
+            }
+        out["self_confidence"] = clamp_float(candidate.get("self_confidence", out.get("self_confidence", 0.5)), default=float(out.get("self_confidence", 0.5) or 0.5))
+        out["soft_score_threshold"] = clamp_float(candidate.get("soft_score_threshold", out.get("soft_score_threshold", 0.7)), default=float(out.get("soft_score_threshold", 0.7) or 0.7))
+        rubric = self._preview(str(candidate.get("rubric", "") or "").strip(), 120)
+        if rubric:
+            out["rubric"] = rubric
+        return out
+
+    def _build_finalizing_answer_config(self) -> GenerationConfig:
+        options: Dict[str, Any] = {}
+        if self.generation_config and getattr(self.generation_config, "provider_options", None):
+            options = dict(self.generation_config.provider_options)
+        return GenerationConfig(
+            temperature=0.1,
+            max_tokens=1800,
+            provider_options=options,
+        )
+
+    def _generate_main_chain_finalizing_output(
+        self,
+        task_id: str,
+        run_id: str,
         user_input: str,
         final_answer: str,
         stop_reason: str,
         runtime_status: str,
         tool_failures: List[Dict[str, str]],
         context_messages: List[Dict[str, Any]],
-    ) -> tuple[Dict[str, Any], str]:
-        # verification handoff 的触发时机属于 runtime，但 handoff 的构造/归一化属于 eval 能力层。
-        return build_verification_handoff(
-            user_input=user_input,
-            final_answer=final_answer,
-            stop_reason=stop_reason,
-            runtime_status=runtime_status,
-            tool_failures=tool_failures,
-            context_messages=context_messages,
-            recovery_context=self._latest_todo_recovery,
-            model_provider=self.model_provider,
-            enabled=self.enable_verification_handoff_llm,
-            build_config=self._build_verification_handoff_config,
-            parse_json_dict=self._parse_json_dict,
-            preview=self._preview,
+    ) -> tuple[str, Dict[str, Any], str]:
+        final_messages = [dict(msg) for msg in context_messages if isinstance(msg, dict)]
+        if final_messages and final_messages[0].get("role") == "system":
+            final_messages[0] = {"role": "system", "content": self._build_system_prompt()}
+        runtime_facts = {
+            "user_input": user_input,
+            "current_final_answer": final_answer,
+            "stop_reason": stop_reason,
+            "runtime_status": runtime_status,
+            "tool_failures": tool_failures[:10] if isinstance(tool_failures, list) else [],
+            "latest_recovery": self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {},
+        }
+        final_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "请进入最终收尾模式。基于以上完整上下文与下面的 runtime 事实，"
+                    "重新输出最终结果，并严格遵守当前阶段 prompt 中要求的两段式格式："
+                    "`[Final Answer]` + `[Structured Handoff]`。\n\n"
+                    f"{json.dumps(runtime_facts, ensure_ascii=False)}"
+                ),
+            }
         )
+        output = self.model_provider.generate(
+            messages=final_messages,
+            tools=[],
+            config=self._build_finalizing_answer_config(),
+        )
+        content = str(getattr(output, "content", "") or "").strip()
+        extracted_answer, handoff, ok = self._extract_finalizing_sections(content=content, fallback_answer=final_answer)
+        source = "main_final_answer" if ok else "main_final_answer_fallback"
+        return extracted_answer, handoff, source
 
     def _run_finalizing_pipeline(
         self,
@@ -1283,10 +1540,10 @@ class AgentRuntime:
             }
 
         self._trace("[runtime] finalizing(answer) started")
-        self._trace("[runtime] finalizing(answer) completed")
-        if verification_handoff is None:
-            self._trace("[runtime] finalizing(handoff) started")
-            verification_handoff, handoff_source = self._build_verification_handoff(
+        try:
+            final_answer, verification_handoff, handoff_source = self._generate_main_chain_finalizing_output(
+                task_id=task_id,
+                run_id=run_id,
                 user_input=user_input,
                 final_answer=final_answer,
                 stop_reason=stop_reason,
@@ -1294,7 +1551,12 @@ class AgentRuntime:
                 tool_failures=last_tool_failures,
                 context_messages=context_messages,
             )
-            self._trace(f"[runtime] finalizing(handoff) completed source={handoff_source}")
+            self._trace(f"[runtime] finalizing(answer) completed source={handoff_source}")
+        except Exception as e:
+            self._trace(f"[runtime] finalizing(answer) fallback error={str(e)}")
+            known_gaps = [f"finalizing_generation_failed={str(e)}"]
+            verification_handoff = self._build_minimal_handoff(final_answer, final_answer, "partial" if task_status == "ok" else "fail", known_gaps)
+            handoff_source = "main_final_answer_fallback"
 
         completed_outcome = finalize_completed_run(
             task_id=task_id,
@@ -1307,6 +1569,7 @@ class AgentRuntime:
             last_tool_failures=last_tool_failures,
             verification_handoff=verification_handoff,
             handoff_source=handoff_source,
+            latest_todo_recovery=self._latest_todo_recovery,
             auto_manage_todo_recovery=self._auto_manage_todo_recovery,
             append_recovery_summary_for_user=self._append_recovery_summary_for_user,
             has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
@@ -1714,21 +1977,6 @@ class AgentRuntime:
             fallback_recall_hint=fallback_recall_hint,
             task_id=task_id,
             run_id=run_id,
-        )
-
-    def _build_verification_handoff_config(self) -> GenerationConfig:
-        options: Dict[str, Any] = {}
-        try:
-            model_cfg = load_runtime_model_config()
-            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
-            if mini_id:
-                options["model"] = mini_id
-        except Exception:
-            pass
-        return GenerationConfig(
-            temperature=0.1,
-            max_tokens=900,
-            provider_options=options,
         )
 
     def _build_recovery_planner_config(self) -> GenerationConfig:

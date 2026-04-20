@@ -108,5 +108,5 @@ class ArtifactVerifier(Verifier):
 
 def build_default_deterministic_verifiers() -> list[Verifier]:
     # Keep deterministic checks focused on runtime/process health.
-    # Result/quality validation is delegated to verifier agent.
+    # Artifact / evidence inspection is delegated to VerifierAgent.
     return [StopReasonVerifier(), ToolFailureVerifier()]

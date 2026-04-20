@@ -156,6 +156,41 @@ class VerifierAgentTests(unittest.TestCase):
             payload = json.loads(tool_msg["content"])
             self.assertEqual(payload.get("root"), "outputs/task1")
 
+    def test_verifier_agent_prompt_contains_expected_artifacts_and_key_evidence(self):
+        provider = MockModelProvider(
+            scripted_outputs=[
+                {
+                    "content": '{"passed": true, "score": 0.9, "reason": "ok", "checks": []}',
+                    "raw": {"mock": True},
+                }
+            ]
+        )
+        agent = VerifierAgent(model_provider=provider)
+        agent.evaluate(
+            run_outcome=RunOutcome(
+                task_id="t4",
+                run_id="r4",
+                user_input="检查交付",
+                final_answer="已完成交付",
+                stop_reason="stop",
+                verification_handoff={
+                    "goal": "检查交付",
+                    "expected_artifacts": [
+                        {"path": "work/report.md", "must_exist": True, "non_empty": True, "contains": "摘要"}
+                    ],
+                    "key_evidence": [
+                        {"type": "command", "name": "pytest", "summary": "目标测试通过"}
+                    ],
+                },
+            ),
+        )
+        user_prompt = provider.requests[0]["messages"][1]["content"]
+        self.assertIn("[主链路交接-预期产物]", user_prompt)
+        self.assertIn("path=work/report.md", user_prompt)
+        self.assertIn("contains=摘要", user_prompt)
+        self.assertIn("[主链路交接-关键证据]", user_prompt)
+        self.assertIn("[command] pytest: 目标测试通过", user_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -203,7 +203,6 @@ app/
 ├── eval/                           # 评估体系
 │   ├── schema.py                   # 数据模型
 │   ├── orchestrator.py             # 评估协调器
-│   ├── verification_handoff_service.py # 验证交接能力
 │   ├── verifiers/                 # Verifier 实现
 │   │   ├── deterministic.py        # 确定性验证
 │   │   └── llm_judge.py            # LLM 判官

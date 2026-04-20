@@ -3,8 +3,7 @@ from typing import Any, Callable, Dict
 
 from app.config import load_runtime_model_config
 from app.core.model.base import GenerationConfig, ModelProvider
-from app.core.runtime.runtime_utils import is_clarification_request
-from app.eval.verification_handoff_service import clamp_float
+from app.core.runtime.runtime_utils import clamp_float, is_clarification_request
 
 
 CLARIFICATION_JUDGE_SYSTEM_PROMPT = """你是一个二分类判定器，只负责判断 assistant 文本是否在向用户索取缺失信息。

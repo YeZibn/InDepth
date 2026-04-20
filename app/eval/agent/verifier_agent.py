@@ -108,6 +108,37 @@ class VerifierAgent:
             else []
         )
         gaps_text = "\n".join([f"- {x}" for x in known_gaps]) or "- (none)"
+        expected_artifacts_raw = handoff.get("expected_artifacts", [])
+        expected_artifacts = expected_artifacts_raw if isinstance(expected_artifacts_raw, list) else []
+        artifact_lines = []
+        for artifact in expected_artifacts[:10]:
+            if not isinstance(artifact, dict):
+                continue
+            path = str(artifact.get("path", "") or "").strip()
+            if not path:
+                continue
+            must_exist = bool(artifact.get("must_exist", True))
+            non_empty = bool(artifact.get("non_empty", False))
+            contains = str(artifact.get("contains", "") or "").strip()
+            desc = f"- path={path}; must_exist={str(must_exist).lower()}; non_empty={str(non_empty).lower()}"
+            if contains:
+                desc += f"; contains={contains}"
+            artifact_lines.append(desc)
+        artifacts_text = "\n".join(artifact_lines) or "- (none)"
+        key_evidence_raw = handoff.get("key_evidence", [])
+        key_evidence = key_evidence_raw if isinstance(key_evidence_raw, list) else []
+        evidence_lines = []
+        for item in key_evidence[:10]:
+            if not isinstance(item, dict):
+                continue
+            evidence_type = str(item.get("type", "") or "").strip() or "unknown"
+            name = str(item.get("name", "") or "").strip() or "(unnamed)"
+            summary = str(item.get("summary", "") or "").strip()
+            line = f"- [{evidence_type}] {name}"
+            if summary:
+                line += f": {summary}"
+            evidence_lines.append(line)
+        evidence_text = "\n".join(evidence_lines) or "- (none)"
         tool_results = handoff.get("key_tool_results", [])
         if not isinstance(tool_results, list):
             tool_results = []
@@ -121,6 +152,8 @@ class VerifierAgent:
             f"[约束]\n{constraints}\n\n"
             f"[评分标准]\n{rubric}\n\n"
             f"[主链路交接-完成项]\n{claimed_text}\n\n"
+            f"[主链路交接-预期产物]\n{artifacts_text}\n\n"
+            f"[主链路交接-关键证据]\n{evidence_text}\n\n"
             f"[主链路交接-工具结果]\n{json.dumps(tool_results[:10], ensure_ascii=False)}\n\n"
             f"[主链路交接-已知缺口]\n{gaps_text}\n\n"
             f"[证据根目录（由先前任务输出推断）]\n{roots_text}\n\n"

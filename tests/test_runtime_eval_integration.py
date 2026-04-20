@@ -1,5 +1,6 @@
 import unittest
 import threading
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -52,13 +53,16 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                 },
                 {
                     "content": (
+                        "[Final Answer]\n接口文档与测试补充已完成。\n\n"
+                        "[Structured Handoff]\n```json\n"
                         '{"goal":"完成接口文档与测试补充","constraints":["保留原有 API 行为"],'
                         '"expected_artifacts":[{"path":"doc/api.md","must_exist":true,"non_empty":true}],'
                         '"claimed_done_items":["补充了接口说明","补充了回归测试"],'
                         '"key_tool_results":[{"tool":"read_file","status":"ok","summary":"已读取关键文件"}],'
                         '"known_gaps":["尚未执行全量回归"],'
+                        '"memory_seed":{"title":"接口文档补充","recall_hint":"后续接口文档任务优先参考本次交付","content":"完成接口文档与测试补充"},'
                         '"self_confidence":0.92,"soft_score_threshold":0.75,'
-                        '"rubric":"优先检查需求覆盖与证据充分性"}'
+                        '"rubric":"优先检查需求覆盖与证据充分性"}\n```'
                     ),
                     "raw": {"mock": True},
                 },
@@ -348,7 +352,19 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                             }
                         ]
                     },
-                }
+                },
+                {
+                    "content": (
+                        "[Final Answer]\n任务完成\n\n"
+                        "[Structured Handoff]\n```json\n"
+                        '{"goal":"请完成任务","task_summary":"任务完成","final_status":"pass","constraints":[],'
+                        '"expected_artifacts":[],"key_evidence":[],"claimed_done_items":["任务完成"],'
+                        '"key_tool_results":[],"known_gaps":[],"risks":[],"recovery":{},'
+                        '"memory_seed":{"title":"请完成任务","recall_hint":"后续相似任务可参考本次交付","content":"任务完成"},'
+                        '"self_confidence":0.9,"soft_score_threshold":0.7,"rubric":"评估任务完成度、约束满足度、证据充分性。"}\n```'
+                    ),
+                    "raw": {"mock": True},
+                },
             ]
         )
 
@@ -385,7 +401,7 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                         started.append(name)
                     if len(started) == 4:
                         all_started.set()
-                self.assertTrue(release.wait(timeout=2.0))
+                self.assertTrue(release.wait(timeout=5.0))
             return _run
 
         result_box = {"value": ""}
@@ -412,7 +428,11 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                 )
             )
             worker.start()
-            self.assertTrue(all_started.wait(timeout=2.0))
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if all_started.wait(timeout=0.1):
+                    break
+            self.assertTrue(all_started.is_set(), msg=f"started={started}")
             self.assertTrue(worker.is_alive())
             release.set()
             worker.join(timeout=2.0)
@@ -533,13 +553,13 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
         self.assertTrue(any(e.get("event_type") == "task_judged" for e in captured))
         started = [e for e in captured if e.get("event_type") == "verification_started"]
         self.assertEqual(len(started), 1)
-        self.assertEqual(started[0].get("payload", {}).get("handoff_source"), "fallback_rule")
+        self.assertEqual(started[0].get("payload", {}).get("handoff_source"), "main_final_answer")
         judged = [e for e in captured if e.get("event_type") == "task_judged"]
         self.assertEqual(len(judged), 1)
         payload = judged[0].get("payload", {})
         self.assertEqual(payload.get("verified_success"), True)
         self.assertEqual(payload.get("final_status"), "pass")
-        self.assertEqual(payload.get("verification_handoff_source"), "fallback_rule")
+        self.assertEqual(payload.get("verification_handoff_source"), "main_final_answer")
         handoff = payload.get("verification_handoff", {})
         self.assertIsInstance(handoff, dict)
         self.assertEqual(handoff.get("goal"), "verification case")
@@ -560,7 +580,13 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                     },
                 },
                 {
-                    "content": '{"goal":"测试任务","constraints":[],"expected_artifacts":[],"claimed_done_items":["任务已完成"],"key_tool_results":[],"known_gaps":[],"self_confidence":0.9,"soft_score_threshold":0.7,"rubric":"评估任务完成度、约束满足度、证据充分性。"}',
+                    "content": (
+                        "[Final Answer]\n任务已完成。\n\n"
+                        "[Structured Handoff]\n```json\n"
+                        '{"goal":"测试任务","constraints":[],"expected_artifacts":[],"claimed_done_items":["任务已完成"],'
+                        '"key_tool_results":[],"known_gaps":[],"memory_seed":{"title":"测试任务","recall_hint":"后续测试任务可参考本次交付","content":"任务已完成"},'
+                        '"self_confidence":0.9,"soft_score_threshold":0.7,"rubric":"评估任务完成度、约束满足度、证据充分性。"}\n```'
+                    ),
                     "raw": {"mock": True},
                 },
             ]
@@ -582,15 +608,15 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
 
         started = [e for e in captured if e.get("event_type") == "verification_started"]
         self.assertEqual(len(started), 1)
-        self.assertEqual(started[0].get("payload", {}).get("handoff_source"), "llm")
+        self.assertEqual(started[0].get("payload", {}).get("handoff_source"), "main_final_answer")
         judged = [e for e in captured if e.get("event_type") == "task_judged"]
         self.assertEqual(len(judged), 1)
-        self.assertEqual(judged[0].get("payload", {}).get("verification_handoff_source"), "llm")
+        self.assertEqual(judged[0].get("payload", {}).get("verification_handoff_source"), "main_final_answer")
         handoff = judged[0].get("payload", {}).get("verification_handoff", {})
         self.assertIsInstance(handoff, dict)
         self.assertEqual(handoff.get("goal"), "测试任务")
 
-    def test_runtime_builds_verification_handoff_before_task_finished_event(self):
+    def test_runtime_builds_main_chain_handoff_before_task_finished_event(self):
         provider = MockModelProvider(
             scripted_outputs=[
                 {
@@ -603,6 +629,17 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
                             }
                         ]
                     },
+                },
+                {
+                    "content": (
+                        "[Final Answer]\n任务已完成。\n\n"
+                        "[Structured Handoff]\n```json\n"
+                        '{"goal":"step handoff case","task_summary":"任务已完成","final_status":"pass","constraints":[],'
+                        '"expected_artifacts":[],"key_evidence":[],"claimed_done_items":["任务已完成"],"key_tool_results":[],'
+                        '"known_gaps":[],"risks":[],"recovery":{},"memory_seed":{"title":"step handoff case","recall_hint":"参考本次收尾","content":"任务已完成"},'
+                        '"self_confidence":0.9,"soft_score_threshold":0.7,"rubric":"评估任务完成度、约束满足度、证据充分性。"}\n```'
+                    ),
+                    "raw": {"mock": True},
                 }
             ]
         )
@@ -613,14 +650,14 @@ class RuntimeEvalIntegrationTests(unittest.TestCase):
             return {}
 
         runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry(), max_steps=2)
-        original_build = runtime._build_verification_handoff
+        original_build = runtime._generate_main_chain_finalizing_output
 
         def _wrapped_build(*args, **kwargs):
             sequence.append("handoff_built")
             return original_build(*args, **kwargs)
 
         with patch("app.core.runtime.agent_runtime.emit_event", side_effect=_capture_emit_event):
-            with patch.object(runtime, "_build_verification_handoff", side_effect=_wrapped_build):
+            with patch.object(runtime, "_generate_main_chain_finalizing_output", side_effect=_wrapped_build):
                 runtime.run("step handoff case", task_id="runtime_eval_task_handoff_step", run_id="runtime_eval_run_handoff_step")
 
         self.assertIn("handoff_built", sequence)

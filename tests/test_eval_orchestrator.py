@@ -54,6 +54,28 @@ class EvalOrchestratorTests(unittest.TestCase):
             self.assertEqual(judgement.final_status, "pass")
             self.assertFalse(judgement.overclaim)
 
+    def test_evaluate_does_not_hard_fail_only_because_expected_artifact_is_missing(self):
+        orchestrator = EvalOrchestrator()
+        outcome = RunOutcome(
+            task_id="t_missing",
+            run_id="r_missing",
+            user_input="u",
+            final_answer="任务已完成",
+            stop_reason="stop",
+            tool_failures=[],
+            runtime_status="ok",
+            verification_handoff={
+                "expected_artifacts": [
+                    {"path": "/tmp/indepth_missing_artifact_for_test.txt", "must_exist": True, "non_empty": True}
+                ]
+            },
+        )
+        judgement = orchestrator.evaluate(run_outcome=outcome)
+        self.assertTrue(judgement.verified_success)
+        self.assertEqual(judgement.final_status, "pass")
+        self.assertIsNone(judgement.failure_type)
+        self.assertFalse(judgement.overclaim)
+
     def test_evaluate_with_llm_judge_soft_score(self):
         judge_provider = MockModelProvider(
             scripted_outputs=[

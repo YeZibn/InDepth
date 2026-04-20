@@ -17,7 +17,7 @@
 8. memory metadata / recall 能力已分别下沉到：
    - `app/core/memory/memory_metadata_service.py`
    - `app/core/memory/recall_service.py`
-9. verification handoff 能力已迁到 `app/eval/verification_handoff_service.py`。
+9. verification handoff 已由主链路 finalizing 在 `app/core/runtime/agent_runtime.py` 中直接产出并提取。
 
 验证状态：
 

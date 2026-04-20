@@ -8,11 +8,11 @@ from app.config import load_runtime_compression_config
 from app.core.memory import SQLiteMemoryStore, build_context_compressor
 from app.core.model import GenerationConfig
 from app.core.model.http_chat_provider import HttpChatModelProvider
-from app.core.runtime.agent_runtime import AgentRuntime
 from app.core.runtime.task_token_store import TaskTokenStore
 from app.core.skills import build_skills_manager
 from app.core.tools.adapters import register_tool_functions
 from app.core.tools.registry import ToolRegistry
+from app.agent.sub_agent_runtime import SubAgentRuntime
 from app.tool.bash_tool import execute_bash_command
 from app.tool.get_current_time_tool import get_current_time
 from app.tool.read_file_tool import read_file
@@ -87,6 +87,8 @@ class SubAgent:
         )
         self.skills_manager = build_skills_manager(["app/skills/memory-knowledge-skill"], validate=False)
         skill_prompt = self.skills_manager.get_system_prompt_snippet()
+        if skill_prompt:
+            final_prompt = f"{final_prompt}\n\n{skill_prompt}"
         # Aggregate runtime memory by sub-agent role.
         memory_file = f"db/runtime_memory_subagent_{self.role}.db"
         generation_config = GenerationConfig(
@@ -110,7 +112,7 @@ class SubAgent:
         )
         task_token_store = TaskTokenStore()
 
-        self.runtime = AgentRuntime(
+        self.runtime = SubAgentRuntime(
             model_provider=model_provider,
             tool_registry=self._build_registry(),
             system_prompt=final_prompt,
@@ -129,10 +131,7 @@ class SubAgent:
                 event_summarizer_model_provider=model_provider,
                 task_token_store=task_token_store,
             ),
-            skill_prompt=skill_prompt,
             generation_config=generation_config,
-            compression_config=compression_config,
-            task_token_store=task_token_store,
         )
 
     def _normalize_role(self, role: str) -> str:

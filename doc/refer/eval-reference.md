@@ -33,7 +33,7 @@ Eval 层的职责不是“再回答一次”，而是把 Runtime 主链路结束
 
 - `app/eval/schema.py`
 - `app/eval/orchestrator.py`
-- `app/eval/verification_handoff_service.py`
+- `app/core/runtime/agent_runtime.py`（主链路 finalizing 直接产出并提取 `verification_handoff`）
 - `app/eval/verifiers/deterministic.py`
 - `app/eval/verifiers/llm_judge.py`
 - `app/eval/agent/verifier_agent.py`

@@ -19,8 +19,7 @@
 2. `memory/` 目录已承载被下沉的能力模块：
    - `recall_service.py`
    - `memory_metadata_service.py`
-3. `eval/` 目录已承载 verification handoff 能力模块：
-   - `verification_handoff_service.py`
+3. `eval/` 目录承载评估能力；主链路 handoff 已回到 runtime finalizing 直接产出。
 4. `AgentRuntime` 仍保留薄编排入口与依赖装配，不再直接承载大段 todo / preference / stop 细节。
 
 当前结论：
@@ -37,7 +36,7 @@
 3. `runtime_stop_policy.py`
 4. `tool_execution.py`
 5. `system_memory_lifecycle.py`
-6. `verification_handoff_service.py`
+6. 旧旁路 handoff 逻辑
 
 但这只是“从单文件里拆出来”，还没有完全回答另一个更关键的问题：
 
@@ -168,7 +167,7 @@ app/core/
 
   eval/
     orchestrator.py
-    verification_handoff_service.py
+    verifier_agent.py
     verifier_agent.py
     schema.py
 
@@ -207,7 +206,7 @@ app/core/
 以下模块里其实混了较多能力层内容，后续可以考虑继续下沉：
 
 1. `system_memory_lifecycle.py`
-2. `verification_handoff_service.py`
+2. 旧旁路 handoff 逻辑
 
 但不是整文件直接挪，而是拆成两层。
 
@@ -228,7 +227,7 @@ app/core/
 
 也就是说，名字里带 lifecycle 的部分仍然是 runtime strategy；真正的 recall / metadata / rendering 能力应归 memory。
 
-#### `verification_handoff_service.py`
+#### 旧旁路 handoff 逻辑
 
 建议拆成：
 
@@ -331,7 +330,7 @@ app/core/
 等第一步稳定后，再对以下模块做“能力抽离”：
 
 1. `system_memory_lifecycle.py` 中的 memory service 部分下沉到 `memory/`
-2. `verification_handoff_service.py` 中承载 handoff generation / normalize 能力
+2. 旧旁路 handoff 逻辑中曾承载 handoff generation / normalize 能力
 3. 事件 schema / normalization 若还混在 runtime 附近，则继续下沉到 `observability/`
 
 这样做的好处：

@@ -21,7 +21,7 @@ class _FakeProvider:
 class SubAgentRoleToolsTests(unittest.TestCase):
     def _build_agent(self, role: str) -> SubAgent:
         with (
-            patch("app.agent.sub_agent.AgentRuntime", _FakeRuntime),
+            patch("app.agent.sub_agent.SubAgentRuntime", _FakeRuntime),
             patch("app.agent.sub_agent.HttpChatModelProvider", _FakeProvider),
         ):
             return SubAgent(
@@ -44,6 +44,11 @@ class SubAgentRoleToolsTests(unittest.TestCase):
             registry = agent.runtime.kwargs["tool_registry"]
             self.assertFalse(registry.has("search_memory_cards"), msg=f"{role} should not have search_memory_cards")
             self.assertFalse(registry.has("get_memory_card_by_id"), msg=f"{role} should not have get_memory_card_by_id")
+
+    def test_subagent_uses_lightweight_runtime_without_prepare_prompt_arg(self):
+        agent = self._build_agent("builder")
+        self.assertIn("system_prompt", agent.runtime.kwargs)
+        self.assertNotIn("skill_prompt", agent.runtime.kwargs)
 
 
 if __name__ == "__main__":

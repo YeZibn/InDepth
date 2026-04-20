@@ -26,7 +26,7 @@ System Memory 负责“跨任务经验沉淀与召回”。
 - `app/core/memory/system_memory_store.py`
 - `app/core/runtime/system_memory_lifecycle.py`
 - `app/core/memory/recall_service.py`
-- `app/eval/verification_handoff_service.py`
+- `app/core/runtime/agent_runtime.py`
 
 ## 3. 存储模型
 

@@ -42,6 +42,14 @@ def preview_json(obj: Any, max_len: int = 200) -> str:
     return preview(text, max_len=max_len)
 
 
+def clamp_float(value: Any, default: float) -> float:
+    try:
+        num = float(value)
+    except Exception:
+        return max(0.0, min(default, 1.0))
+    return max(0.0, min(num, 1.0))
+
+
 def estimate_context_tokens(messages: List[Dict[str, Any]]) -> int:
     model = resolve_request_model_id()
     return count_chat_messages_tokens(messages=messages, model=model)

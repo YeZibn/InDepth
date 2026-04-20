@@ -2,24 +2,31 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-19T22:16:55+08:00
+- updated_at: 2026-04-20T20:55:22+08:00
 - enabled: true
 
 ## preferences
 
-### goal_long_term
-- value: 写一个简单的计算器到项目主目录的work文件夹下
+### domain_expertise
+- value: [C, 终端界面程序, 菜单式计算器]
 - source: llm_extract_v1
-- confidence: 0.88
-- updated_at: 2026-04-19T22:04:40+08:00
-- note: evidence=麻烦写一个简单的python计算器到项目主目录的work文件夹下，单子目录
+- confidence: 0.97
+- updated_at: 2026-04-20T20:52:04+08:00
+- note: evidence=在 work/c_ui 下实现一个简单的 C 终端界面程序，建议做成菜单式计算器
 
-### interest_topics
-- value: [基于pdf参考文件提出自己的评论与思考]
+### goal_long_term
+- value: 做一个C界面，同时加上一个README，两个放到各自目录下
 - source: llm_extract_v1
 - confidence: 0.93
-- updated_at: 2026-04-17T20:22:45+08:00
-- note: evidence=具体可以参考这个pdf的内容，去提出自己的评论与思考
+- updated_at: 2026-04-20T20:55:22+08:00
+- note: evidence=我希望做一个c界面，同时加上一个readme，两个放到个子目录下
+
+### interest_topics
+- value: [README.md编写, 项目说明, 目录结构, 编译命令, 运行方法, 功能说明]
+- source: llm_extract_v1
+- confidence: 0.95
+- updated_at: 2026-04-20T20:51:42+08:00
+- note: evidence=请在 work/docs 下编写 README.md，说明这是一个简单 C 界面程序项目，并包含目录结构、编译命令、运行方法、功能说明。请直接创建文件，并在完成后返回文件路径与摘要。
 
 ### job_role
 - value: 程序员
@@ -36,15 +43,15 @@ meta:
 - note: evidence=你好啊
 
 ### response_style
-- value: [偏好将内容放到子目录下, 希望补充一个 README]
+- value: [请直接创建文件, 完成后返回文件路径、核心功能、编译命令]
 - source: llm_extract_v1
-- confidence: 0.94
-- updated_at: 2026-04-19T22:06:32+08:00
-- note: evidence=我希望放到一子目录下，麻烦再写一个readme
+- confidence: 0.96
+- updated_at: 2026-04-20T20:52:04+08:00
+- note: evidence=请直接创建文件，并在完成后返回文件路径、核心功能、编译命令
 
 ### tooling_stack
-- value: cli
+- value: [python]
 - source: llm_extract_v1
-- confidence: 0.93
-- updated_at: 2026-04-19T22:16:55+08:00
-- note: evidence=我希望可以做一个cli的先
+- confidence: 0.99
+- updated_at: 2026-04-20T20:48:12+08:00
+- note: evidence=写一个简单的python程序

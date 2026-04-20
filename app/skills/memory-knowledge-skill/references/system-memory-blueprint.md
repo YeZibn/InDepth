@@ -64,7 +64,7 @@
 
 - 结构化存储：`app/core/memory/system_memory_store.py`
 - recall 生命周期：`app/core/runtime/system_memory_lifecycle.py`
-- handoff 生成：`app/eval/verification_handoff_service.py`
+- handoff 生成：`app/core/runtime/agent_runtime.py`（由主链路 finalizing 直接产出并提取）
 - finalizing 编排：`app/core/runtime/agent_runtime.py`
 - CLI：`app/skills/memory-knowledge-skill/scripts/memory_card_cli.py`
 - 事件落库：`app/observability/store.py::SystemMemoryEventStore`

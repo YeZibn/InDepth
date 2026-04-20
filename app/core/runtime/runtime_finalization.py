@@ -56,6 +56,7 @@ def finalize_completed_run(
     last_tool_failures: List[Dict[str, str]],
     verification_handoff: Optional[Dict[str, Any]],
     handoff_source: str,
+    latest_todo_recovery: Optional[Dict[str, Any]],
     auto_manage_todo_recovery: Callable[..., None],
     append_recovery_summary_for_user: Callable[[str], str],
     has_latest_todo_recovery: Callable[[], bool],
@@ -87,8 +88,11 @@ def finalize_completed_run(
         last_tool_failures=last_tool_failures,
     )
     if has_latest_todo_recovery():
-        verification_handoff = None
-        handoff_source = "fallback_rule"
+        if not isinstance(verification_handoff, dict):
+            verification_handoff = {}
+        recovery = latest_todo_recovery if isinstance(latest_todo_recovery, dict) else {}
+        if recovery:
+            verification_handoff["recovery"] = recovery
         final_answer = append_recovery_summary_for_user(final_answer)
 
     judgement_payload: Dict[str, Any] = {}
@@ -96,7 +100,7 @@ def finalize_completed_run(
     try:
         if verification_handoff is None:
             verification_handoff = {}
-            handoff_source = handoff_source or "fallback_rule"
+            handoff_source = handoff_source or "main_final_answer"
         run_outcome = RunOutcome(
             task_id=task_id,
             run_id=run_id,
