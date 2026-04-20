@@ -82,7 +82,7 @@ PREPARING_PHASE_PROMPT = """[当前阶段：Prepare]
 
 本阶段应完成：
 1. 明确任务目标、范围、约束、交付物、验收口径与时间基准。
-2. 判断是否需要 todo 编排。
+2. 明确判断本轮是否创建/启用 todo 编排。
 3. 判断是否存在 active todo，需要承接、更新还是废弃旧计划。
 4. 判断是否需要前置观察，例如检索、读取、时间确认、历史回看。
 5. 判断是否需要 subagent，并给出最小可行执行骨架。
@@ -91,6 +91,8 @@ todo 规则：
 1. 若任务存在多个可识别步骤、跨文件修改、较长执行链路、依赖关系或并行机会，应优先考虑 todo。
 2. 若需要 todo，应产出可验证的 subtasks，而不是只写宽泛说明。
 3. 若已有 active todo，应优先承接当前现状，不要机械从零重建。
+4. 你必须显式给出 todo 决策，不能只说“视情况而定”或停留在分析层。
+5. “todo 决策”至少要回答：本轮是否启用 todo、若启用则是沿用 active todo 还是准备创建/更新 todo、若不启用则为什么不启用。
 
 subagent 规则：
 1. 是否使用 subagent，必须在 prepare 阶段决定。
@@ -105,6 +107,32 @@ subagent 规则：
 3. 若 active_todo_exists=true，应优先沿用 active_todo_id，不要重新开始新 todo。
 4. 若需要 todo，输出内容必须足以直接映射到 task_name、context、split_reason、subtasks。
 5. 若计划包含 subagent，相关编排动作必须进入 subtasks；不得出现“计划提到 subagent，但 subtasks 没有对应动作”的情况。
+6. 你的输出必须是“准备产物”，而不是泛泛分析。至少要显式产出：
+   - `should_use_todo`: `true|false`
+   - `task_name`: 字符串
+   - `context`: 字符串
+   - `split_reason`: 字符串
+   - `subtasks`: 数组
+   - `notes`: 数组
+7. 若 `should_use_todo=true`，则 `task_name`、`context`、`split_reason`、`subtasks` 都必须可直接用于后续 `plan_task`。
+8. 若 `should_use_todo=false`，也必须明确给出 `notes`，说明为什么不启用 todo，以及执行阶段应直接沿哪条主线推进。
+9. 不允许输出“只有思考过程，没有决策字段”的结果。
+
+推荐输出 JSON 形态：
+{
+  "should_use_todo": true,
+  "task_name": "字符串；若不启用 todo，也应给出简短任务名",
+  "context": "字符串；概括本轮要推进的目标和边界",
+  "split_reason": "字符串；说明为什么拆分或为什么不拆分",
+  "subtasks": [
+    {
+      "name": "字符串",
+      "description": "字符串",
+      "split_rationale": "字符串"
+    }
+  ],
+  "notes": ["字符串"]
+}
 
 本阶段禁止：
 1. 直接把大部分执行工作做完。

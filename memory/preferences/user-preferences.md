@@ -2,7 +2,7 @@
 
 meta:
 - version: 1
-- updated_at: 2026-04-20T20:55:22+08:00
+- updated_at: 2026-04-20T23:34:32+08:00
 - enabled: true
 
 ## preferences
@@ -50,8 +50,8 @@ meta:
 - note: evidence=请直接创建文件，并在完成后返回文件路径、核心功能、编译命令
 
 ### tooling_stack
-- value: [python]
+- value: [CLI, README]
 - source: llm_extract_v1
-- confidence: 0.99
-- updated_at: 2026-04-20T20:48:12+08:00
-- note: evidence=写一个简单的python程序
+- confidence: 0.93
+- updated_at: 2026-04-20T23:34:32+08:00
+- note: evidence=补充一个cli交互，同时补充一个readme
