@@ -1,6 +1,6 @@
 # InDepth 参考文档总索引
 
-更新时间：2026-04-19
+更新时间：2026-04-20
 
 `doc/refer/` 目标：把"实现事实"沉淀为可查、可维护、可验证的工程参考，而不是概念说明。
 
@@ -42,6 +42,7 @@
 - `user-preference-reference.md`：用户偏好存储、提取、写回与 recall 注入。
 - `tools-reference.md`：工具声明/注册/校验/调用链与默认工具全集。
 - `todo-reference.md`：Todo 编排、subtask 设计、依赖流转、与 SubAgent 协作边界。
+- `subtask-status-reference.md`：Subtask 状态集合、状态迁移、fallback/recovery 分工与 Runtime 上下文联动。
 - `search-guard-reference.md`：检索门禁会话模型、预算控制、自动扩容与状态诊断。
 - `skills-reference.md`：技能加载、`<skills_system>` 注入、技能访问工具与 Agent 默认差异。
 - `eval-reference.md`：任务评估模型、verifier 链路、判定标准。
@@ -56,16 +57,17 @@
 3. `prompt-reference.md`
 4. `tools-reference.md`
 5. `todo-reference.md`
-6. `search-guard-reference.md`
-7. `skills-reference.md`
-8. `memory-reference.md`
-9. `runtime-memory-reference.md`
-10. `system-memory-reference.md`
-11. `user-preference-reference.md`
-12. `eval-reference.md`
-13. `observability-reference.md`
-14. `agent-collaboration-reference.md`
-15. `config-reference.md`
+6. `subtask-status-reference.md`
+7. `search-guard-reference.md`
+8. `skills-reference.md`
+9. `memory-reference.md`
+10. `runtime-memory-reference.md`
+11. `system-memory-reference.md`
+12. `user-preference-reference.md`
+13. `eval-reference.md`
+14. `observability-reference.md`
+15. `agent-collaboration-reference.md`
+16. `config-reference.md`
 
 ## 3. 代码主映射
 
