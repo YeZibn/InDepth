@@ -1,588 +1,139 @@
 # InDepth Tools 参考
 
-更新时间：2026-04-18
+更新时间：2026-04-21
 
 ## 1. 模块范围
 
-工具体系负责将原子能力封装为 Agent 可调用的函数，是 Agent 与外部世界交互的桥梁。
+工具体系负责把原子能力封装为 Agent 可调用函数，是 Runtime 推进行为、同步 todo 上下文和沉淀执行证据的桥梁。
 
-从整体运行逻辑看，工具体系在当前实现里承担三层作用：
-1. 提供原子能力，例如读写文件、bash、todo 编排、search、memory 等
-2. 作为 Runtime 状态机的输入来源，驱动 `active_todo_context`、失败分类和恢复链路
-3. 作为观测事件的主要产出源，把执行事实写入 event stream、handoff 与 postmortem
+当前工具层主要承担三类职责：
+1. 提供原子执行能力，例如读写文件、bash、时间、todo、search、memory
+2. 作为 Runtime 状态机输入，驱动 active todo context 与 subtask 状态流转
+3. 作为 observability 事件来源，沉淀过程证据
 
-其中与整体运行节点关系最紧密的工具链路包括：
-- 普通执行工具：真正推进业务动作
-- Todo 工具：绑定 task 周期、选择 active subtask、记录失败、规划恢复
-- Memory 工具：提供 system memory 的只读检索与按需展开
+当前已经不再把 fallback/recovery 作为工具层主链。
 
-因此，工具不只是“可调用函数列表”，而是 Runtime 编排与状态推进的重要触发器。
+## 2. 工具框架分层
 
 相关代码：
-- `app/core/tools/decorator.py` - 声明层
-- `app/core/tools/registry.py` - 注册层
-- `app/core/tools/validator.py` - 校验层
-- `app/core/tools/adapters.py` - 组装层
-- `app/tool/*` - 实现层
+- `app/core/tools/decorator.py`
+- `app/core/tools/registry.py`
+- `app/core/tools/validator.py`
+- `app/core/tools/adapters.py`
+- `app/tool/*`
 
-## 2. 架构图
+调用流程：
+1. 模型返回 `tool_calls`
+2. Runtime 发出 `tool_called`
+3. `ToolRegistry.invoke(name, args)` 做查找、校验、执行
+4. Runtime 发出 `tool_succeeded` 或 `tool_failed`
+5. 结果回写为 `role="tool"` 消息
 
-### 2.1 工具框架分层
+## 3. 默认工具分类
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          工具框架分层架构                                  │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                        声明层 (@tool)                              │   │
-│  │                                                                  │   │
-│  │  @tool(                                                          │   │
-│  │      name="xxx",                                                 │   │
-│  │      description="...",                                          │   │
-│  │      parameters={...}                                            │   │
-│  │  )                                                               │   │
-│  │      def xxx(...):                                               │   │
-│  └─────────────────────────────┬───────────────────────────────────┘   │
-│                                │                                        │
-│                                ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    ToolFunction 对象                             │   │
-│  │  - name                                                          │   │
-│  │  - description                                                   │   │
-│  │  - entrypoint (实际函数)                                          │   │
-│  │  - parameters (JSON Schema)                                       │   │
-│  │  - stop_after_tool_call                                          │   │
-│  │  - requires_confirmation                                         │   │
-│  │  - cache_results                                                 │   │
-│  │  - strict                                                        │   │
-│  └─────────────────────────────┬───────────────────────────────────┘   │
-│                                │                                        │
-│                                ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    注册层 (ToolRegistry)                          │   │
-│  │                                                                  │   │
-│  │  register_tool_functions([tool_func, ...])                        │   │
-│  │         │                                                        │   │
-│  │         ▼                                                        │   │
-│  │  invoke(name, args) ──▶ ToolResult {success, result/error}       │   │
-│  │         │                                                        │   │
-│  │         ▼                                                        │   │
-│  │  list_tool_schemas() ──▶ [schema, ...]                           │   │
-│  └─────────────────────────────┬───────────────────────────────────┘   │
-│                                │                                        │
-│                                ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    校验层 (validate_args)                        │   │
-│  │                                                                  │   │
-│  │  支持:                                                           │   │
-│  │  - 基础类型: string/integer/number/boolean/object/array            │   │
-│  │  - required/minimum/maximum/enum                                 │   │
-│  │  - anyOf (object 分支)                                           │   │
-│  │  - array items                                                   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+### 3.1 基础执行
 
-### 2.2 工具调用流程
+- `bash`
+- `read_file`
+- `write_file`
+- `get_current_time`
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       工具调用完整流程                                  │
-│                                                                      │
-│  1. 模型返回 tool_calls                                              │
-│         │                                                           │
-│         ▼                                                           │
-│  ┌─────────────────┐                                                │
-│  │ emit_event      │                                                │
-│  │ (tool_called)   │                                                │
-│  └────────┬────────┘                                                │
-│           │                                                         │
-│           ▼                                                         │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  ToolRegistry.invoke(name, args)                              │    │
-│  │                                                              │    │
-│  │  Step 1: 查找工具                                             │    │
-│  │     └── 未找到 ──▶ return {success: false, error: "Unknown"} │    │
-│  │                                                              │    │
-│  │  Step 2: 参数校验 validate_args(schema, args)               │    │
-│  │     └── 失败 ──▶ return {success: false, error: "validation"}│    │
-│  │                                                              │    │
-│  │  Step 3: 执行 handler(args)                                   │    │
-│  │     ├── 正常 ──▶ 继续                                        │    │
-│  │     └── 异常 ──▶ return {success: false, error: <exception>}│    │
-│  │                                                              │    │
-│  │  Step 4: 结果判定                                            │    │
-│  │     ├── "Error:" 开头 ──▶ 视为失败                           │    │
-│  │     ├── JSON {success:false} ──▶ 视为失败                    │    │
-│  │     └── 其他 ──▶ return {success: true, result: <output>}    │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│           │                                                         │
-│           ▼                                                         │
-│  ┌─────────────────┐                                                │
-│  │ emit_event      │                                                │
-│  │ (tool_succeeded │                                                │
-│  │  or tool_failed)│                                                │
-│  └────────┬────────┘                                                │
-│           │                                                         │
-│           ▼                                                         │
-│  回写 messages:                                                     │
-│  - role="tool"                                                      │
-│  - content=json.dumps(result)                                       │
-└─────────────────────────────────────────────────────────────────────┘
-```
+### 3.2 Search Guard
 
-### 2.3 默认工具生态
+- `init_search_guard`
+- `guarded_ddg_search`
+- `update_search_progress`
+- `build_search_conclusion`
+- `get_search_guard_status`
+- `request_search_budget_override`
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      默认工具生态 (build_default_registry)               │
-│                                                                         │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌────────────┐ │
-│  │   Bash Tool   │  │    Time      │  │   Read File  │  │Write File │ │
-│  │               │  │   Tool       │  │    Tool      │  │   Tool    │ │
-│  │ execute bash  │  │get_current_  │  │  read_file   │  │write_file │ │
-│  │ commands      │  │time          │  │              │  │            │ │
-│  └───────────────┘  └───────────────┘  └───────────────┘  └────────────┘ │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                      Search Guard 工具组                         │   │
-│  │                                                                  │   │
-│  │  init_search_guard ──▶ guarded_ddg_search ──▶ update_search_    │   │
-│  │       │                                    progress              │   │
-│  │       │                                        │                │   │
-│  │       ▼                                        ▼                │   │
-│  │  get_search_guard_status          build_search_conclusion       │   │
-│  │                                                                  │   │
-│  │  request_search_budget_override                                   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                      SubAgent 工具组                              │   │
-│  │                                                                  │   │
-│  │  create_sub_agent ──▶ run_sub_agent / run_sub_agents_parallel    │   │
-│  │       │                                      │                  │   │
-│  │       ▼                                      ▼                  │   │
-│  │  list_sub_agents ──▶ get_sub_agent_info ──▶ destroy_sub_agent  │   │
-│  │                                                                  │   │
-│  │  destroy_all_sub_agents                                          │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                       Todo 工具组                                 │   │
-│  │                                                                  │   │
-│  │  prepare phase ──▶ plan_task                                      │   │
-│  │       │                │                                          │   │
-│  │       │                ├──▶ update_task_status                    │   │
-│  │       │                └──▶ reopen_subtask / update_subtask       │   │
-│  │       ▼                                                          │   │
-│  │   ([Prepare] CLI summary)                                         │   │
-│  │  list_tasks ──▶ get_next_task                                     │   │
-│  │       │                     │                                    │   │
-│  │       ▼                     ▼                                    │   │
-│  │  get_task_progress ──▶ generate_task_report                      │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                      Memory 工具组                                │   │
-│  │                                                                  │   │
-│  │  search_memory_cards                                             │   │
-│  │  get_memory_card_by_id                                           │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+### 3.3 SubAgent
 
-## 3. 声明层详解
+- `create_sub_agent`
+- `run_sub_agent`
+- `run_sub_agents_parallel`
+- `list_sub_agents`
+- `get_sub_agent_info`
+- `destroy_sub_agent`
+- `destroy_all_sub_agents`
 
-### 3.1 @tool 装饰器
+### 3.4 Todo
 
-`ToolFunction` 是工具的核心元数据结构：
+当前公开的 todo 工具为：
+- `prepare_task`
+- `plan_task`
+- `update_task_status`
+- `reopen_subtask`
+- `update_subtask`
+- `append_followup_subtasks`
+- `list_tasks`
+- `get_next_task`
+- `get_task_progress`
+- `generate_task_report`
 
-```python
-@dataclass
-class ToolFunction:
-    name: str                           # 工具唯一标识
-    description: str                     # 工具描述（用于模型理解）
-    entrypoint: Callable[..., Any]       # 实际执行的函数
-    parameters: Optional[Dict[str, Any]] # JSON Schema 参数定义
-    stop_after_tool_call: bool = False   # 执行后是否停止
-    requires_confirmation: bool = False  # 是否需要确认
-    cache_results: bool = False          # 是否缓存结果
-    strict: bool = False                 # 严格模式
-```
+### 3.5 Memory
 
-### 3.2 参数 Schema 示例
+- `search_memory_cards`
+- `get_memory_card_by_id`
 
-```python
-@tool(name="read_file", description="读取文件内容")
-def read_file(
-    file_path: str,
-    limit: Optional[int] = None,
-    offset: Optional[int] = None,
-) -> str:
-    """读取文件内容，支持分页"""
-    with open(file_path, "r") as f:
-        if offset:
-            f.seek(offset)
-        if limit:
-            return f.read(limit)
-        return f.read()
-```
+## 4. Todo 工具的当前职责
 
-自动生成的 parameters schema：
-```json
-{
-  "type": "object",
-  "properties": {
-    "file_path": {"type": "string"},
-    "limit": {"type": "integer"},
-    "offset": {"type": "integer"}
-  },
-  "required": ["file_path"]
-}
-```
+### 4.1 `prepare_task`
 
-## 4. 注册层详解
+规则回退型 prepare 工具，用于：
+1. 形成最小可执行计划
+2. 判断是否应启用 todo
+3. 在 active todo 存在时补充现状摘要
 
-### 4.1 ToolRegistry
+### 4.2 `plan_task`
 
-```python
-class ToolRegistry:
-    def __init__(self):
-        self._tools: Dict[str, ToolFunction] = {}
+当前唯一的对外 todo 落盘入口：
+1. 校验结构化计划
+2. 根据 `active_todo_id` 决定 create/update
+3. 内部调用 `_create_todo_from_plan(...)` 或 `_update_todo_from_plan(...)`
 
-    def register(self, tool_functions: List[ToolFunction]) -> None:
-        """批量注册工具"""
+### 4.3 `update_task_status`
 
-    def invoke(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """执行工具并返回标准化结果"""
+标准状态迁移入口，负责：
+- `pending -> in-progress`
+- `in-progress -> completed`
+- 显式写成 `blocked/failed/partial/awaiting_input/timed_out/abandoned`
 
-    def list_tool_schemas(self) -> List[Dict[str, Any]]:
-        """列出所有工具的 JSON Schema（用于模型调用）"""
-```
+### 4.4 `update_subtask`
 
-### 4.2 invoke 结果约定
+补丁式字段更新入口，适合：
+- 更新 `description`
+- 更新 `owner`
+- 更新 `acceptance_criteria`
+- 调整依赖或优先级
 
-| 条件 | 返回 |
-|------|------|
-| 工具未注册 | `{success: false, error: "Unknown tool"}` |
-| 参数校验失败 | `{success: false, error: "Tool args validation failed", details: [...]}` |
-| handler 抛异常 | `{success: false, error: <exception>}` |
-| 返回 "Error:" 开头 | `{success: false, error: <内容>}` |
-| 返回 JSON 字符串 `{success:false}` | `{success: false, error: <内容>}` |
-| 返回 dict `{success:false}` | `{success: false, error: <内容>}` |
-| 正常返回 | `{success: true, result: <output>}` |
+### 4.5 `reopen_subtask`
 
-## 5. 校验层详解
+把已有 subtask 重新拉回执行主线，并将其置为 `in-progress`。
 
-### 5.1 支持的校验规则
+### 4.6 `append_followup_subtasks`
 
-| 规则 | 说明 | 示例 |
-|------|------|------|
-| `type` | 基础类型 | `string/integer/number/boolean/object/array` |
-| `required` | 必填字段 | `["name", "path"]` |
-| `minimum` | 数值最小值 | `{"minimum": 0}` |
-| `maximum` | 数值最大值 | `{"maximum": 100}` |
-| `enum` | 枚举值 | `{"enum": ["a", "b", "c"]}` |
-| `anyOf` | 联合类型 | 分支 object schema |
+向现有 todo 追加后续 subtasks。
 
-### 5.2 校验失败返回
+它仍然可用于正常后续编排。
 
-```json
-{
-  "success": false,
-  "error": "Tool args validation failed",
-  "details": [
-    {"field": "path", "message": "required field missing"},
-    {"field": "limit", "message": "must be >= 0"}
-  ]
-}
-```
-
-## 6. 默认工具详解
-
-### 6.1 Bash Tool
-
-```python
-@tool(name="bash", description="执行 Bash 命令")
-def bash(command: str, cwd: Optional[str] = None, timeout: int = 60) -> str:
-    """在指定目录执行命令，返回输出"""
-```
-
-**特性**：
-- 支持自定义工作目录
-- 支持超时控制
-- 返回 stdout/stderr 合并结果
-
-### 6.2 File Tools
-
-```python
-@tool(name="read_file", description="读取文件内容")
-def read_file(
-    file_path: str,
-    limit: Optional[int] = None,
-    offset: Optional[int] = None,
-) -> str
-
-@tool(name="write_file", description="写入文件内容，支持覆盖或追加")
-def write_file(
-    file_path: str,
-    content: str,
-    overwrite: bool = False,
-    append: bool = False,
-) -> str
-```
-
-### 6.3 Search Guard 工具组
-
-Search Guard 是检索类任务的门禁系统，确保时效性信息检索的质量：
-
-```python
-# 初始化门禁
-init_search_guard(
-    time_basis: str,          # 时间基准: "UTC+8, 2024-12-25 23:59"
-    questions_json: str,       # 待回答的核心问题 (3-5个)
-    stop_threshold: str,       # 停止阈值定义
-    max_rounds: int = 3,       # 最大检索轮次
-    max_seconds: int = 600     # 最大检索时间
-)
-
-# 执行检索 (需先 init)
-guarded_ddg_search(query: str, num_results: int = 10) -> List[Dict]
-
-# 更新进度
-update_search_progress(round: int, found: int, coverage: str)
-
-# 获取状态
-get_search_guard_status() -> Dict
-
-# 请求追加预算
-request_search_budget_override(reason: str, additional_rounds: int) -> Dict
-
-# 生成结论
-build_search_conclusion(conclusions: List[Dict], gaps: List[str]) -> Dict
-```
-
-**门禁流程**：
-```
-init_search_guard() ──▶ 检查门禁状态
-         │
-         ▼
-guarded_ddg_search() ──▶ 检查预算
-         │
-         ├─── 预算耗尽 ──▶ 返回阻断错误
-         │
-         ▼
-update_search_progress() ──▶ 检查停止阈值
-         │
-         ├─── 满足阈值 ──▶ 可提前停止
-         │
-         ▼
-build_search_conclusion() ──▶ 生成结构化结论
-```
-
-### 6.4 SubAgent 工具组
-
-详见 [agent-collaboration-reference.md](agent-collaboration-reference.md)
-
-### 6.5 Todo 工具组
-
-```python
-# Todo 主入口
-plan_task(
-    task_name: str,
-    context: str,
-    split_reason: str,  # 顶层拆分理由，必填
-    subtasks: List[Dict[str, Any]]  # [{name, description, split_rationale?, dependencies?, acceptance_criteria?, priority?}] 必填
-) -> Dict
-
-# 更新状态
-update_task_status(
-    todo_id: str,
-    subtask_number: int,
-    status: str  # pending/in-progress/completed/blocked/failed/partial/awaiting_input/timed_out/abandoned
-) -> Dict
-
-# 细粒度更新 subtask
-update_subtask(
-    todo_id: str,
-    fields_to_update: Dict[str, Any],
-    subtask_id: str = "",
-    subtask_number: int = 0,
-    update_reason: str = "",
-) -> Dict
-
-# 显式重开 subtask
-reopen_subtask(
-    todo_id: str,
-    subtask_id: str = "",
-    subtask_number: int = 0,
-    reason: str = "",
-) -> Dict
-
-# 记录失败/未完成信息
-record_task_fallback(
-    todo_id: str,
-    subtask_number: int,
-    state: str,
-    reason_code: str,
-    failure_state: str = "",
-    reason_detail: str = "",
-    impact_scope: str = "",
-    retryable: bool = True,
-    required_input: Optional[List[str]] = None,
-    suggested_next_action: str = "",
-    evidence: Optional[List[str]] = None,
-    owner: str = "",
-    retry_count: int = 0,
-    retry_budget_remaining: int = 2,
-    failure_facts: Optional[Dict[str, Any]] = None,
-    failure_interpretation: Optional[Dict[str, Any]] = None,
-    retry_guidance: Optional[List[str]] = None,
-) -> Dict
-
-# 规划恢复动作
-plan_task_recovery(
-    todo_id: str,
-    subtask_number: int,
-    retry_budget_remaining: int = 2,
-    time_budget_remaining: str = "",
-    available_roles: Optional[List[str]] = None,
-    allowed_degraded_delivery: bool = False,
-    is_on_critical_path: bool = False,
-) -> Dict
-
-# 追加恢复子任务
-append_followup_subtasks(
-    todo_id: str,
-    follow_up_subtasks: List[Dict[str, Any]],
-) -> Dict
-
-# 查询任务
-list_tasks() -> List[Dict]
-get_next_task(todo_id: str) -> Dict
-get_task_progress(todo_id: str) -> Dict
-
-# 生成报告
-generate_task_report(todo_id: str) -> str
-```
-
-**文件结构**：`todo/<timestamp>_<sanitized_name>.md`
-**标识规范**：
-- Todo 领域统一使用 `todo_id`
-- Subtask 领域统一使用 `subtask_id` 作为稳定内部锚点，`subtask_number` 保留为展示与兼容层
-- `plan_task` 是唯一对外 todo 落盘入口；create/update 由其内部决定
-- `list_tasks` 返回项包含 `todo_id`
-
-**状态机**：
-```
-pending ──▶ in-progress ──▶ completed
-    │            ├──▶ blocked
-    │            ├──▶ failed
-    │            ├──▶ partial
-    │            ├──▶ awaiting_input
-    │            ├──▶ timed_out
-    └────────────┴──▶ abandoned
-```
-
-**恢复链路**：
-```
-record_task_fallback()
-    ├──▶ 持久化 fallback_record（不直接覆盖 subtask status）
-    ├──▶ 单次 LLM recovery assessment
-    │       └──▶ 产出 failure_interpretation / retry_guidance / recovery_decision
-    ├──▶ update_task_status()
-    │       └──▶ 基于 failure_state/reason_code 单独更新 subtask 状态
-    ├──▶ plan_task_recovery()
-    │       └──▶ 在 guardrails 内稳定产出 can_resume_in_place / needs_derived_recovery_subtask
-    └──▶ append_followup_subtasks()
-            └──▶ 仅在需要派生 recovery subtask 时才自动追加
-```
-
-**运行时接入**：
-1. Runtime 会跟踪当前活跃的 todo 执行上下文，包括 `todo_id/active_subtask_id/active_subtask_number/execution_phase/binding_required/binding_state/todo_bound_at`
-2. Runtime 会在首轮模型请求前先执行 prepare phase
-3. prepare 若产出成熟计划，Runtime 会自动调用 `plan_task`
-4. `plan_task` 内部根据 active todo 情况决定 create/update
-5. prepare 完成后，CLI 会打印 `[Prepare]` 摘要，展示任务目标、todo 决策、顶层拆分理由和完整子任务清单
-6. planning 类工具存在 prepare guard；若 prepare 未完成，`plan_task` 会被直接拒绝
-7. 当运行进入 `failed` 或 `awaiting_user_input` 等未完成出口时，Runtime 会自动：
-   - 调 `record_task_fallback`
-   - 调单次 `LLM recovery assessment`
-   - 调 `update_task_status`
-   - 调 `plan_task_recovery`
-   - 仅对 `needs_derived_recovery_subtask=true` 且 `decision_level=auto` 的恢复决策追加 follow-up subtasks
-8. 若 todo 已创建但普通工具调用还未绑定 active subtask，Runtime 会发出 `todo_binding_missing_warning`
-9. 若 todo 已创建但失败发生时没有 active subtask，Runtime 会进入 `orphan failure`，输出最小恢复摘要而不是静默跳过
-10. 恢复信息会进一步进入：
-   - `verification_handoff.recovery`
-   - `task_judged.payload.verification_handoff`
-   - postmortem “交付内容”区块
-   - 最终用户回复中的简短恢复摘要
-
-### 6.6 Memory 工具组
-
-当前默认 Runtime 工具集中的 memory 工具是只读的：
-
-```python
-search_memory_cards(
-    query: str = "",
-    stage: str = "",
-    limit: int = 5,
-    include_inactive: bool = False,
-) -> Dict
-
-get_memory_card_by_id(
-    memory_id: str,
-    include_inactive: bool = False,
-    task_id: str = "",
-    run_id: str = "",
-) -> Dict
-```
-
-说明：
-
-1. `search_memory_cards`
-   - 用于按关键词检索 system memory card
-   - 当前底层检索匹配 `title + recall_hint + content`
-   - `stage` 参数仅为兼容保留，当前检索本身不按 stage 分桶
-   - 注意：这是手动关键词检索工具，不等于 Runtime run-start 的默认向量召回主链路
-2. `get_memory_card_by_id`
-   - 用于在 recall 命中后按 id 拉取完整卡片
-   - 当带上 `task_id/run_id` 时，会补记 `memory_retrieved` 观测事件
-3. `capture_runtime_memory_candidate`
-   - 仍然存在于独立工具文件与测试中
-   - 但已不属于默认主 Runtime registry，不再是推荐的正式沉淀路径
-
-## 7. 角色工具隔离
-
-SubAgent 按角色挂载不同工具集：
-
-| 角色 | 可用工具 |
-|------|---------|
-| `researcher` | 时间、读文件、记忆检索、search guard |
-| `builder` | bash、时间、读写文件 |
-| `reviewer` | 时间、读文件、记忆检索 |
-| `verifier` | bash、时间、读文件、记忆检索 |
-| `general` | bash、search guard、读写文件、时间 |
-
-## 8. 工具相关事件
-
-| 事件 | 说明 | 载荷 |
-|------|------|------|
-| `tool_called` | 工具被调用 | name, arguments |
-| `tool_succeeded` | 工具成功 | name, result |
-| `tool_failed` | 工具失败 | name, error |
-| `search_guard_initialized` | 检索门禁初始化 | config |
-| `search_round_started` | 检索轮次开始 | round |
-| `search_round_finished` | 检索轮次结束 | round, found |
-| `search_stopped` | 检索停止 | reason |
-
-## 9. 测试映射
-
-| 测试文件 | 覆盖内容 |
-|---------|---------|
-| `tests/test_main_agent.py` | 主 Agent 工具注册 |
-| `tests/test_sub_agent_role_tools.py` | 角色工具隔离 |
-| `tests/test_sub_agent_tool.py` | reviewer/verifier 创建门禁 |
-| `tests/test_runtime_todo_recovery_integration.py` | Runtime Todo 恢复链路与 orphan failure |
-| `tests/test_todo_recovery_flow.py` | Todo 恢复状态机、fallback 与 follow-up subtasks |
+## 5. Runtime 与工具的关系
+
+当前 Runtime 会把以下工具视为 todo 绑定相关工具：
+- `plan_task`
+- `update_task_status`
+- `update_subtask`
+- `reopen_subtask`
+- `append_followup_subtasks`
+- `get_next_task`
+- `get_task_progress`
+- `generate_task_report`
+
+当 todo 已经建立、但普通执行工具调用尚未绑定 active subtask 时，Runtime 会发出 `todo_binding_missing_warning`。
+
+## 6. 相关代码
+
+- `app/core/tools/*`
+- `app/tool/todo_tool/todo_tool.py`
+- `app/core/runtime/agent_runtime.py`
+- `app/core/runtime/todo_runtime_lifecycle.py`

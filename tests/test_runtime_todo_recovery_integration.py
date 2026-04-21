@@ -135,50 +135,6 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         )
         self.assertLess(finalizing_index, skipped_index)
 
-    def test_runtime_disables_llm_recovery_planner_by_default_for_mock_provider(self):
-        provider = MockModelProvider(scripted_outputs=[])
-        runtime = AgentRuntime(model_provider=provider, tool_registry=ToolRegistry())
-        self.assertFalse(runtime.enable_llm_recovery_planner)
-
-    def test_update_active_todo_context_preserves_retry_guidance_across_reopen(self):
-        ctx = update_active_todo_context(
-            current_context={},
-            executions=[
-                {
-                    "tool": "record_task_fallback",
-                    "args": {
-                        "todo_id": "todo_1",
-                        "subtask_number": 1,
-                        "retry_guidance": ["Generate one section at a time."],
-                    },
-                    "success": True,
-                    "payload": {"subtask_id": "st_1", "fallback_record": {"retry_guidance": ["Generate one section at a time."]}},
-                },
-                {
-                    "tool": "reopen_subtask",
-                    "args": {"todo_id": "todo_1", "subtask_number": 1},
-                    "success": True,
-                    "payload": {"todo_id": "todo_1", "subtask_id": "st_1", "subtask_number": 1},
-                },
-            ],
-        )
-        self.assertEqual(ctx.get("active_retry_guidance"), ["Generate one section at a time."])
-        self.assertEqual(ctx.get("execution_phase"), "executing")
-
-    def test_system_prompt_includes_retry_guidance_for_active_subtask(self):
-        runtime = AgentRuntime(model_provider=MockModelProvider(scripted_outputs=[]), tool_registry=ToolRegistry())
-        runtime._active_todo_context = {
-            "todo_id": "todo_1",
-            "active_subtask_number": 2,
-            "active_retry_guidance": ["Generate one section at a time.", "Write each section before continuing."],
-        }
-        prompt = runtime._build_system_prompt()
-        self.assertIn("Retry Guidance:", prompt)
-        self.assertIn("Active todo: todo_1", prompt)
-        self.assertIn("Active subtask: 2", prompt)
-        self.assertIn("Generate one section at a time.", prompt)
-        self.assertIn("Write each section before continuing.", prompt)
-
     def test_runtime_injects_prepare_phase_message_before_first_model_request(self):
         provider = MockModelProvider(
             scripted_outputs=[
@@ -204,7 +160,7 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         )
 
         first_request = provider.requests[0]
-        self.assertIn("You are currently in executing phase.", first_request["messages"][0]["content"])
+        self.assertIn("[当前阶段：Execute]", first_request["messages"][0]["content"])
         rendered_messages = "\n".join(str(msg.get("content", "")) for msg in first_request["messages"])
         self.assertIn("[Prepare Phase]", rendered_messages)
         self.assertIn("should_use_todo=True", rendered_messages)
@@ -279,7 +235,6 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                         "binding_required": True,
                         "binding_state": "bound",
                         "todo_bound_at": "",
-                        "active_retry_guidance": [],
                     },
                 ),
             ):
@@ -334,7 +289,6 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                         "binding_required": True,
                         "binding_state": "bound",
                         "todo_bound_at": "",
-                        "active_retry_guidance": [],
                     },
                 ),
             ):
@@ -387,7 +341,6 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                         "binding_required": True,
                         "binding_state": "bound",
                         "todo_bound_at": "",
-                        "active_retry_guidance": [],
                     },
                 ),
             ):
@@ -454,8 +407,8 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(len(provider.requests), 2)
         prepare_request = provider.requests[0]
         self.assertEqual(prepare_request["tools"], [])
-        self.assertIn("Runtime 的前置 Todo 规划器", prepare_request["messages"][0]["content"])
-        self.assertIn("name、description、split_rationale", prepare_request["messages"][0]["content"])
+        self.assertIn("[当前阶段：Prepare]", prepare_request["messages"][0]["content"])
+        self.assertIn("推荐输出 JSON 形态", prepare_request["messages"][0]["content"])
         self.assertTrue(runtime._prepare_phase_completed)
         self.assertEqual(runtime._prepare_phase_result.get("planner_source"), "llm")
         self.assertEqual(runtime._prepare_phase_result["subtasks"][0]["split_rationale"], "Need tracked work.")
@@ -485,7 +438,7 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
         )
 
         first_request = provider.requests[0]
-        self.assertIn("You are currently in executing phase.", first_request["messages"][0]["content"])
+        self.assertIn("[当前阶段：Execute]", first_request["messages"][0]["content"])
 
     def test_runtime_llm_prepare_receives_active_todo_full_text(self):
         provider = MockModelProvider(
@@ -527,7 +480,6 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                         "binding_required": True,
                         "binding_state": "bound",
                         "todo_bound_at": "",
-                        "active_retry_guidance": [],
                     },
                 ),
             ):
@@ -625,7 +577,6 @@ class RuntimeTodoRecoveryIntegrationTests(unittest.TestCase):
                         "binding_required": True,
                         "binding_state": "bound",
                         "todo_bound_at": "",
-                        "active_retry_guidance": [],
                     },
                 ),
             ):

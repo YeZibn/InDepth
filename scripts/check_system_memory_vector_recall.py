@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -57,6 +58,36 @@ def main() -> int:
         print(f"[Error] Milvus query failed: {exc}")
         return 5
     print(f"[OK] Milvus reachable. hits={len(hits)}")
+
+    probe_id = f"system_memory_probe_{uuid.uuid4().hex[:12]}"
+    print("[Check] Writing probe vector to Milvus...")
+    try:
+        vector_index.upsert_memory_vector(
+            memory_id=probe_id,
+            vector_text=query,
+            embedding=embedding,
+            model=cfg.embedding_model_id,
+        )
+    except Exception as exc:
+        print(f"[Error] Milvus upsert failed: {exc}")
+        return 6
+
+    print("[Check] Reading probe vector back from Milvus...")
+    try:
+        probe_hits = vector_index.search_memory_vectors(query_embedding=embedding, top_k=10)
+    except Exception as exc:
+        print(f"[Error] Milvus probe query failed: {exc}")
+        return 7
+    finally:
+        try:
+            vector_index.delete_memory_vector(probe_id)
+        except Exception:
+            pass
+
+    if not any(hit.memory_id == probe_id for hit in probe_hits):
+        print("[Error] Probe vector was written but could not be read back.")
+        return 8
+    print("[OK] Milvus upsert + read-back succeeded.")
     print("\nSystem memory vector recall dependencies look ready.")
     return 0
 

@@ -52,8 +52,6 @@ from app.core.runtime.runtime_finalization import (
     finalize_paused_run,
 )
 from app.core.runtime.todo_runtime_lifecycle import (
-    append_recovery_summary_for_user,
-    auto_manage_todo_recovery,
     finalize_active_todo_context,
     maybe_emit_todo_binding_warning,
     restore_active_todo_context_from_history,
@@ -199,15 +197,14 @@ FINALIZING_PHASE_PROMPT = """[当前阶段：Finalize]
 8. `key_tool_results` 只保留关键工具结果摘要，不要机械罗列所有调用。
 9. `known_gaps` 写当前明确知道但未解决、未验证或未覆盖的缺口；只要证据不足，就必须写。
 10. `risks` 写任务结束后仍可能暴露的问题或不确定性。
-11. `recovery` 用于 todo/subtask 恢复信息；若没有恢复上下文，可输出空对象 `{}`。
-12. `memory_seed` 必须始终存在：
+11. `memory_seed` 必须始终存在：
    - `title`：这次经验的标题
    - `recall_hint`：未来什么场景应召回
    - `content`：可复用的结果摘要或经验
-13. `self_confidence` 表示你对 handoff 完整度与真实性的自评分，不等于任务成功率。
-14. `soft_score_threshold` 表示 verifier 的软评分参考阈值。
-15. `rubric` 表示 verifier 应优先按什么标准来判断这次任务。
-16. 如果你把 `final_status` 写成 `pass`，通常应给出足够的 `claimed_done_items`，并尽量提供 `key_evidence`；若仍有明显未验证部分，必须写入 `known_gaps`。
+12. `self_confidence` 表示你对 handoff 完整度与真实性的自评分，不等于任务成功率。
+13. `soft_score_threshold` 表示 verifier 的软评分参考阈值。
+14. `rubric` 表示 verifier 应优先按什么标准来判断这次任务。
+15. 如果你把 `final_status` 写成 `pass`，通常应给出足够的 `claimed_done_items`，并尽量提供 `key_evidence`；若仍有明显未验证部分，必须写入 `known_gaps`。
 
 `[Structured Handoff]` JSON schema:
 {
@@ -240,13 +237,6 @@ FINALIZING_PHASE_PROMPT = """[当前阶段：Finalize]
   ],
   "known_gaps": ["string"],
   "risks": ["string"],
-  "recovery": {
-    "todo_id": "string",
-    "subtask_id": "string",
-    "subtask_number": 0,
-    "fallback_record": {},
-    "recovery_decision": {}
-  },
   "memory_seed": {
     "title": "string",
     "recall_hint": "string",
@@ -278,9 +268,7 @@ class AgentRuntime:
         "generate_task_report",
         "update_task_status",
         "update_subtask",
-        "record_task_fallback",
         "reopen_subtask",
-        "plan_task_recovery",
         "append_followup_subtasks",
     }
 
@@ -300,7 +288,6 @@ class AgentRuntime:
         enable_memory_recall_reranker: Optional[bool] = None,
         enable_memory_card_metadata_llm: Optional[bool] = None,
         enable_verification_handoff_llm: Optional[bool] = None,
-        enable_llm_recovery_planner: Optional[bool] = None,
         enable_llm_clarification_judge: Optional[bool] = None,
         enable_llm_todo_planner: Optional[bool] = None,
         clarification_judge_confidence_threshold: float = 0.60,
@@ -360,11 +347,6 @@ class AgentRuntime:
             self.enable_verification_handoff_llm = self.model_provider.__class__.__name__ != "MockModelProvider"
         else:
             self.enable_verification_handoff_llm = bool(enable_verification_handoff_llm)
-        if enable_llm_recovery_planner is None:
-            # Default on for real providers, off for deterministic test mock provider.
-            self.enable_llm_recovery_planner = self.model_provider.__class__.__name__ != "MockModelProvider"
-        else:
-            self.enable_llm_recovery_planner = bool(enable_llm_recovery_planner)
         if enable_llm_clarification_judge is None:
             # Default on for real providers, off for deterministic test mock provider.
             self.enable_llm_clarification_judge = self.model_provider.__class__.__name__ != "MockModelProvider"
@@ -382,7 +364,6 @@ class AgentRuntime:
         self.last_run_id = ""
         self.last_task_id = ""
         self._active_todo_context: Dict[str, Any] = {}
-        self._latest_todo_recovery: Dict[str, Any] = {}
         self._prepare_phase_completed = False
         self._prepare_phase_result: Dict[str, Any] = {}
         self._runtime_phase = "preparing"
@@ -531,7 +512,6 @@ class AgentRuntime:
             "active_subtask_number": int(args.get("active_subtask_number") or 0),
             "execution_phase": str(args.get("execution_phase", "") or "planning").strip() or "planning",
             "resume_from_waiting": bool(args.get("resume_from_waiting")),
-            "latest_recovery": args.get("latest_recovery", {}) if isinstance(args.get("latest_recovery"), dict) else {},
         }
         emit_event(
             task_id=task_id,
@@ -637,7 +617,6 @@ class AgentRuntime:
             "execution_phase": execution_phase,
             "current_state_scan": current_state_scan,
             "resume_from_waiting": bool(resume_from_waiting),
-            "latest_recovery": self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {},
             "execution_intent": "runtime_preflight",
         }
         if not self.enable_llm_todo_planner:
@@ -999,7 +978,6 @@ class AgentRuntime:
         self._runtime_phase = ""
         self._set_runtime_phase("preparing", task_id=task_id, run_id=run_id)
         self._active_todo_context = {}
-        self._latest_todo_recovery = {}
         self._prepare_phase_completed = False
         self._prepare_phase_result = {}
         history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
@@ -1391,7 +1369,6 @@ class AgentRuntime:
         final_status: str,
         known_gaps: List[str],
     ) -> Dict[str, Any]:
-        recovery = self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {}
         answer_text = str(final_answer or fallback_answer or "").strip()
         return {
             "goal": self._preview(self.last_user_input if hasattr(self, "last_user_input") else "", 280),
@@ -1404,7 +1381,6 @@ class AgentRuntime:
             "key_tool_results": [],
             "known_gaps": [self._preview(item, 120) for item in known_gaps if str(item).strip()],
             "risks": [],
-            "recovery": recovery,
             "memory_seed": {
                 "title": self._preview(self.last_user_input if hasattr(self, "last_user_input") else "任务经验摘要", 120)
                 or "任务经验摘要",
@@ -1456,9 +1432,6 @@ class AgentRuntime:
         key_tool_results = candidate.get("key_tool_results", [])
         if isinstance(key_tool_results, list):
             out["key_tool_results"] = [item for item in key_tool_results if isinstance(item, dict)]
-        recovery = candidate.get("recovery", {})
-        if isinstance(recovery, dict):
-            out["recovery"] = recovery
         memory_seed = candidate.get("memory_seed", {})
         if isinstance(memory_seed, dict):
             title = self._preview(str(memory_seed.get("title", "") or "").strip(), 120)
@@ -1506,7 +1479,6 @@ class AgentRuntime:
             "stop_reason": stop_reason,
             "runtime_status": runtime_status,
             "tool_failures": tool_failures[:10] if isinstance(tool_failures, list) else [],
-            "latest_recovery": self._latest_todo_recovery if isinstance(self._latest_todo_recovery, dict) else {},
         }
         final_messages.append(
             {
@@ -1554,9 +1526,6 @@ class AgentRuntime:
                 stop_reason=stop_reason,
                 final_answer=final_answer,
                 last_tool_failures=last_tool_failures,
-                auto_manage_todo_recovery=self._auto_manage_todo_recovery,
-                append_recovery_summary_for_user=self._append_recovery_summary_for_user,
-                has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
                 preview=self._preview,
                 emit_event=emit_event,
             )
@@ -1597,10 +1566,6 @@ class AgentRuntime:
             last_tool_failures=last_tool_failures,
             verification_handoff=verification_handoff,
             handoff_source=handoff_source,
-            latest_todo_recovery=self._latest_todo_recovery,
-            auto_manage_todo_recovery=self._auto_manage_todo_recovery,
-            append_recovery_summary_for_user=self._append_recovery_summary_for_user,
-            has_latest_todo_recovery=lambda: bool(self._latest_todo_recovery),
             eval_orchestrator=self.eval_orchestrator,
             emit_event=emit_event,
         )
@@ -1785,9 +1750,6 @@ class AgentRuntime:
         phase_prompt = PHASE_OVERLAY_PROMPTS.get(self._runtime_phase, "")
         if phase_prompt:
             parts.append(phase_prompt)
-        retry_guidance = self._build_retry_guidance_prompt()
-        if retry_guidance:
-            parts.append(retry_guidance)
         return "\n\n".join(parts)
 
     def _refresh_first_system_prompt_preserving_dynamic_context(
@@ -1808,28 +1770,6 @@ class AgentRuntime:
                 return f"{new_base}\n\n{suffix}".strip()
             return new_base
         return current_text
-
-    def _build_retry_guidance_prompt(self) -> str:
-        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
-        todo_id = str(ctx.get("todo_id", "") or "").strip()
-        subtask_number = ctx.get("active_subtask_number")
-        guidance = ctx.get("active_retry_guidance", [])
-        if isinstance(guidance, str):
-            guidance = [guidance]
-        if not todo_id or subtask_number in (None, "") or not isinstance(guidance, list):
-            return ""
-        guidance_items = [str(item).strip() for item in guidance if str(item).strip()]
-        if not guidance_items:
-            return ""
-        lines = [
-            "Retry Guidance:",
-            f"- Active todo: {todo_id}",
-            f"- Active subtask: {subtask_number}",
-            "- The current attempt is a retry/resume path. Follow these constraints when executing:",
-        ]
-        lines.extend([f"- {item}" for item in guidance_items])
-        lines.append("- Do not repeat the previous failed execution pattern if these constraints conflict with it.")
-        return "\n".join(lines)
 
     def _handle_native_tool_calls(
         self,
@@ -1922,36 +1862,6 @@ class AgentRuntime:
                 )
         return {"failures": failures, "executions": executions}
 
-    def _auto_manage_todo_recovery(
-        self,
-        task_id: str,
-        run_id: str,
-        runtime_state: str,
-        stop_reason: str,
-        final_answer: str,
-        last_tool_failures: List[Dict[str, str]],
-    ) -> None:
-        self._latest_todo_recovery = auto_manage_todo_recovery(
-            task_id=task_id,
-            run_id=run_id,
-            runtime_state=runtime_state,
-            stop_reason=stop_reason,
-            final_answer=final_answer,
-            last_tool_failures=last_tool_failures,
-            todo_context=self._active_todo_context,
-            tool_registry=self.tool_registry,
-            preview=self._preview,
-            extract_missing_info_hints=self._extract_missing_info_hints,
-            emit_event=emit_event,
-            model_provider=self.model_provider,
-            enable_llm_recovery_planner=self.enable_llm_recovery_planner,
-            build_recovery_planner_config=self._build_recovery_planner_config,
-            parse_json_dict=self._parse_json_dict,
-        )
-
-    def _append_recovery_summary_for_user(self, answer: str) -> str:
-        return append_recovery_summary_for_user(answer=answer, recovery=self._latest_todo_recovery)
-
     def _enrich_runtime_tool_args(
         self,
         tool_name: str,
@@ -2005,21 +1915,6 @@ class AgentRuntime:
             fallback_recall_hint=fallback_recall_hint,
             task_id=task_id,
             run_id=run_id,
-        )
-
-    def _build_recovery_planner_config(self) -> GenerationConfig:
-        options: Dict[str, Any] = {}
-        try:
-            model_cfg = load_runtime_model_config()
-            mini_id = str(getattr(model_cfg, "mini_model_id", "") or "").strip()
-            if mini_id:
-                options["model"] = mini_id
-        except Exception:
-            pass
-        return GenerationConfig(
-            temperature=0.1,
-            max_tokens=1200,
-            provider_options=options,
         )
 
     def _trace(self, msg: str) -> None:

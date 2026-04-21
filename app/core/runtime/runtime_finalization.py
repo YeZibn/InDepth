@@ -10,23 +10,10 @@ def finalize_paused_run(
     stop_reason: str,
     final_answer: str,
     last_tool_failures: List[Dict[str, str]],
-    auto_manage_todo_recovery: Callable[..., None],
-    append_recovery_summary_for_user: Callable[[str], str],
-    has_latest_todo_recovery: Callable[[], bool],
     preview: Callable[[str, int], str],
     emit_event: Callable[..., Dict[str, Any]],
 ) -> Dict[str, Any]:
     # clarification pause 属于“中间暂停”而不是最终失败，这里只做恢复兜底与观测，不进入 verifier。
-    auto_manage_todo_recovery(
-        task_id=task_id,
-        run_id=run_id,
-        runtime_state=runtime_state,
-        stop_reason=stop_reason,
-        final_answer=final_answer,
-        last_tool_failures=last_tool_failures,
-    )
-    if has_latest_todo_recovery():
-        final_answer = append_recovery_summary_for_user(final_answer)
     emit_event(
         task_id=task_id,
         run_id=run_id,
@@ -56,10 +43,6 @@ def finalize_completed_run(
     last_tool_failures: List[Dict[str, str]],
     verification_handoff: Optional[Dict[str, Any]],
     handoff_source: str,
-    latest_todo_recovery: Optional[Dict[str, Any]],
-    auto_manage_todo_recovery: Callable[..., None],
-    append_recovery_summary_for_user: Callable[[str], str],
-    has_latest_todo_recovery: Callable[[], bool],
     eval_orchestrator: Any,
     emit_event: Callable[..., Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -79,21 +62,6 @@ def finalize_completed_run(
             "tool_failure_count": len(last_tool_failures),
         },
     )
-    auto_manage_todo_recovery(
-        task_id=task_id,
-        run_id=run_id,
-        runtime_state=runtime_state,
-        stop_reason=stop_reason,
-        final_answer=final_answer,
-        last_tool_failures=last_tool_failures,
-    )
-    if has_latest_todo_recovery():
-        if not isinstance(verification_handoff, dict):
-            verification_handoff = {}
-        recovery = latest_todo_recovery if isinstance(latest_todo_recovery, dict) else {}
-        if recovery:
-            verification_handoff["recovery"] = recovery
-        final_answer = append_recovery_summary_for_user(final_answer)
 
     judgement_payload: Dict[str, Any] = {}
     task_finished_status = task_status

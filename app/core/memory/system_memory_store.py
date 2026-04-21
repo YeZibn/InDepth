@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
 from app.core.memory.recall_service import build_memory_vector_text
+
+logger = logging.getLogger(__name__)
 
 
 class SystemMemoryStore:
@@ -442,5 +445,6 @@ class SystemMemoryStore:
                 embedding=embedding,
                 model=self.embedding_model_id,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to sync memory vector for '%s': %s", memory_id, exc)
             return

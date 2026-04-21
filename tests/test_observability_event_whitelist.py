@@ -34,15 +34,11 @@ class ObservabilityEventWhitelistTests(unittest.TestCase):
 
     def test_newly_whitelisted_events_preserve_event_type(self):
         whitelisted = [
-            "task_fallback_recorded",
-            "task_recovery_planned",
-            "todo_recovery_auto_planned",
             "followup_subtasks_appended",
             "subtask_updated",
             "subtask_reopened",
             "task_updated",
             "todo_binding_missing_warning",
-            "todo_orphan_failure_detected",
             "search_budget_auto_overridden",
             "user_preference_recall_succeeded",
             "user_preference_recall_failed",

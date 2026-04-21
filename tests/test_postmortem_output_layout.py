@@ -175,20 +175,6 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
                             {"path": "doc/api.md", "must_exist": True, "non_empty": True}
                         ],
                         "known_gaps": ["未执行全量回归"],
-                        "recovery": {
-                            "todo_id": "todo_123",
-                            "subtask_number": 4,
-                            "fallback_record": {
-                                "state": "failed",
-                                "reason_code": "tool_error",
-                                "reason_detail": "bash command failed",
-                            },
-                            "recovery_decision": {
-                                "primary_action": "retry_with_fix",
-                                "decision_level": "auto",
-                                "rationale": "先修正参数再重试",
-                            },
-                        },
                     },
                 },
             },
@@ -204,11 +190,8 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
             self.assertIn("补充接口文档", content)
             self.assertIn("path=doc/api.md; must_exist=True; non_empty=True", content)
             self.assertIn("未执行全量回归", content)
-            self.assertIn("恢复信息", content)
-            self.assertIn("todo_id=todo_123", content)
-            self.assertIn("decision=retry_with_fix / level=auto", content)
 
-    def test_generate_postmortem_snapshots_related_todo_under_task_root(self):
+    def test_generate_postmortem_does_not_snapshot_todo_without_explicit_handoff_reference(self):
         events = [
             {
                 "timestamp": "2026-04-10T10:00:00+00:00",
@@ -227,11 +210,7 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
                 "status": "ok",
                 "run_id": "run_with_todo",
                 "payload": {
-                    "verification_handoff": {
-                        "recovery": {
-                            "todo_id": "todo_123",
-                        }
-                    }
+                    "verification_handoff": {}
                 },
             },
         ]
@@ -246,8 +225,7 @@ class PostmortemOutputLayoutTests(unittest.TestCase):
 
             self.assertTrue(result["success"])
             copied = Path(td) / "observability-evals" / "task-with-todo" / "todo" / "todo_123.md"
-            self.assertTrue(copied.exists())
-            self.assertEqual(copied.read_text(encoding="utf-8"), "# Task: Demo todo\n")
+            self.assertFalse(copied.exists())
 
     def test_generate_postmortem_snapshots_todo_task_by_prefixed_task_id(self):
         events = [
