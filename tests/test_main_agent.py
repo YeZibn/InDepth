@@ -51,7 +51,7 @@ class MainAgentTests(unittest.TestCase):
     def test_base_agent_loads_default_tools_when_enabled(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
         ):
             agent = BaseAgent(
                 name="main_agent",
@@ -70,7 +70,7 @@ class MainAgentTests(unittest.TestCase):
     def test_main_agent_registers_only_supplied_tools(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
         ):
             agent = BaseAgent(
                 name="main_agent",
@@ -90,7 +90,7 @@ class MainAgentTests(unittest.TestCase):
     def test_chat_delegates_to_runtime_with_expected_task_and_run_id(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
             patch("app.agent.agent.uuid.uuid4", return_value=SimpleNamespace(hex="abcdef1234567890")),
         ):
             agent = BaseAgent(
@@ -114,7 +114,7 @@ class MainAgentTests(unittest.TestCase):
     def test_chat_reuses_same_run_id_when_waiting_for_user_clarification(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntimeClarify),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
             patch(
                 "app.agent.agent.uuid.uuid4",
                 side_effect=[
@@ -147,7 +147,7 @@ class MainAgentTests(unittest.TestCase):
     def test_chat_prints_clarification_prefix_and_hint_when_waiting(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntimeClarify),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
             patch("app.agent.agent.uuid.uuid4", return_value=SimpleNamespace(hex="aaaabbbbccccdddd")),
         ):
             agent = BaseAgent(
@@ -170,7 +170,7 @@ class MainAgentTests(unittest.TestCase):
     def test_cli_new_command_starts_new_task_and_resets_waiting_state(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
         ):
             agent = BaseAgent(
                 name="main_agent",
@@ -194,7 +194,7 @@ class MainAgentTests(unittest.TestCase):
     def test_start_new_task_rotates_task_id_and_resets_waiting_state(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
         ):
             agent = BaseAgent(
                 name="main_agent",
@@ -220,7 +220,7 @@ class MainAgentTests(unittest.TestCase):
     def test_load_memory_knowledge_switch_controls_system_prompt(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
             patch("app.agent.agent.load_indepth_content", return_value="INDEPTH-CONTENT"),
         ):
             with_memory = BaseAgent(
@@ -247,7 +247,7 @@ class MainAgentTests(unittest.TestCase):
     def test_extract_skill_paths_accepts_list_and_string(self):
         with (
             patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-            patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
         ):
             agent_str = BaseAgent(
                 name="s1",
@@ -281,7 +281,7 @@ class MainAgentTests(unittest.TestCase):
             )
             with (
                 patch("app.agent.agent.AgentRuntime", _FakeRuntime),
-                patch("app.agent.agent.HttpChatModelProvider", _FakeProvider),
+                patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
             ):
                 agent = BaseAgent(
                     name="s1",

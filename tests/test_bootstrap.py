@@ -2,7 +2,8 @@ import unittest
 from unittest.mock import patch
 
 from app.config.runtime_config import RuntimeCompressionConfig
-from app.core.bootstrap import create_runtime
+from app.core.bootstrap import build_agent_runtime_kwargs, create_runtime
+from app.core.tools import tool
 
 
 class _FakeRuntime:
@@ -31,7 +32,52 @@ class _FakeSkillsManager:
         return ["SKILL_TOOL"]
 
 
+@tool(name="demo_extra_tool", description="demo extra tool")
+def _demo_extra_tool(query: str) -> str:
+    return query
+
+
 class BootstrapTests(unittest.TestCase):
+    def test_build_agent_runtime_kwargs_uses_custom_memory_file_and_keeps_extra_tools_without_defaults(self):
+        with (
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
+            patch(
+                "app.core.bootstrap.build_skills_manager",
+                return_value=_FakeSkillsManager("", has_skills=False),
+            ),
+        ):
+            runtime_kwargs = build_agent_runtime_kwargs(
+                system_prompt="hello",
+                load_default_tools=False,
+                extra_tools=[_demo_extra_tool],
+                memory_db_file="db/custom_runtime_memory.db",
+                enable_llm_judge=False,
+            )
+
+        registry = runtime_kwargs["tool_registry"]
+        self.assertTrue(registry.has("demo_extra_tool"))
+        self.assertFalse(registry.has("plan_task"))
+        self.assertEqual(runtime_kwargs["memory_store"].db_file, "db/custom_runtime_memory.db")
+        self.assertEqual(runtime_kwargs["system_prompt"], "hello")
+        self.assertEqual(runtime_kwargs["enable_llm_judge"], False)
+
+    def test_build_agent_runtime_kwargs_registers_skill_tools_on_top_of_default_registry(self):
+        with (
+            patch("app.core.bootstrap.HttpChatModelProvider", _FakeProvider),
+            patch(
+                "app.core.bootstrap.build_skills_manager",
+                return_value=_FakeSkillsManager("SKILL-SYSTEM-PROMPT", has_skills=True),
+            ),
+        ):
+            runtime_kwargs = build_agent_runtime_kwargs(
+                system_prompt="hello",
+                enable_llm_judge=False,
+            )
+
+        registry = runtime_kwargs["tool_registry"]
+        self.assertTrue(registry.has("plan_task"))
+        self.assertEqual(runtime_kwargs["skill_prompt"], "SKILL-SYSTEM-PROMPT")
+
     def test_create_runtime_uses_system_skill_prompt_and_registers_skill_tools(self):
         with (
             patch("app.core.bootstrap.AgentRuntime", _FakeRuntime),

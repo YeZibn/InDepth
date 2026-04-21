@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List
 
+from app.core.todo import TodoService
 from app.core.runtime.todo_runtime_lifecycle import (
     finalize_active_todo_context,
     maybe_emit_todo_binding_warning,
@@ -16,6 +17,7 @@ class TodoSession:
     """Owns the runtime-facing todo execution context for a single run."""
 
     context: Dict[str, Any] = field(default_factory=dict)
+    todo_service: TodoService = field(default_factory=TodoService)
 
     def clear(self) -> None:
         self.context = {}
@@ -76,18 +78,7 @@ class TodoSession:
         return str(self.context.get("active_subtask_id", "") or "").strip()
 
     def prepare_phase_snapshot(self) -> Dict[str, Any]:
-        active_number = self.active_subtask_number or 0
-        execution_phase = self.execution_phase
-        active_status = ""
-        if active_number:
-            active_status = "in-progress" if execution_phase == "executing" else ""
-        return {
-            "active_todo_id": self.todo_id,
-            "active_todo_exists": bool(self.todo_id),
-            "active_subtask_number": active_number,
-            "active_subtask_status": active_status,
-            "execution_phase": execution_phase,
-        }
+        return self.todo_service.prepare_phase_snapshot(self.context)
 
     def build_prepare_phase_inputs(
         self,
@@ -97,32 +88,17 @@ class TodoSession:
         current_state_scan: Dict[str, Any],
         resume_from_waiting: bool,
     ) -> Dict[str, Any]:
-        snapshot = self.prepare_phase_snapshot()
-        return {
-            "task_name": task_name,
-            "context": user_input,
-            "active_todo_id": snapshot["active_todo_id"],
-            "active_todo_exists": snapshot["active_todo_exists"],
-            "active_todo_summary": "",
-            "active_todo_full_text": active_todo_full_text,
-            "active_subtask_number": int(snapshot["active_subtask_number"] or 0),
-            "active_subtask_status": snapshot["active_subtask_status"],
-            "execution_phase": snapshot["execution_phase"],
-            "current_state_scan": current_state_scan if isinstance(current_state_scan, dict) else {},
-            "resume_from_waiting": bool(resume_from_waiting),
-            "execution_intent": "runtime_preflight",
-        }
+        return self.todo_service.build_prepare_phase_inputs(
+            current_context=self.context,
+            user_input=user_input,
+            task_name=task_name,
+            active_todo_full_text=active_todo_full_text,
+            current_state_scan=current_state_scan,
+            resume_from_waiting=resume_from_waiting,
+        )
 
     def bind_plan_task_args(self, tool_args: Dict[str, Any]) -> Dict[str, Any]:
-        if (
-            self.todo_id
-            and self.binding_state == "bound"
-            and not str(tool_args.get("active_todo_id", "") or "").strip()
-        ):
-            out = dict(tool_args)
-            out["active_todo_id"] = self.todo_id
-            return out
-        return tool_args
+        return self.todo_service.bind_plan_task_args(self.context, tool_args)
 
     def maybe_emit_binding_warning(
         self,

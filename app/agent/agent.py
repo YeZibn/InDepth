@@ -6,15 +6,8 @@ from typing import Any, Iterable, Optional
 
 from dotenv import load_dotenv
 
-from app.config import load_runtime_compression_config
-from app.core.memory import SQLiteMemoryStore, build_context_compressor
-from app.core.model import GenerationConfig
-from app.core.model.http_chat_provider import HttpChatModelProvider
+from app.core.bootstrap import build_agent_runtime_kwargs
 from app.core.runtime.agent_runtime import AgentRuntime
-from app.core.runtime.task_token_store import TaskTokenStore
-from app.core.skills import build_skills_manager
-from app.core.tools.adapters import build_default_registry, register_tool_functions
-from app.core.tools.registry import ToolRegistry
 
 
 load_dotenv()
@@ -60,15 +53,17 @@ class BaseAgent:
         self.tools = list(tools) if tools else []
         self.load_default_tools = bool(load_default_tools)
         self.skill_paths = self._extract_skill_paths(skills)
-        self.skills_manager = build_skills_manager(self.skill_paths, validate=False)
-        self.skill_prompt = self.skills_manager.get_system_prompt_snippet()
+        self.skill_prompt = ""
 
         if load_memory_knowledge:
             self.instructions = load_indepth_content() + "\n\n" + instructions
         else:
             self.instructions = instructions
 
-        generation_config = GenerationConfig(
+        runtime_kwargs = build_agent_runtime_kwargs(
+            system_prompt=self.instructions,
+            max_steps=100,
+            skill_paths=self.skill_paths,
             temperature=temperature,
             top_p=top_p,
             presence_penalty=presence_penalty,
@@ -78,54 +73,17 @@ class BaseAgent:
             n=n,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
-            provider_options=model_options or {},
-        )
-        compression_config = load_runtime_compression_config()
-        model_provider = HttpChatModelProvider(default_config=generation_config)
-        compressor = build_context_compressor(
-            kind=compression_config.compressor_kind,
-            model_provider=model_provider,
-            llm_max_tokens=compression_config.compressor_llm_max_tokens,
-        )
-        task_token_store = TaskTokenStore()
-        # Aggregate runtime memory by agent type to avoid per-name DB fragmentation.
-        memory_file = "db/runtime_memory_main_agent.db"
-        self.runtime = AgentRuntime(
-            model_provider=model_provider,
-            tool_registry=self._build_registry(),
-            system_prompt=self.instructions,
-            max_steps=100,
-            memory_store=SQLiteMemoryStore(
-                db_file=memory_file,
-                keep_recent=compression_config.keep_recent_turns,
-                consistency_guard=compression_config.consistency_guard,
-                context_window_tokens=compression_config.compression_trigger_window_tokens,
-                target_keep_ratio_midrun=compression_config.target_keep_ratio_midrun,
-                target_keep_ratio_finalize=compression_config.target_keep_ratio_finalize,
-                min_keep_turns=compression_config.min_keep_turns,
-                compressor=compressor,
-                event_summarizer_kind=compression_config.event_summarizer_kind,
-                event_summarizer_max_tokens=compression_config.event_summarizer_max_tokens,
-                event_summarizer_model_provider=model_provider,
-                task_token_store=task_token_store,
-            ),
-            skill_prompt=self.skill_prompt,
-            generation_config=generation_config,
+            model_options=model_options,
             enable_llm_judge=enable_llm_judge,
-            compression_config=compression_config,
-            task_token_store=task_token_store,
+            load_default_tools=self.load_default_tools,
+            extra_tools=self.tools,
+            memory_db_file="db/runtime_memory_main_agent.db",
         )
+        self.skill_prompt = str(runtime_kwargs.get("skill_prompt", "") or "")
+        self.runtime = AgentRuntime(**runtime_kwargs)
         self._active_run_id: Optional[str] = None
         self._awaiting_user_input = False
         self._task_id = self._generate_task_id()
-
-    def _build_registry(self) -> ToolRegistry:
-        registry = build_default_registry() if self.load_default_tools else ToolRegistry()
-        all_tools = list(self.tools)
-        if self.skills_manager.get_skill_names():
-            all_tools.extend(self.skills_manager.get_tools())
-        register_tool_functions(registry, all_tools)
-        return registry
 
     def chat(self, message: str) -> str:
         task_id = self._task_id
