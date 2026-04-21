@@ -51,12 +51,8 @@ from app.core.runtime.runtime_finalization import (
     finalize_completed_run,
     finalize_paused_run,
 )
-from app.core.runtime.todo_runtime_lifecycle import (
-    finalize_active_todo_context,
-    maybe_emit_todo_binding_warning,
-    restore_active_todo_context_from_history,
-    update_active_todo_context,
-)
+from app.core.runtime.todo_runtime_lifecycle import restore_active_todo_context_from_history
+from app.core.runtime.todo_session import TodoSession
 from app.core.runtime.user_preference_lifecycle import (
     capture_user_preferences,
     inject_user_preference_recall,
@@ -363,7 +359,7 @@ class AgentRuntime:
         self.last_stop_reason = ""
         self.last_run_id = ""
         self.last_task_id = ""
-        self._active_todo_context: Dict[str, Any] = {}
+        self._todo_session = TodoSession()
         self._prepare_phase_completed = False
         self._prepare_phase_result: Dict[str, Any] = {}
         self._runtime_phase = "preparing"
@@ -588,15 +584,7 @@ class AgentRuntime:
         return prepared
 
     def _run_prepare_phase(self, user_input: str, task_id: str, run_id: str, resume_from_waiting: bool = False) -> Dict[str, Any]:
-        ctx = self._active_todo_context if isinstance(self._active_todo_context, dict) else {}
-        todo_id = str(ctx.get("todo_id", "") or "").strip()
-        active_number = ctx.get("active_subtask_number")
-        if active_number in (None, ""):
-            active_number = 0
-        active_status = ""
-        execution_phase = str(ctx.get("execution_phase", "") or "planning").strip() or "planning"
-        if active_number:
-            active_status = "in-progress" if execution_phase == "executing" else ""
+        todo_id = self._todo_session.todo_id
         current_state_scan: Dict[str, Any] = {}
         if todo_id:
             try:
@@ -605,20 +593,13 @@ class AgentRuntime:
                 current_state_scan = _build_current_state_scan(todo_id)
             except Exception:
                 current_state_scan = {}
-        args = {
-            "task_name": self._extract_title_topic(user_input),
-            "context": user_input,
-            "active_todo_id": todo_id,
-            "active_todo_exists": bool(todo_id),
-            "active_todo_summary": "",
-            "active_todo_full_text": self._load_active_todo_full_text(todo_id),
-            "active_subtask_number": int(active_number or 0),
-            "active_subtask_status": active_status,
-            "execution_phase": execution_phase,
-            "current_state_scan": current_state_scan,
-            "resume_from_waiting": bool(resume_from_waiting),
-            "execution_intent": "runtime_preflight",
-        }
+        args = self._todo_session.build_prepare_phase_inputs(
+            user_input=user_input,
+            task_name=self._extract_title_topic(user_input),
+            active_todo_full_text=self._load_active_todo_full_text(todo_id),
+            current_state_scan=current_state_scan,
+            resume_from_waiting=resume_from_waiting,
+        )
         if not self.enable_llm_todo_planner:
             return self._run_prepare_phase_rule_fallback(args=args, task_id=task_id, run_id=run_id)
         try:
@@ -902,10 +883,7 @@ class AgentRuntime:
                     "error": str(result.get("error", "")),
                     "payload": execution_payload if isinstance(execution_payload, dict) else {},
                 }
-                self._active_todo_context = update_active_todo_context(
-                    current_context=self._active_todo_context,
-                    executions=[execution],
-                )
+                self._todo_session.apply_executions([execution])
         if not bool(prepared.get("should_use_todo")):
             return {}
         suggested = prepared.get("recommended_plan_task_args", {})
@@ -952,10 +930,7 @@ class AgentRuntime:
             "error": str(result.get("error", "")),
             "payload": execution_payload if isinstance(execution_payload, dict) else {},
         }
-        self._active_todo_context = update_active_todo_context(
-            current_context=self._active_todo_context,
-            executions=[execution],
-        )
+        self._todo_session.apply_executions([execution])
         if result.get("success"):
             prepared = dict(prepared)
             prepared["auto_plan_applied"] = True
@@ -977,11 +952,11 @@ class AgentRuntime:
         self.last_stop_reason = ""
         self._runtime_phase = ""
         self._set_runtime_phase("preparing", task_id=task_id, run_id=run_id)
-        self._active_todo_context = {}
+        self._todo_session.clear()
         self._prepare_phase_completed = False
         self._prepare_phase_result = {}
         history = self.memory_store.get_recent_messages(task_id, limit=20) if self.memory_store else []
-        self._active_todo_context = restore_active_todo_context_from_history(history)
+        self._todo_session.context = restore_active_todo_context_from_history(history)
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._build_system_prompt()}] + history + [
             {"role": "user", "content": user_input}
         ]
@@ -1289,10 +1264,7 @@ class AgentRuntime:
             verification_handoff=verification_handoff,
             final_answer_written=final_answer_written,
         )
-        self._active_todo_context = finalize_active_todo_context(
-            current_context=self._active_todo_context,
-            runtime_state=runtime_state,
-        )
+        self._todo_session.finalize(runtime_state=runtime_state)
         self.last_runtime_state = runtime_state
         self.last_stop_reason = stop_reason
         return final_answer
@@ -1822,17 +1794,12 @@ class AgentRuntime:
                 )
                 continue
             if tool_name == "plan_task":
-                active_todo_id = str(self._active_todo_context.get("todo_id", "") or "").strip()
-                binding_state = str(self._active_todo_context.get("binding_state", "") or "").strip()
-                if active_todo_id and binding_state == "bound" and not str(tool_args.get("active_todo_id", "") or "").strip():
-                    tool_args = dict(tool_args)
-                    tool_args["active_todo_id"] = active_todo_id
+                tool_args = self._todo_session.bind_plan_task_args(tool_args)
             # todo guard 只做提醒，不阻断执行；这样既能保留观测信号，也不改变现有工具调用语义。
-            maybe_emit_todo_binding_warning(
+            self._todo_session.maybe_emit_binding_warning(
                 tool_name=tool_name,
                 task_id=task_id,
                 run_id=run_id,
-                todo_context=self._active_todo_context,
                 guard_mode=self.TODO_BINDING_GUARD_MODE,
                 exempt_tools=self.TODO_BINDING_EXEMPT_TOOLS,
                 emit_event=emit_event,
@@ -1856,10 +1823,7 @@ class AgentRuntime:
                 failures.extend(batch_failures)
             if isinstance(batch_executions, list):
                 executions.extend(batch_executions)
-                self._active_todo_context = update_active_todo_context(
-                    current_context=self._active_todo_context,
-                    executions=batch_executions,
-                )
+                self._todo_session.apply_executions(batch_executions)
         return {"failures": failures, "executions": executions}
 
     def _enrich_runtime_tool_args(
