@@ -103,13 +103,42 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
+- 任务 02：已完成
 - 任务 03：未开始
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 010：完成模块 05 的任务 02 `start_task(...)`
+
+- 状态：已完成
+- 范围：完成 RuntimeHost 主链骨架模块中的第二个子任务，只落 `start_task(...)` 的最小宿主任务切换行为，不提前进入执行链路
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/host/runtime_host.py` 落地 `start_task(label: str = "")`
+  - `start_task(...)` 当前保留 `label` 参数，但不持久化
+  - 当前行为已明确：
+    - 复用当前 `session_id`
+    - 通过 `HostIdGenerator.create_task_id()` 生成新的 `task_id`
+    - 回写 `host_state.current_task_id`
+    - 清空 `host_state.active_run_id`
+    - 返回 `HostTaskRef`
+  - 当前已明确：
+    - `start_task(...)` 不触发 `orchestrator`
+    - `start_task(...)` 不调用 `graph_store`
+  - 已同步更新宿主实现说明：
+    - `runtime-v2/implementation/host.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 已补首次切换与重复切换测试
+- 遗留问题：
+  - `submit_user_input(...)` 还未进入实现
+  - 默认 task 自动补建还未进入实现
+- 下一步：
+  - 进入模块 05 的任务 03：讨论并实现 `submit_user_input(...)`
 
 ### 2026-04-26
 

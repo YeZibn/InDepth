@@ -16,6 +16,7 @@ from rtv2.task_graph.store import InMemoryTaskGraphStore
 class StubHostIdGenerator:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.task_counter = 0
 
     def create_session_id(self) -> str:
         self.calls.append("session")
@@ -23,7 +24,8 @@ class StubHostIdGenerator:
 
     def create_task_id(self) -> str:
         self.calls.append("task")
-        return "task-1"
+        self.task_counter += 1
+        return f"task-{self.task_counter}"
 
     def create_run_id(self) -> str:
         self.calls.append("run")
@@ -66,6 +68,38 @@ class RuntimeHostTests(unittest.TestCase):
         self.assertEqual(snapshot.session_id, "sess-1")
         self.assertEqual(host.host_state.current_task_id, "task-2")
         self.assertEqual(host.host_state.active_run_id, "run-2")
+
+    def test_start_task_generates_new_task_id_and_clears_active_run_id(self):
+        id_generator = StubHostIdGenerator()
+        host = RuntimeHost(
+            graph_store=InMemoryTaskGraphStore(),
+            orchestrator=RuntimeOrchestrator(),
+            id_generator=id_generator,
+        )
+        host.host_state.active_run_id = "run-9"
+
+        task_ref = host.start_task(label="Implement host task flow")
+
+        self.assertEqual(task_ref.task_id, "task-1")
+        self.assertEqual(host.host_state.session_id, "sess-1")
+        self.assertEqual(host.host_state.current_task_id, "task-1")
+        self.assertEqual(host.host_state.active_run_id, "")
+        self.assertEqual(id_generator.calls, ["session", "task"])
+
+    def test_start_task_allows_repeated_explicit_task_switches(self):
+        host = RuntimeHost(
+            graph_store=InMemoryTaskGraphStore(),
+            orchestrator=RuntimeOrchestrator(),
+            id_generator=StubHostIdGenerator(),
+        )
+
+        first_task = host.start_task()
+        second_task = host.start_task(label="Another task")
+
+        self.assertEqual(first_task.task_id, "task-1")
+        self.assertEqual(second_task.task_id, "task-2")
+        self.assertEqual(host.host_state.current_task_id, "task-2")
+        self.assertEqual(host.host_state.active_run_id, "")
 
 
 if __name__ == "__main__":

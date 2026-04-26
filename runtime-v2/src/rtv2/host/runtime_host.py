@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rtv2.host.interfaces import HostIdGenerator, RuntimeHostState
+from rtv2.host.interfaces import HostIdGenerator, HostTaskRef, RuntimeHostState
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
 from rtv2.task_graph.store import TaskGraphStore
 
@@ -30,3 +30,12 @@ class RuntimeHost:
             current_task_id=self.host_state.current_task_id,
             active_run_id=self.host_state.active_run_id,
         )
+
+    def start_task(self, label: str = "") -> HostTaskRef:
+        """Start a new host task context without triggering runtime execution."""
+
+        del label
+        task_id = self.id_generator.create_task_id()
+        self.host_state.current_task_id = task_id
+        self.host_state.active_run_id = ""
+        return HostTaskRef(task_id=task_id)

@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前宿主层已正式落地标识结构、`RuntimeHost` 最小类壳和显式 ID 生成器依赖，但还没有进入 `start_task(...)` / `submit_user_input(...)` 等行为实现。
+当前宿主层已正式落地标识结构、`RuntimeHost` 最小类壳、显式 ID 生成器依赖和 `start_task(...)`，但还没有进入 `submit_user_input(...)` 等执行行为实现。
 
 当前已实现：
 
@@ -112,6 +112,7 @@
 当前已实现的方法包括：
 
 1. `get_host_state()`
+2. `start_task(label: str = "")`
 
 它当前承担三类职责：
 
@@ -121,6 +122,8 @@
    统一挂接 `graph_store`、`orchestrator` 和 `id_generator`。
 3. 快照暴露职责：
    通过 `get_host_state()` 向外暴露宿主状态快照，而不是直接暴露内部状态对象。
+4. 任务切换职责：
+   通过 `start_task(...)` 显式切换宿主当前任务上下文，但不触发 runtime 执行。
 
 ## 当前 `RuntimeHost` 设计结论
 
@@ -131,17 +134,19 @@
 3. `RuntimeHost` 当前直接依赖 `RuntimeOrchestrator` 实例，不提前抽接口层
 4. `RuntimeHost` 当前挂接 `TaskGraphStore`
 5. host 初始化时生成新的 `session_id`
-6. 当前先只实现 `get_host_state()`，不提前进入执行主链
+6. `start_task(...)` 当前保留 `label` 参数，但不持久化
+7. `start_task(...)` 总是生成新的 `task_id`
+8. `start_task(...)` 复用当前 `session_id` 并清空 `active_run_id`
+9. `start_task(...)` 不触发 `orchestrator` 或 `graph_store`
 
 ## 当前边界
 
 当前宿主标识层明确不负责：
 
-1. `start_task(...)`
-2. `submit_user_input(...)`
-3. `task_id / run_id` 的实际生成策略实现细节
-4. 默认 task 自动补建逻辑
-5. 等待后重开新 run 的宿主行为编排
+1. `submit_user_input(...)`
+2. `task_id / run_id` 的实际生成策略实现细节
+3. 默认 task 自动补建逻辑
+4. 等待后重开新 run 的宿主行为编排
 
 这些内容会在 `Step 04` 再正式落地。
 
@@ -149,6 +154,5 @@
 
 宿主层下一步预计进入：
 
-1. `start_task(...)`
-2. `submit_user_input(...)`
-3. 默认 task 自动补建
+1. `submit_user_input(...)`
+2. 默认 task 自动补建
