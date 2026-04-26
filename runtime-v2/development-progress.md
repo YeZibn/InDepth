@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
-- 开发状态：已完成模块 01、模块 02、模块 03；模块 04 正在推进
-- 当前重点：推进模块 04，并按子任务逐个对齐后再落地
+- 开发状态：已完成模块 01、模块 02、模块 03、模块 04
+- 当前重点：讨论下一个小模块边界，再继续增量推进
 
 ---
 
@@ -86,11 +86,39 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 008：完成模块 04 的任务 04 `InMemoryTaskGraphStore`
+
+- 状态：已完成
+- 范围：完成 task graph patch/store 模块中的第四个子任务，正式落地内存版 `TaskGraphStore`，只实现已定稿的最小读写与 patch 应用规则，不扩展调度能力
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/store.py` 落地 `InMemoryTaskGraphStore`
+  - 内部当前使用 `dict[str, TaskGraphState]` 持有 graph
+  - `save_graph` 当前采用整图覆盖保存
+  - `apply_patch` 当前基于已有 graph 生成更新后的新快照
+  - 当前实现已明确以下错误规则：
+    - graph 不存在时，`apply_patch` 抛错
+    - `node_updates` 指向不存在 node 时抛错
+    - `new_nodes` 出现重复 `node_id` 时抛错
+    - `active_node_id` 指向更新后不存在 node 时抛错
+  - 当前实现采用快照语义，避免外部对象直接污染 store 内部状态
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py`
+  - 已补保存、读取、patch 应用和错误路径测试
+- 遗留问题：
+  - 更完整的 patch 应用细则还未上升为单独规范文档
+  - 仍未进入 orchestrator 或 host 对 graph store 的正式接线
+- 下一步：
+  - 讨论下一个小模块边界，决定是否开始 `RuntimeHost` 或 orchestrator 主链骨架
 
 ### 2026-04-26
 

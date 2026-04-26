@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前 task graph 层已正式落地 graph 本体、node 本体、最小 patch 结构和 store 接口，但还没有进入 store 实现。
+当前 task graph 层已正式落地 graph 本体、node 本体、最小 patch 结构、store 接口和内存版 store。
 
 当前已实现：
 
@@ -13,6 +13,7 @@
 5. `TaskGraphPatch`
 6. `TaskGraphState`
 7. `TaskGraphStore`
+8. `InMemoryTaskGraphStore`
 
 对应代码：
 
@@ -236,8 +237,22 @@
 4. `save_graph` 返回 `None`
 5. 当前接口层只定义契约，不提前实现内存策略或拷贝策略
 
+## `InMemoryTaskGraphStore` 的作用
+
+`InMemoryTaskGraphStore` 用于提供第一版最小可用的 graph 存储实现，服务本地运行链路与测试。
+
+当前实现规则如下：
+
+1. 内部使用 `dict[str, TaskGraphState]` 持有 graph
+2. `save_graph` 采用整图覆盖保存
+3. `apply_patch` 基于已有 graph 生成更新后的新快照
+4. 新增 node 若出现重复 `node_id`，直接抛错
+5. `node_updates` 若指向不存在 node，直接抛错
+6. `active_node_id` 若指向更新后不存在的 node，直接抛错
+7. 当前实现采用快照语义，避免外部对象引用直接污染 store 内部状态
+
 ## 下一步
 
 task graph 层下一步预计进入：
 
-1. 内存版 `TaskGraphStore`
+1. 讨论下一个模块边界
