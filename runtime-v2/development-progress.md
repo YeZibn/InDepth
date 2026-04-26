@@ -84,13 +84,52 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
+- 任务 02：已完成
 - 任务 03：未开始
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 006：完成模块 04 的任务 02 `NodePatch`
+
+- 状态：已完成
+- 范围：完成 task graph patch/store 模块中的第二个子任务，正式落地 `NodePatch` 的字段级更新范围，不提前进入 store
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/models.py` 将 `NodePatch` 从过渡壳层收紧为正式字段级更新对象
+  - `NodePatch` 当前正式固定以下字段：
+    - `node_id`
+    - `node_status`
+    - `owner`
+    - `dependencies`
+    - `order`
+    - `artifacts`
+    - `evidence`
+    - `notes`
+    - `block_reason`
+    - `failure_reason`
+  - `NodePatch` 当前只允许修改运行时可变字段
+  - 第一版明确不允许通过 `NodePatch` 修改：
+    - `graph_id`
+    - `name`
+    - `kind`
+    - `description`
+  - `dependencies` 当前按整字段替换处理
+  - `artifacts / evidence / notes` 当前按整字段替换处理
+  - `None` 当前统一表达“不修改”
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py`
+  - 已补 `NodePatch` 的最小字段与默认值测试
+- 遗留问题：
+  - `TaskGraphStore` 还未进入实现
+  - graph patch 应用规则还未进入实现
+- 下一步：
+  - 进入模块 04 的任务 03：讨论并实现 `TaskGraphStore` 接口
 
 ### 2026-04-26
 

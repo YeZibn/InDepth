@@ -116,10 +116,10 @@
 
 1. `TaskGraphState.nodes` 已从过渡态 `list[Any]` 收紧为 `list[TaskGraphNode]`
 
-同时也新增了一个过渡点：
+同时也完成了一个收紧点：
 
 1. `TaskGraphPatch.node_updates` 已正式进入结构
-2. 但 `NodePatch` 当前仍是过渡壳层，只固定 `node_id`
+2. `NodePatch` 已从过渡壳层收紧为正式字段级更新对象
 
 ## `TaskGraphPatch` 的作用
 
@@ -156,20 +156,56 @@
    - `version_bump`
    - 调度控制字段
 
+## `NodePatch` 的作用
+
+`NodePatch` 用于表达单个 node 的字段级部分更新。
+
+当前字段包括：
+
+1. `node_id`
+2. `node_status`
+3. `owner`
+4. `dependencies`
+5. `order`
+6. `artifacts`
+7. `evidence`
+8. `notes`
+9. `block_reason`
+10. `failure_reason`
+
+它当前承担两类职责：
+
+1. 局部更新职责：
+   表达单个 node 在一次 step 后有哪些运行时字段发生变化。
+2. 更新边界职责：
+   限制第一版 patch 只修改运行时可变字段，不重写 node 身份字段和核心语义字段。
+
+## 当前 `NodePatch` 设计结论
+
+当前这一步已经定稿的边界如下：
+
+1. `NodePatch` 只负责运行时可变字段
+2. 第一版不允许改：
+   - `graph_id`
+   - `name`
+   - `kind`
+   - `description`
+3. `dependencies` 第一版允许整体替换
+4. `artifacts / evidence / notes` 第一版都按整字段替换处理
+5. `None` 统一表达“不修改”
+
 ## 当前边界
 
 当前 task graph 层明确不负责：
 
-1. `NodePatch` 的完整字段级更新范围
-2. `TaskGraphStore`
-3. graph patch 应用规则
+1. `TaskGraphStore`
+2. graph patch 应用规则
 
-这些内容会在模块 03 后续子任务中继续落地。
+这些内容会在模块 04 后续子任务中继续落地。
 
 ## 下一步
 
 task graph 层下一步预计进入：
 
-1. `NodePatch`
-2. `TaskGraphStore`
-3. 内存版 `TaskGraphStore`
+1. `TaskGraphStore`
+2. 内存版 `TaskGraphStore`

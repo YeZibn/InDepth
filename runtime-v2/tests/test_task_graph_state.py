@@ -19,9 +19,48 @@ from rtv2.task_graph.models import (
 
 
 class TaskGraphStateTests(unittest.TestCase):
+    def test_node_patch_keeps_runtime_updatable_fields(self):
+        patch = NodePatch(
+            node_id="node-1",
+            node_status=NodeStatus.RUNNING,
+            owner="main",
+            dependencies=["node-0"],
+            order=3,
+            artifacts=["artifact://plan"],
+            evidence=["evidence://trace"],
+            notes=["Execution resumed."],
+            block_reason="awaiting_input",
+            failure_reason="tool_error",
+        )
+
+        self.assertEqual(patch.node_id, "node-1")
+        self.assertEqual(patch.node_status, NodeStatus.RUNNING)
+        self.assertEqual(patch.owner, "main")
+        self.assertEqual(patch.dependencies, ["node-0"])
+        self.assertEqual(patch.order, 3)
+        self.assertEqual(patch.artifacts, ["artifact://plan"])
+        self.assertEqual(patch.evidence, ["evidence://trace"])
+        self.assertEqual(patch.notes, ["Execution resumed."])
+        self.assertEqual(patch.block_reason, "awaiting_input")
+        self.assertEqual(patch.failure_reason, "tool_error")
+
+    def test_node_patch_defaults_to_no_field_updates(self):
+        patch = NodePatch(node_id="node-2")
+
+        self.assertEqual(patch.node_id, "node-2")
+        self.assertIsNone(patch.node_status)
+        self.assertIsNone(patch.owner)
+        self.assertIsNone(patch.dependencies)
+        self.assertIsNone(patch.order)
+        self.assertIsNone(patch.artifacts)
+        self.assertIsNone(patch.evidence)
+        self.assertIsNone(patch.notes)
+        self.assertIsNone(patch.block_reason)
+        self.assertIsNone(patch.failure_reason)
+
     def test_task_graph_patch_keeps_minimal_formal_fields(self):
         patch = TaskGraphPatch(
-            node_updates=[NodePatch(node_id="node-1")],
+            node_updates=[NodePatch(node_id="node-1", node_status=NodeStatus.COMPLETED)],
             new_nodes=[
                 TaskGraphNode(
                     node_id="node-2",
@@ -36,6 +75,7 @@ class TaskGraphStateTests(unittest.TestCase):
         )
 
         self.assertEqual(patch.node_updates[0].node_id, "node-1")
+        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.COMPLETED)
         self.assertEqual(patch.new_nodes[0].node_id, "node-2")
         self.assertEqual(patch.active_node_id, "node-2")
         self.assertEqual(patch.graph_status, TaskGraphStatus.ACTIVE)

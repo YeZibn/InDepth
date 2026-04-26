@@ -46,9 +46,18 @@ class TaskGraphNode:
 
 @dataclass(slots=True)
 class NodePatch:
-    """Transitional node patch shell pending formal field-level update scope."""
+    """Minimal field-level node patch for runtime-updatable node fields."""
 
     node_id: str
+    node_status: NodeStatus | None = None
+    owner: str | None = None
+    dependencies: list[str] | None = None
+    order: int | None = None
+    artifacts: list[str] | None = None
+    evidence: list[str] | None = None
+    notes: list[str] | None = None
+    block_reason: str | None = None
+    failure_reason: str | None = None
 
 
 @dataclass(slots=True)
