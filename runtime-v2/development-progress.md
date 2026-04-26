@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
-- 开发状态：已完成模块 01、模块 02
-- 当前重点：下一步进入新的小模块讨论，再决定后续实现范围
+- 开发状态：已完成模块 01、模块 02；模块 03 正在推进
+- 当前重点：推进模块 03，并按子任务逐个对齐后再落地
 
 ---
 
@@ -52,9 +52,59 @@
   - 任务 06：实现 `VerificationState`
   - 任务 07：实现宿主标识结构与 `session_id / task_id / run_id` 对应关系
 
+### 模块 03：Task Graph 最小状态骨架
+
+- 模块目标：
+  - 先把 task graph 的最小正式状态表达落成代码
+  - 收紧 `DomainState.task_graph_state` 的正式类型边界
+  - 先固定 graph 与 node 的状态语义，不提前进入 patch、store 或 orchestrator 行为
+- 已定子任务：
+  - 任务 01：实现 `TaskGraphState`
+  - 任务 02：实现 `TaskGraphNode`
+  - 任务 03：实现 `TaskGraphStatus / NodeStatus`
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 003：完成模块 03 的任务 01 `TaskGraphState`
+
+- 状态：已完成
+- 范围：完成 task graph 最小状态骨架中的第一个子任务，只落 `TaskGraphState` 与其直接依赖的图级状态，不提前实现 `TaskGraphNode`、`NodeStatus`、patch 或 store
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/models.py` 落地 `TaskGraphState`
+  - 已引入图级状态枚举 `TaskGraphStatus`
+  - `TaskGraphState` 当前正式固定 5 个字段：
+    - `graph_id`
+    - `nodes`
+    - `active_node_id`
+    - `graph_status`
+    - `version`
+  - 当前 `nodes` 先保持 `list` 结构
+  - 当前 `active_node_id` 保留在 `TaskGraphState` 中
+  - 当前 `graph_status` 固定为 `active / blocked / completed / abandoned`
+  - 当前 `version` 从第一版即进入正式结构
+  - 已新增 task graph 实现说明文档：
+    - `runtime-v2/implementation/task-graph.md`
+  - 已同步实现说明入口：
+    - `runtime-v2/implementation/README.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py`
+  - 预期与默认字段测试已补齐
+- 遗留问题：
+  - `nodes` 当前仍是过渡态 `list[Any]`，等待 `TaskGraphNode` 子任务收紧
+  - `NodeStatus` 还未正式收口
+  - `TaskGraphPatch` 与 `TaskGraphStore` 还未进入实现
+- 下一步：
+  - 进入模块 03 的任务 02：讨论并实现 `TaskGraphNode`
 
 ### 2026-04-26
 
