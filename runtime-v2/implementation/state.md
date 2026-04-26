@@ -2,10 +2,11 @@
 
 ## 当前范围
 
-当前状态层已正式落地两个最小类型：
+当前状态层已正式落地三组最小类型：
 
 1. `RunIdentity`
 2. `RunLifecycle`
+3. `RuntimeState`
 
 对应代码：
 
@@ -107,6 +108,59 @@
 2. `RuntimeState`
 3. `DomainState`
 4. `RunContext`
+
+## `RuntimeState` 的作用
+
+`RuntimeState` 用于表达主链执行过程中需要长期挂载的最小运行控制状态。
+
+当前字段包括：
+
+1. `active_node_id`
+2. `compression_state`
+3. `external_signal_state`
+4. `finalize_return_input`
+
+它当前承担三类职责：
+
+1. 执行定位职责：
+   用 `active_node_id` 表达当前主执行焦点。
+2. 运行保障职责：
+   用 `compression_state` 表达上下文压缩与预算状态。
+3. 外部输入桥接职责：
+   用 `external_signal_state` 和 `finalize_return_input` 承接等待信号与 finalize 返工输入。
+
+## 为什么当前就实现 `RuntimeState`
+
+当前优先补 `RuntimeState`，原因是：
+
+1. `S4-T4` 已经把它定义为极简 `RunContext` 的正式一级区块。
+2. `S3` 的 step loop 需要正式读取 `active_node_id`。
+3. `S2-T5` 的“等待后重开新 run”口径需要正式的外部信号挂点。
+4. `S11` 的 finalize fail 回灌 execute 需要正式的 `finalize_return_input`。
+
+## 当前设计思想
+
+当前对 `RuntimeState` 的实现思想有 4 条：
+
+1. 只保留主链真正长期需要的运行控制状态。
+2. 压缩状态、外部信号和 finalize 回灌统一归到 runtime 控制层，不分散到别处。
+3. `SignalRef` 只保存引用，不保存完整正文内容。
+4. 先用轻量 dataclass + enum 固定结构，再在后续步骤接入行为逻辑。
+
+## 当前边界
+
+当前 `RuntimeState` 明确不负责：
+
+1. task graph 正式结构本体
+2. tool 或 subagent 结果正文
+3. verification 结果正文
+4. closeout 正文产物
+
+这些内容会在后续类型中分别进入：
+
+1. `DomainState`
+2. `RunOutcome`
+3. handoff / finalize 相关结构
 
 ## 下一步
 
