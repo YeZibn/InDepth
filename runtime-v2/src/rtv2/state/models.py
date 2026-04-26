@@ -116,3 +116,13 @@ class DomainState:
 
     task_graph_state: Any
     verification_state: VerificationState | None = None
+
+
+@dataclass(slots=True)
+class RunContext:
+    """Minimal formal runtime context shared across the main execution chain."""
+
+    run_identity: RunIdentity
+    run_lifecycle: RunLifecycle
+    runtime_state: RuntimeState
+    domain_state: DomainState

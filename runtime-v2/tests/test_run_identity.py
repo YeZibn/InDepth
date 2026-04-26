@@ -14,6 +14,7 @@ from rtv2.state.models import (
     DomainState,
     ExternalSignalState,
     FinalizeReturnInput,
+    RunContext,
     RunIdentity,
     RunLifecycle,
     RunPhase,
@@ -139,6 +140,28 @@ class RunIdentityTests(unittest.TestCase):
 
         self.assertEqual(domain_state.task_graph_state["graph_id"], "graph-2")
         self.assertIsNone(domain_state.verification_state)
+
+    def test_run_context_keeps_four_top_level_blocks(self):
+        run_context = RunContext(
+            run_identity=RunIdentity(
+                session_id="sess-3",
+                task_id="task-3",
+                run_id="run-3",
+                user_input="Continue step 02.",
+                goal="Land minimal RunContext.",
+            ),
+            run_lifecycle=RunLifecycle(
+                lifecycle_state="running",
+                current_phase=RunPhase.EXECUTE,
+            ),
+            runtime_state=RuntimeState(active_node_id="node-3"),
+            domain_state=DomainState(task_graph_state={"graph_id": "graph-3"}),
+        )
+
+        self.assertEqual(run_context.run_identity.run_id, "run-3")
+        self.assertEqual(run_context.run_lifecycle.current_phase, RunPhase.EXECUTE)
+        self.assertEqual(run_context.runtime_state.active_node_id, "node-3")
+        self.assertEqual(run_context.domain_state.task_graph_state["graph_id"], "graph-3")
 
 
 if __name__ == "__main__":

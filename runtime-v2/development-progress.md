@@ -16,10 +16,10 @@
 
 ## 当前总体状态
 
-- 项目阶段：设计阶段已闭环，进入实现前准备
+- 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 的第一版子任务设计稿已全部落文档
-- 开发状态：尚未开始正式实现
-- 当前重点：按主干优先顺序进入开发落地，并持续记录实际进度
+- 开发状态：`Step 01` 已完成，`Step 02` 正在推进
+- 当前重点：先完成状态层最小正式结构，再进入 `TaskGraph` 骨架
 
 ---
 
@@ -27,8 +27,8 @@
 
 | Step | 说明 | 设计状态 | 开发状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| Step 01 | 实现前对齐与目录骨架 | 已完成 | 未开始 | 先把落地目标和代码骨架入口固定 |
-| Step 02 | 状态层与标识层落地 | 已完成 | 未开始 | 对应 `S2/S4` 主干基础 |
+| Step 01 | 实现前对齐与目录骨架 | 已完成 | 已完成 | 新工作区、说明文档和基础目录已建立 |
+| Step 02 | 状态层与标识层落地 | 已完成 | 进行中 | `RunContext` 已落地，后续进入 host 标识与 `TaskGraphState` 收紧 |
 | Step 03 | Task Graph Skeleton 落地 | 已完成 | 未开始 | 对应 `S5` 的 state/store 骨架 |
 | Step 04 | RuntimeHost 与 Start-Run 主链路 | 已完成 | 未开始 | 对应 `S2-T2/T3/T4/T5` |
 | Step 05 | RuntimeOrchestrator Skeleton | 已完成 | 未开始 | 对应 `S3` 主编排骨架 |
@@ -74,7 +74,21 @@
 当前状态：
 
 - 设计已完成
-- 开发未开始
+- 开发已完成
+
+本步已落地内容：
+
+- 已创建 `runtime-v2/src/rtv2/` 作为新实现包根
+- 已建立 `host / state / task_graph / orchestrator / tools / prompting / finalize / memory / subagent` 目录骨架
+- 已建立 `runtime-v2/tests/` 独立测试目录
+- 已补顶层说明文档：
+  - `runtime-v2/README.md`
+  - `runtime-v2/implementation/README.md`
+  - `runtime-v2/implementation/state.md`
+
+完成时间：
+
+- 2026-04-26
 
 ### Step 02：状态层与标识层落地
 
@@ -96,7 +110,39 @@
 当前状态：
 
 - 设计已完成
-- 开发未开始
+- 开发进行中
+
+当前已完成：
+
+- 任务 01：`RunIdentity`
+- 任务 02：`RunLifecycle`
+- 任务 03：`RuntimeState`
+- 任务 04：`DomainState`
+- 任务 05：极简 `RunContext`
+- 任务 06：`VerificationState`
+
+当前未完成：
+
+- 任务 07：宿主标识结构与 `session_id / task_id / run_id` 对应关系
+
+当前代码结果：
+
+- 状态模型已集中落在 `runtime-v2/src/rtv2/state/models.py`
+- 当前 `RunContext` 已固定为 4 个一级区块：
+  - `run_identity`
+  - `run_lifecycle`
+  - `runtime_state`
+  - `domain_state`
+- `task_graph_state` 当前仍是过渡态引用，等待 `Step 03` 收紧为正式类型
+
+当前验证：
+
+- `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_run_identity.py`
+- 结果：`9 passed`
+
+最近更新时间：
+
+- 2026-04-26
 
 ### Step 03：Task Graph Skeleton 落地
 

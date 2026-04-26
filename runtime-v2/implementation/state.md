@@ -2,12 +2,13 @@
 
 ## 当前范围
 
-当前状态层已正式落地四组最小类型：
+当前状态层已正式落地五组最小类型：
 
 1. `RunIdentity`
 2. `RunLifecycle`
 3. `RuntimeState`
 4. `DomainState`
+5. `RunContext`
 
 对应代码：
 
@@ -205,7 +206,53 @@
 
 ## 下一步
 
-状态层下一步预计继续落以下类型：
+## `RunContext` 的作用
 
-1. 极简 `RunContext`
-2. Step 03 中再把 `task_graph_state` 收紧到正式 `TaskGraphState`
+`RunContext` 用于把前面已经正式化的状态对象收口成主链统一上下文。
+
+当前字段严格保持为 4 个一级区块：
+
+1. `run_identity`
+2. `run_lifecycle`
+3. `runtime_state`
+4. `domain_state`
+
+它当前承担两类职责：
+
+1. 结构收口职责：
+   为 orchestrator、step loop、finalize 提供一致的正式输入面。
+2. 边界约束职责：
+   把第一版运行时常驻状态严格限制在 `S4-T4` 已定稿的最小范围内。
+
+## 为什么现在补 `RunContext`
+
+当前补 `RunContext`，原因是：
+
+1. `Step 02` 的状态壳层到这里才算形成闭环。
+2. 后续 `Step 03` 的 `TaskGraphState` 可以在不改一级结构的前提下继续内聚到 `domain_state`。
+3. orchestrator 后续落地时，需要直接依赖一个正式上下文入口，而不是散落的独立对象。
+
+## 当前设计思想
+
+当前对 `RunContext` 的实现思想有 4 条：
+
+1. 一级结构完全对齐设计稿，不提前引入额外字段。
+2. `RunContext` 只负责组合，不负责承载行为。
+3. `messages`、`execution_summary`、memory runtime state 等内容继续保持不进入正式上下文。
+4. 先把结构钉死，再在后续步骤中逐步收紧内部类型。
+
+## 当前边界
+
+当前 `RunContext` 明确不负责：
+
+1. 提供派生计算逻辑
+2. 管理 phase 切换行为
+3. 承载 task graph 细节实现
+4. 存储 tool / subagent / verification 正文结果
+
+## 下一步
+
+状态层下一步预计进入：
+
+1. Step 03 中把 `task_graph_state` 从过渡态收紧到正式 `TaskGraphState`
+2. 继续把状态对象和 task graph / orchestrator 契约接起来
