@@ -2,11 +2,12 @@
 
 ## 当前范围
 
-当前状态层已正式落地三组最小类型：
+当前状态层已正式落地四组最小类型：
 
 1. `RunIdentity`
 2. `RunLifecycle`
 3. `RuntimeState`
+4. `DomainState`
 
 对应代码：
 
@@ -162,10 +163,49 @@
 2. `RunOutcome`
 3. handoff / finalize 相关结构
 
+## `DomainState` 的作用
+
+`DomainState` 用于承接极简 `RunContext` 中仍然需要长期挂载的领域态。
+
+当前字段包括：
+
+1. `task_graph_state`
+2. `verification_state`
+
+其中：
+
+1. `task_graph_state` 是执行骨架主位
+2. `verification_state` 是按需出现的轻量验证态
+
+## 为什么当前就实现 `DomainState`
+
+当前优先补 `DomainState`，原因是：
+
+1. `RunContext` 的四大一级区块里，`domain_state` 是最后一个未落代码的主位
+2. `S4-T4` 已经明确 verification 不进入一级主状态，而是挂在 `domain_state`
+3. 后续 `RunContext` 的实现需要一个稳定的 domain 壳层
+
+## 当前设计思想
+
+当前对 `DomainState` 的实现思想有 4 条：
+
+1. 先把领域态壳层立住，再分别细化内部对象
+2. `verification_state` 保持轻量，不扩成完整 closeout 产物
+3. 当前不跨步骤提前实现完整 `TaskGraphState`
+4. 因此当前先让 `DomainState` 承接 task graph 对象引用，等 Step 03 再收紧到正式 `TaskGraphState`
+
+## 当前边界
+
+当前 `DomainState` 明确不负责：
+
+1. task graph patch 应用逻辑
+2. verification 结果正文
+3. handoff / closeout 主体
+4. runtime 控制字段
+
 ## 下一步
 
 状态层下一步预计继续落以下类型：
 
-1. `RuntimeState`
-2. `DomainState`
-3. 极简 `RunContext`
+1. 极简 `RunContext`
+2. Step 03 中再把 `task_graph_state` 收紧到正式 `TaskGraphState`

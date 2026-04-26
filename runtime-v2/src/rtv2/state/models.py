@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 
 class RunPhase(StrEnum):
@@ -23,6 +24,13 @@ class SignalSourceType(StrEnum):
     VERIFICATION = "verification"
     SUBAGENT = "subagent"
     TOOL = "tool"
+
+
+class VerificationStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 @dataclass(slots=True)
@@ -92,3 +100,19 @@ class RuntimeState:
     compression_state: CompressionState | None = None
     external_signal_state: ExternalSignalState | None = None
     finalize_return_input: FinalizeReturnInput | None = None
+
+
+@dataclass(slots=True)
+class VerificationState:
+    """Lightweight verification state retained during final verification flow."""
+
+    verification_status: VerificationStatus | None = None
+    latest_result_ref: str = ""
+
+
+@dataclass(slots=True)
+class DomainState:
+    """Domain-facing runtime state hung off the minimal RunContext."""
+
+    task_graph_state: Any
+    verification_state: VerificationState | None = None

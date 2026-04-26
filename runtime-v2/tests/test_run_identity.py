@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
 from rtv2.state.models import (
     BudgetStatus,
     CompressionState,
+    DomainState,
     ExternalSignalState,
     FinalizeReturnInput,
     RunIdentity,
@@ -19,6 +20,8 @@ from rtv2.state.models import (
     RuntimeState,
     SignalRef,
     SignalSourceType,
+    VerificationState,
+    VerificationStatus,
 )
 
 
@@ -113,6 +116,29 @@ class RunIdentityTests(unittest.TestCase):
         self.assertIsNone(runtime_state.compression_state)
         self.assertIsNone(runtime_state.external_signal_state)
         self.assertIsNone(runtime_state.finalize_return_input)
+
+    def test_domain_state_keeps_task_graph_and_optional_verification_state(self):
+        graph_state = {"graph_id": "graph-1", "graph_status": "active"}
+        domain_state = DomainState(
+            task_graph_state=graph_state,
+            verification_state=VerificationState(
+                verification_status=VerificationStatus.RUNNING,
+                latest_result_ref="verifier-result-1",
+            ),
+        )
+
+        self.assertEqual(domain_state.task_graph_state["graph_id"], "graph-1")
+        self.assertEqual(
+            domain_state.verification_state.verification_status,
+            VerificationStatus.RUNNING,
+        )
+        self.assertEqual(domain_state.verification_state.latest_result_ref, "verifier-result-1")
+
+    def test_domain_state_allows_missing_verification_state(self):
+        domain_state = DomainState(task_graph_state={"graph_id": "graph-2"})
+
+        self.assertEqual(domain_state.task_graph_state["graph_id"], "graph-2")
+        self.assertIsNone(domain_state.verification_state)
 
 
 if __name__ == "__main__":
