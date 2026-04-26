@@ -66,12 +66,61 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
-- 任务 03：未开始
+- 任务 02：已完成
+- 任务 03：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 004：完成模块 03 的任务 02 `TaskGraphNode`
+
+- 状态：已完成
+- 范围：完成 task graph 最小状态骨架中的第二个子任务，正式落地 `TaskGraphNode`，并同步收口其直接依赖的 `NodeStatus`，不提前进入 patch 或 store
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/models.py` 落地 `TaskGraphNode`
+  - 已引入 `NodeStatus`
+  - `TaskGraphNode` 当前正式固定以下字段：
+    - `node_id`
+    - `graph_id`
+    - `name`
+    - `kind`
+    - `description`
+    - `node_status`
+    - `owner`
+    - `dependencies`
+    - `order`
+    - `artifacts`
+    - `evidence`
+    - `notes`
+    - `block_reason`
+    - `failure_reason`
+  - `owner` 第一版固定为 `str`
+  - `artifacts / evidence` 第一版固定为 `list[str]`
+  - `dependencies` 第一版固定为依赖 `node_id` 列表
+  - `NodeStatus` 当前按 8 个正式状态收口：
+    - `pending`
+    - `ready`
+    - `running`
+    - `blocked`
+    - `paused`
+    - `completed`
+    - `failed`
+    - `abandoned`
+  - 因为 `NodeStatus` 是 `TaskGraphNode` 的直接依赖，因此模块 03 的任务 03 在本次一并完成，不再单独拆出独立代码落地
+  - `TaskGraphState.nodes` 已从过渡态 `list[Any]` 收紧为 `list[TaskGraphNode]`
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py`
+  - 已补 node 默认值与最小字段测试
+- 遗留问题：
+  - `TaskGraphPatch` 与 `TaskGraphStore` 还未进入实现
+  - graph patch 应用规则还未进入实现
+- 下一步：
+  - 进入下一个模块讨论，决定是否开始 patch / store 的最小正式结构
 
 ### 2026-04-26
 

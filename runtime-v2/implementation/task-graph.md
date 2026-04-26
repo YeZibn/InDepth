@@ -2,12 +2,14 @@
 
 ## 当前范围
 
-当前 task graph 层只正式落地了最小 graph 状态本体，还没有进入 node 正式结构、patch 机制和 store 行为。
+当前 task graph 层已正式落地 graph 本体与 node 本体，但还没有进入 patch 机制和 store 行为。
 
 当前已实现：
 
 1. `TaskGraphStatus`
-2. `TaskGraphState`
+2. `NodeStatus`
+3. `TaskGraphNode`
+4. `TaskGraphState`
 
 对应代码：
 
@@ -16,7 +18,7 @@
 
 ## 为什么先落 `TaskGraphState`
 
-当前先落 `TaskGraphState`，原因是：
+当前先落 `TaskGraphState` 和 `TaskGraphNode`，原因是：
 
 1. `DomainState.task_graph_state` 还处在过渡态引用，下一步最自然就是先把 graph 壳层收紧。
 2. 如果现在直接进入 patch 或 store，会把状态定义和状态变更机制混在一起。
@@ -56,26 +58,69 @@
    - `abandoned`
 4. `version` 从第一版就进入正式结构。
 
+## `TaskGraphNode` 的作用
+
+`TaskGraphNode` 用于表达 task graph 中的最小正式执行单元。
+
+当前字段包括：
+
+1. `node_id`
+2. `graph_id`
+3. `name`
+4. `kind`
+5. `description`
+6. `node_status`
+7. `owner`
+8. `dependencies`
+9. `order`
+10. `artifacts`
+11. `evidence`
+12. `notes`
+13. `block_reason`
+14. `failure_reason`
+
+它当前承担四类职责：
+
+1. 身份职责：
+   用 `node_id / graph_id / name` 固定节点归属与可读标识。
+2. 语义职责：
+   用 `kind / description` 表达节点要做什么。
+3. 执行职责：
+   用 `node_status / owner / dependencies / order` 表达节点当前推进条件与执行归属。
+4. 结果职责：
+   用 `artifacts / evidence / notes` 承接节点产物、证据与备注。
+
+## 当前设计结论补充
+
+当前 `TaskGraphNode` 已定稿的边界如下：
+
+1. `owner` 第一版直接使用 `str`
+2. `artifacts / evidence` 第一版使用 `list[str]`
+3. `dependencies` 第一版只保存依赖 `node_id` 列表
+4. `block_reason / failure_reason` 从第一版进入正式结构
+5. `NodeStatus` 当前按 8 个正式状态收口：
+   - `pending`
+   - `ready`
+   - `running`
+   - `blocked`
+   - `paused`
+   - `completed`
+   - `failed`
+   - `abandoned`
+
 ## 当前实现边界
 
-当前实现还刻意保留了一个过渡点：
+当前这一步已经收紧了一个过渡点：
 
-1. `nodes` 暂时使用过渡态 `list[Any]`
-
-原因是：
-
-1. `TaskGraphNode` 属于模块 03 的下一子任务
-2. 当前不提前把 node 结构一起落地
+1. `TaskGraphState.nodes` 已从过渡态 `list[Any]` 收紧为 `list[TaskGraphNode]`
 
 ## 当前边界
 
 当前 task graph 层明确不负责：
 
-1. `TaskGraphNode` 正式字段定义
-2. `NodeStatus` 正式集合收口
-3. `TaskGraphPatch`
-4. `TaskGraphStore`
-5. graph patch 应用规则
+1. `TaskGraphPatch`
+2. `TaskGraphStore`
+3. graph patch 应用规则
 
 这些内容会在模块 03 后续子任务中继续落地。
 
@@ -83,6 +128,5 @@
 
 task graph 层下一步预计进入：
 
-1. `TaskGraphNode`
-2. `TaskGraphStatus / NodeStatus` 的完整收口
-3. 再进入 patch 与 store
+1. 再检查 `TaskGraphStatus / NodeStatus` 是否还需要补单独收口说明
+2. 再进入 patch 与 store
