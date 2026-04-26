@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 
 @dataclass(slots=True)
@@ -29,3 +30,16 @@ class StartRunIdentity:
     task_id: str
     run_id: str
     user_input: str
+
+
+class HostIdGenerator(Protocol):
+    """Host-owned identifier generator boundary."""
+
+    def create_session_id(self) -> str:
+        """Create a new host session identifier."""
+
+    def create_task_id(self) -> str:
+        """Create a new task identifier."""
+
+    def create_run_id(self) -> str:
+        """Create a new run identifier."""

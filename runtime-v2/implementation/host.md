@@ -2,18 +2,22 @@
 
 ## 当前范围
 
-当前宿主层只正式落地了标识与输入映射相关的最小结构，还没有进入 `RuntimeHost` 行为实现。
+当前宿主层已正式落地标识结构、`RuntimeHost` 最小类壳和显式 ID 生成器依赖，但还没有进入 `start_task(...)` / `submit_user_input(...)` 等行为实现。
 
 当前已实现：
 
 1. `RuntimeHostState`
 2. `HostTaskRef`
 3. `StartRunIdentity`
+4. `HostIdGenerator`
+5. `RuntimeHost`
 
 对应代码：
 
 1. [src/rtv2/host/interfaces.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/host/interfaces.py)
-2. [tests/test_host_identity.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_host_identity.py)
+2. [src/rtv2/host/runtime_host.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/host/runtime_host.py)
+3. [tests/test_host_identity.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_host_identity.py)
+4. [tests/test_runtime_host.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py)
 
 ## 为什么先落宿主标识结构
 
@@ -77,14 +81,67 @@
 3. 等待后继续推进仍然只表现为新的 `StartRunIdentity`，不引入 `resume-run` 结构。
 4. 字段先保持最小，不把历史记录、标签、诊断信息混入第一版正式对象。
 
+## `HostIdGenerator` 的作用
+
+`HostIdGenerator` 用于把 `session_id / task_id / run_id` 的生成职责显式留在 host 侧依赖边界上。
+
+当前接口包括：
+
+1. `create_session_id()`
+2. `create_task_id()`
+3. `create_run_id()`
+
+它当前承担两类职责：
+
+1. 依赖显式化职责：
+   避免把标识生成逻辑硬编码进 `RuntimeHost` 方法内部。
+2. 测试隔离职责：
+   让宿主层测试能稳定控制标识生成结果。
+
+## `RuntimeHost` 的作用
+
+`RuntimeHost` 用于作为宿主层正式对象，承接 host 状态和核心 runtime 依赖。
+
+当前挂载的最小成员包括：
+
+1. `host_state`
+2. `graph_store`
+3. `orchestrator`
+4. `id_generator`
+
+当前已实现的方法包括：
+
+1. `get_host_state()`
+
+它当前承担三类职责：
+
+1. 宿主状态持有职责：
+   内部持有 `RuntimeHostState`，而不是把 `session_id / task_id / run_id` 分散挂在独立字段上。
+2. 依赖聚合职责：
+   统一挂接 `graph_store`、`orchestrator` 和 `id_generator`。
+3. 快照暴露职责：
+   通过 `get_host_state()` 向外暴露宿主状态快照，而不是直接暴露内部状态对象。
+
+## 当前 `RuntimeHost` 设计结论
+
+当前这一步已经定稿的边界如下：
+
+1. `RuntimeHost` 内部直接持有 `host_state: RuntimeHostState`
+2. `RuntimeHost` 显式依赖 `HostIdGenerator`
+3. `RuntimeHost` 当前直接依赖 `RuntimeOrchestrator` 实例，不提前抽接口层
+4. `RuntimeHost` 当前挂接 `TaskGraphStore`
+5. host 初始化时生成新的 `session_id`
+6. 当前先只实现 `get_host_state()`，不提前进入执行主链
+
 ## 当前边界
 
 当前宿主标识层明确不负责：
 
-1. `RuntimeHost` 方法实现
-2. `task_id / run_id` 实际生成策略
-3. 默认 task 自动补建逻辑
-4. 等待后重开新 run 的宿主行为编排
+1. `start_task(...)`
+2. `submit_user_input(...)`
+3. `task_id / run_id` 的实际生成策略实现细节
+4. 默认 task 自动补建逻辑
+5. 等待后重开新 run 的宿主行为编排
 
 这些内容会在 `Step 04` 再正式落地。
 
@@ -92,6 +149,6 @@
 
 宿主层下一步预计进入：
 
-1. `RuntimeHost` 最小接口与行为骨架
-2. `start_task(...)` / `submit_user_input(...)` / `reset_session()` 的最小实现
-3. “等待后重开新 run” 的宿主前置处理
+1. `start_task(...)`
+2. `submit_user_input(...)`
+3. 默认 task 自动补建

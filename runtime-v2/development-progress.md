@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
-- 开发状态：已完成模块 01、模块 02、模块 03、模块 04
-- 当前重点：讨论下一个小模块边界，再继续增量推进
+- 开发状态：已完成模块 01、模块 02、模块 03、模块 04；模块 05 正在推进
+- 当前重点：推进模块 05，并按子任务逐个对齐后再落地
 
 ---
 
@@ -88,9 +88,58 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 05：RuntimeHost 最小主链骨架
+
+- 模块目标：
+  - 建立宿主层正式入口对象
+  - 先打通“发起一次新 run”的最小宿主主链
+  - 保持 host 作为外层唯一正式执行入口，不提前扩展复杂等待状态机
+- 已定子任务：
+  - 任务 01：实现 `RuntimeHost` 最小类壳
+  - 任务 02：实现 `start_task(...)`
+  - 任务 03：实现 `submit_user_input(...)`
+  - 任务 04：实现默认 task 自动补建
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 009：完成模块 05 的任务 01 `RuntimeHost` 最小类壳
+
+- 状态：已完成
+- 范围：完成 RuntimeHost 主链骨架模块中的第一个子任务，只落 `RuntimeHost` 最小类壳、显式 ID 生成器依赖和 `get_host_state()`，不提前实现 `start_task(...)` 或 `submit_user_input(...)`
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/host/runtime_host.py` 落地 `RuntimeHost`
+  - 已在 `runtime-v2/src/rtv2/host/interfaces.py` 落地 `HostIdGenerator`
+  - `RuntimeHost` 当前正式挂接以下成员：
+    - `host_state`
+    - `graph_store`
+    - `orchestrator`
+    - `id_generator`
+  - `RuntimeHost` 当前通过 `HostIdGenerator.create_session_id()` 在初始化时生成 `session_id`
+  - 当前已落正式方法：
+    - `get_host_state()`
+  - `get_host_state()` 当前返回宿主状态快照，不直接暴露内部状态对象
+  - 已同步更新宿主实现说明：
+    - `runtime-v2/implementation/host.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 已补 host 初始化与快照返回测试
+- 遗留问题：
+  - `start_task(...)` 还未进入实现
+  - `submit_user_input(...)` 还未进入实现
+  - 默认 task 自动补建还未进入实现
+- 下一步：
+  - 进入模块 05 的任务 02：讨论并实现 `start_task(...)`
 
 ### 2026-04-26
 
