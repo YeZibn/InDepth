@@ -13,16 +13,17 @@
 
 1. 状态层：
    [state.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/state.md)
+2. 宿主标识层：
+   [host.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/host.md)
 
 ## 预留实现块
 
 后续预计逐步补以下说明文档：
 
-1. `host.md`
-2. `task-graph.md`
-3. `orchestrator.md`
-4. `tools.md`
-5. `prompting.md`
-6. `finalize.md`
-7. `memory.md`
-8. `subagent.md`
+1. `task-graph.md`
+2. `orchestrator.md`
+3. `tools.md`
+4. `prompting.md`
+5. `finalize.md`
+6. `memory.md`
+7. `subagent.md`
