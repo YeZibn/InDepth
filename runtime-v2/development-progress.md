@@ -113,13 +113,14 @@
 
 ### 2026-04-26
 
-#### 记录 011：完成模块 05 的任务 03 `submit_user_input(...)`
+#### 记录 011：完成模块 05 的任务 03 `submit_user_input(...)` 与任务 04 默认 task 自动补建
 
 - 状态：已完成
-- 范围：完成 RuntimeHost 主链骨架模块中的第三个子任务，正式落地宿主唯一执行入口 `submit_user_input(...)`；同时因为默认 task 自动补建是该入口的内在依赖，因此模块 05 的任务 04 在本次一并收口
+- 范围：完成 RuntimeHost 主链骨架模块中的任务 03 和任务 04，正式落地宿主唯一执行入口 `submit_user_input(...)`，并一并收口默认 task 自动补建
 - 结果：
   - 已在 `runtime-v2/src/rtv2/host/interfaces.py` 落地 `HostRunResult`
   - 已在 `runtime-v2/src/rtv2/host/runtime_host.py` 落地 `submit_user_input(user_input: str)`
+  - 已在 `submit_user_input(...)` 内正式接入默认 task 自动补建
   - `submit_user_input(...)` 当前行为已明确：
     - 若当前没有 `task_id`，先自动补建默认 task
     - 默认 task 自动补建直接复用 `start_task()`
