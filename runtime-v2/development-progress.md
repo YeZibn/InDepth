@@ -104,12 +104,50 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
-- 任务 04：未开始
+- 任务 03：已完成
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 011：完成模块 05 的任务 03 `submit_user_input(...)`
+
+- 状态：已完成
+- 范围：完成 RuntimeHost 主链骨架模块中的第三个子任务，正式落地宿主唯一执行入口 `submit_user_input(...)`；同时因为默认 task 自动补建是该入口的内在依赖，因此模块 05 的任务 04 在本次一并收口
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/host/interfaces.py` 落地 `HostRunResult`
+  - 已在 `runtime-v2/src/rtv2/host/runtime_host.py` 落地 `submit_user_input(user_input: str)`
+  - `submit_user_input(...)` 当前行为已明确：
+    - 若当前没有 `task_id`，先自动补建默认 task
+    - 默认 task 自动补建直接复用 `start_task()`
+    - 通过 `HostIdGenerator.create_run_id()` 生成新的 `run_id`
+    - 组装 `StartRunIdentity`
+    - 调用 `orchestrator.run(...)`
+    - 回写 `host_state.active_run_id`
+    - 返回最小 `HostRunResult`
+  - `HostRunResult` 当前正式固定以下字段：
+    - `task_id`
+    - `run_id`
+    - `runtime_state`
+    - `output_text`
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 落地最小宿主可调用入口 `run(...)`
+  - 当前 orchestrator 返回显式占位结果：
+    - `runtime_state = "stub"`
+    - `output_text = ""`
+  - 当前占位值已显式标注为 stub，不伪装成真实执行完成链路
+  - 已同步更新宿主实现说明：
+    - `runtime-v2/implementation/host.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 已补默认 task 自动补建和复用已有 task 的提交测试
+- 遗留问题：
+  - orchestrator 仍然只是宿主可调用 stub，尚未进入真实 phase 主链
+  - 等待后重开新 run 的宿主逻辑还未进入实现
+- 下一步：
+  - 讨论下一个小模块边界，决定是否转入 orchestrator 真正主链骨架
 
 ### 2026-04-26
 

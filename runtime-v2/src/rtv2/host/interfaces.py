@@ -32,6 +32,16 @@ class StartRunIdentity:
     user_input: str
 
 
+@dataclass(slots=True)
+class HostRunResult:
+    """Minimal host-facing run result returned by submit_user_input."""
+
+    task_id: str
+    run_id: str
+    runtime_state: str
+    output_text: str
+
+
 class HostIdGenerator(Protocol):
     """Host-owned identifier generator boundary."""
 

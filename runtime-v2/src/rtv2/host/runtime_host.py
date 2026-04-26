@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from rtv2.host.interfaces import HostIdGenerator, HostTaskRef, RuntimeHostState
+from rtv2.host.interfaces import (
+    HostIdGenerator,
+    HostRunResult,
+    HostTaskRef,
+    RuntimeHostState,
+    StartRunIdentity,
+)
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
 from rtv2.task_graph.store import TaskGraphStore
 
@@ -39,3 +45,20 @@ class RuntimeHost:
         self.host_state.current_task_id = task_id
         self.host_state.active_run_id = ""
         return HostTaskRef(task_id=task_id)
+
+    def submit_user_input(self, user_input: str) -> HostRunResult:
+        """Submit user input through the single formal host execution entrypoint."""
+
+        if not self.host_state.current_task_id:
+            self.start_task()
+
+        run_id = self.id_generator.create_run_id()
+        start_run_identity = StartRunIdentity(
+            session_id=self.host_state.session_id,
+            task_id=self.host_state.current_task_id,
+            run_id=run_id,
+            user_input=user_input,
+        )
+        run_result = self.orchestrator.run(start_run_identity)
+        self.host_state.active_run_id = run_id
+        return run_result

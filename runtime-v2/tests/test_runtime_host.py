@@ -17,6 +17,7 @@ class StubHostIdGenerator:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.task_counter = 0
+        self.run_counter = 0
 
     def create_session_id(self) -> str:
         self.calls.append("session")
@@ -29,7 +30,8 @@ class StubHostIdGenerator:
 
     def create_run_id(self) -> str:
         self.calls.append("run")
-        return "run-1"
+        self.run_counter += 1
+        return f"run-{self.run_counter}"
 
 
 class RuntimeHostTests(unittest.TestCase):
@@ -100,6 +102,44 @@ class RuntimeHostTests(unittest.TestCase):
         self.assertEqual(second_task.task_id, "task-2")
         self.assertEqual(host.host_state.current_task_id, "task-2")
         self.assertEqual(host.host_state.active_run_id, "")
+
+    def test_submit_user_input_auto_creates_default_task_and_active_run(self):
+        id_generator = StubHostIdGenerator()
+        host = RuntimeHost(
+            graph_store=InMemoryTaskGraphStore(),
+            orchestrator=RuntimeOrchestrator(),
+            id_generator=id_generator,
+        )
+
+        run_result = host.submit_user_input("Continue runtime-v2 host implementation.")
+
+        self.assertEqual(run_result.task_id, "task-1")
+        self.assertEqual(run_result.run_id, "run-1")
+        self.assertEqual(run_result.runtime_state, "stub")
+        self.assertEqual(run_result.output_text, "")
+        self.assertEqual(host.host_state.current_task_id, "task-1")
+        self.assertEqual(host.host_state.active_run_id, "run-1")
+        self.assertEqual(id_generator.calls, ["session", "task", "run"])
+
+    def test_submit_user_input_reuses_existing_task_and_generates_new_run(self):
+        id_generator = StubHostIdGenerator()
+        host = RuntimeHost(
+            graph_store=InMemoryTaskGraphStore(),
+            orchestrator=RuntimeOrchestrator(),
+            id_generator=id_generator,
+        )
+        host.start_task(label="Host task")
+
+        first_result = host.submit_user_input("First input")
+        second_result = host.submit_user_input("Second input")
+
+        self.assertEqual(first_result.task_id, "task-1")
+        self.assertEqual(second_result.task_id, "task-1")
+        self.assertEqual(first_result.run_id, "run-1")
+        self.assertEqual(second_result.run_id, "run-2")
+        self.assertEqual(host.host_state.current_task_id, "task-1")
+        self.assertEqual(host.host_state.active_run_id, "run-2")
+        self.assertEqual(id_generator.calls, ["session", "task", "run", "run"])
 
 
 if __name__ == "__main__":

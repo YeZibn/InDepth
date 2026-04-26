@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前宿主层已正式落地标识结构、`RuntimeHost` 最小类壳、显式 ID 生成器依赖和 `start_task(...)`，但还没有进入 `submit_user_input(...)` 等执行行为实现。
+当前宿主层已正式落地标识结构、`RuntimeHost` 最小类壳、显式 ID 生成器依赖、`start_task(...)` 和 `submit_user_input(...)` 的最小宿主入口，但 orchestrator 侧仍是显式 stub。
 
 当前已实现：
 
@@ -11,6 +11,7 @@
 3. `StartRunIdentity`
 4. `HostIdGenerator`
 5. `RuntimeHost`
+6. `HostRunResult`
 
 对应代码：
 
@@ -113,6 +114,7 @@
 
 1. `get_host_state()`
 2. `start_task(label: str = "")`
+3. `submit_user_input(user_input: str)`
 
 它当前承担三类职责：
 
@@ -124,6 +126,8 @@
    通过 `get_host_state()` 向外暴露宿主状态快照，而不是直接暴露内部状态对象。
 4. 任务切换职责：
    通过 `start_task(...)` 显式切换宿主当前任务上下文，但不触发 runtime 执行。
+5. 执行入口职责：
+   通过 `submit_user_input(...)` 作为唯一正式宿主执行入口，确保一次新 run 能被正式发起。
 
 ## 当前 `RuntimeHost` 设计结论
 
@@ -138,15 +142,18 @@
 7. `start_task(...)` 总是生成新的 `task_id`
 8. `start_task(...)` 复用当前 `session_id` 并清空 `active_run_id`
 9. `start_task(...)` 不触发 `orchestrator` 或 `graph_store`
+10. `submit_user_input(...)` 当前内建默认 task 自动补建
+11. 默认 task 自动补建直接复用 `start_task()`
+12. `submit_user_input(...)` 当前通过 `StartRunIdentity` 调用 `orchestrator.run(...)`
+13. 当前 `HostRunResult.runtime_state` 使用显式占位值 `stub`，不伪装成真实完成链路
 
 ## 当前边界
 
 当前宿主标识层明确不负责：
 
-1. `submit_user_input(...)`
-2. `task_id / run_id` 的实际生成策略实现细节
-3. 默认 task 自动补建逻辑
-4. 等待后重开新 run 的宿主行为编排
+1. `task_id / run_id` 的实际生成策略实现细节
+2. 真实 orchestrator phase 执行链
+3. 等待后重开新 run 的宿主行为编排
 
 这些内容会在 `Step 04` 再正式落地。
 
@@ -154,5 +161,5 @@
 
 宿主层下一步预计进入：
 
-1. `submit_user_input(...)`
-2. 默认 task 自动补建
+1. 检查默认 task 自动补建是否需要单独记录为随 `submit_user_input(...)` 一并收口
+2. 再进入等待后重开新 run 的宿主逻辑
