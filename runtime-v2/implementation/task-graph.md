@@ -2,14 +2,16 @@
 
 ## 当前范围
 
-当前 task graph 层已正式落地 graph 本体与 node 本体，但还没有进入 patch 机制和 store 行为。
+当前 task graph 层已正式落地 graph 本体、node 本体和最小 patch 结构，但还没有进入 store 行为。
 
 当前已实现：
 
 1. `TaskGraphStatus`
 2. `NodeStatus`
 3. `TaskGraphNode`
-4. `TaskGraphState`
+4. `NodePatch`
+5. `TaskGraphPatch`
+6. `TaskGraphState`
 
 对应代码：
 
@@ -114,11 +116,51 @@
 
 1. `TaskGraphState.nodes` 已从过渡态 `list[Any]` 收紧为 `list[TaskGraphNode]`
 
+同时也新增了一个过渡点：
+
+1. `TaskGraphPatch.node_updates` 已正式进入结构
+2. 但 `NodePatch` 当前仍是过渡壳层，只固定 `node_id`
+
+## `TaskGraphPatch` 的作用
+
+`TaskGraphPatch` 用于表达一次 `step` 对 task graph 的正式修改结果。
+
+当前字段包括：
+
+1. `node_updates`
+2. `new_nodes`
+3. `active_node_id`
+4. `graph_status`
+
+它当前承担三类职责：
+
+1. 变更收口职责：
+   把一次 step 对 graph 的正式修改结果收口成统一对象。
+2. graph 写回职责：
+   为后续 store 提供统一的 patch 输入。
+3. 边界约束职责：
+   明确第一版 patch 只承接正式状态修改，不扩成 graph 操作命令。
+
+## 当前 `TaskGraphPatch` 设计结论
+
+当前这一步已经定稿的边界如下：
+
+1. `node_updates` 保留为数组
+2. `new_nodes` 直接使用完整 `TaskGraphNode`
+3. `active_node_id` 用 `None` 表达“不修改”
+4. `graph_status` 用 `None` 表达“不修改”
+5. 第一版明确不引入：
+   - `graph_notes`
+   - `remove_nodes`
+   - `replace_nodes`
+   - `version_bump`
+   - 调度控制字段
+
 ## 当前边界
 
 当前 task graph 层明确不负责：
 
-1. `TaskGraphPatch`
+1. `NodePatch` 的完整字段级更新范围
 2. `TaskGraphStore`
 3. graph patch 应用规则
 
@@ -128,5 +170,6 @@
 
 task graph 层下一步预计进入：
 
-1. 再检查 `TaskGraphStatus / NodeStatus` 是否还需要补单独收口说明
-2. 再进入 patch 与 store
+1. `NodePatch`
+2. `TaskGraphStore`
+3. 内存版 `TaskGraphStore`

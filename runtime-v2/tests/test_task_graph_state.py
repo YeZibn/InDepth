@@ -8,10 +8,46 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from rtv2.task_graph.models import NodeStatus, TaskGraphNode, TaskGraphState, TaskGraphStatus
+from rtv2.task_graph.models import (
+    NodePatch,
+    NodeStatus,
+    TaskGraphNode,
+    TaskGraphPatch,
+    TaskGraphState,
+    TaskGraphStatus,
+)
 
 
 class TaskGraphStateTests(unittest.TestCase):
+    def test_task_graph_patch_keeps_minimal_formal_fields(self):
+        patch = TaskGraphPatch(
+            node_updates=[NodePatch(node_id="node-1")],
+            new_nodes=[
+                TaskGraphNode(
+                    node_id="node-2",
+                    graph_id="graph-1",
+                    name="Verify result",
+                    kind="verification",
+                    node_status=NodeStatus.READY,
+                )
+            ],
+            active_node_id="node-2",
+            graph_status=TaskGraphStatus.ACTIVE,
+        )
+
+        self.assertEqual(patch.node_updates[0].node_id, "node-1")
+        self.assertEqual(patch.new_nodes[0].node_id, "node-2")
+        self.assertEqual(patch.active_node_id, "node-2")
+        self.assertEqual(patch.graph_status, TaskGraphStatus.ACTIVE)
+
+    def test_task_graph_patch_defaults_to_no_graph_changes(self):
+        patch = TaskGraphPatch()
+
+        self.assertEqual(patch.node_updates, [])
+        self.assertEqual(patch.new_nodes, [])
+        self.assertIsNone(patch.active_node_id)
+        self.assertIsNone(patch.graph_status)
+
     def test_task_graph_node_keeps_minimal_formal_fields(self):
         node = TaskGraphNode(
             node_id="node-1",

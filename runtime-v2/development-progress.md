@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
-- 开发状态：已完成模块 01、模块 02；模块 03 正在推进
-- 当前重点：推进模块 03，并按子任务逐个对齐后再落地
+- 开发状态：已完成模块 01、模块 02、模块 03；模块 04 正在推进
+- 当前重点：推进模块 04，并按子任务逐个对齐后再落地
 
 ---
 
@@ -69,9 +69,64 @@
 - 任务 02：已完成
 - 任务 03：已完成
 
+### 模块 04：Task Graph Patch 与最小 Store 骨架
+
+- 模块目标：
+  - 定义 step 对 task graph 的正式修改结果结构
+  - 定义 task graph 的最小读写边界与状态持有层
+  - 让 graph 状态具备“可被正式修改、可被正式保存”的基础能力
+- 已定子任务：
+  - 任务 01：实现 `TaskGraphPatch`
+  - 任务 02：实现 `NodePatch`
+  - 任务 03：实现 `TaskGraphStore` 接口
+  - 任务 04：实现内存版 `TaskGraphStore`
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 005：完成模块 04 的任务 01 `TaskGraphPatch`
+
+- 状态：已完成
+- 范围：完成 task graph patch/store 模块中的第一个子任务，只落 `TaskGraphPatch` 本体，并用过渡型 `NodePatch` 壳层承接 `node_updates`，不提前实现 `NodePatch` 的完整字段集合，也不进入 store
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/models.py` 落地 `TaskGraphPatch`
+  - `TaskGraphPatch` 当前正式固定以下字段：
+    - `node_updates`
+    - `new_nodes`
+    - `active_node_id`
+    - `graph_status`
+  - `node_updates` 当前保留为数组
+  - `new_nodes` 当前直接使用完整 `TaskGraphNode`
+  - `active_node_id` 当前使用 `None` 表达“不修改”
+  - `graph_status` 当前使用 `None` 表达“不修改”
+  - 第一版明确不引入：
+    - `graph_notes`
+    - `remove_nodes`
+    - `replace_nodes`
+    - `version_bump`
+    - 调度控制字段
+  - 已新增过渡型 `NodePatch` 壳层，当前只固定 `node_id`
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py`
+  - 已补 patch 的默认值与最小字段测试
+- 遗留问题：
+  - `NodePatch` 还未收紧到正式字段级更新结构
+  - `TaskGraphStore` 还未进入实现
+  - graph patch 应用规则还未进入实现
+- 下一步：
+  - 进入模块 04 的任务 02：讨论并实现 `NodePatch`
 
 ### 2026-04-26
 

@@ -45,6 +45,23 @@ class TaskGraphNode:
 
 
 @dataclass(slots=True)
+class NodePatch:
+    """Transitional node patch shell pending formal field-level update scope."""
+
+    node_id: str
+
+
+@dataclass(slots=True)
+class TaskGraphPatch:
+    """Minimal formal graph patch produced by a step result."""
+
+    node_updates: list[NodePatch] = field(default_factory=list)
+    new_nodes: list[TaskGraphNode] = field(default_factory=list)
+    active_node_id: str | None = None
+    graph_status: TaskGraphStatus | None = None
+
+
+@dataclass(slots=True)
 class TaskGraphState:
     """Minimal formal task graph state."""
 
