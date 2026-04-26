@@ -85,12 +85,43 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
+- 任务 03：已完成
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-26
+
+#### 记录 007：完成模块 04 的任务 03 `TaskGraphStore` 接口
+
+- 状态：已完成
+- 范围：完成 task graph patch/store 模块中的第三个子任务，只落 `TaskGraphStore` 接口契约，不提前实现内存版 store
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/store.py` 落地 `TaskGraphStore`
+  - `TaskGraphStore` 当前采用 `Protocol`
+  - 当前正式固定以下 6 个接口：
+    - `get_graph`
+    - `save_graph`
+    - `apply_patch`
+    - `get_node`
+    - `get_active_node`
+    - `list_nodes`
+  - store 当前明确只承担 graph 读写边界，不承担调度、推理或自动修复能力
+  - 当前已明确：
+    - `apply_patch` 找不到 `graph_id` 时，后续实现应抛错
+    - `save_graph` 返回 `None`
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py`
+  - 已补接口方法和类型注解契约测试
+- 遗留问题：
+  - 内存版 `TaskGraphStore` 还未进入实现
+  - patch 应用细则还未进入实现
+- 下一步：
+  - 进入模块 04 的任务 04：讨论并实现内存版 `TaskGraphStore`
 
 ### 2026-04-26
 

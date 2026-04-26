@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前 task graph 层已正式落地 graph 本体、node 本体和最小 patch 结构，但还没有进入 store 行为。
+当前 task graph 层已正式落地 graph 本体、node 本体、最小 patch 结构和 store 接口，但还没有进入 store 实现。
 
 当前已实现：
 
@@ -12,6 +12,7 @@
 4. `NodePatch`
 5. `TaskGraphPatch`
 6. `TaskGraphState`
+7. `TaskGraphStore`
 
 对应代码：
 
@@ -198,14 +199,45 @@
 
 当前 task graph 层明确不负责：
 
-1. `TaskGraphStore`
+1. `TaskGraphStore` 的具体实现
 2. graph patch 应用规则
 
 这些内容会在模块 04 后续子任务中继续落地。
+
+## `TaskGraphStore` 的作用
+
+`TaskGraphStore` 用于定义 task graph 的最小读写边界。
+
+当前接口包括：
+
+1. `get_graph`
+2. `save_graph`
+3. `apply_patch`
+4. `get_node`
+5. `get_active_node`
+6. `list_nodes`
+
+它当前承担三类职责：
+
+1. 状态持有职责：
+   为 graph 提供正式的读取与写回边界。
+2. patch 落点职责：
+   为 `TaskGraphPatch` 提供正式应用入口。
+3. 读取便利职责：
+   为上层提供按 graph、按 node、按 active node 的稳定读取面。
+
+## 当前 `TaskGraphStore` 设计结论
+
+当前这一步已经定稿的边界如下：
+
+1. `TaskGraphStore` 采用 `Protocol`
+2. store 不承担调度、推理或自动修复能力
+3. `apply_patch` 找不到 `graph_id` 时，后续实现应抛错，而不是返回 `None`
+4. `save_graph` 返回 `None`
+5. 当前接口层只定义契约，不提前实现内存策略或拷贝策略
 
 ## 下一步
 
 task graph 层下一步预计进入：
 
-1. `TaskGraphStore`
-2. 内存版 `TaskGraphStore`
+1. 内存版 `TaskGraphStore`
