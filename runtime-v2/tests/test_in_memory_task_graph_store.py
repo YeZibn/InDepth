@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
 from rtv2.task_graph.models import (
     NodePatch,
     NodeStatus,
+    ResultRef,
     TaskGraphNode,
     TaskGraphPatch,
     TaskGraphState,
@@ -92,6 +93,98 @@ class InMemoryTaskGraphStoreTests(unittest.TestCase):
         self.assertEqual(updated_graph.nodes[0].notes, ["Execution completed."])
         self.assertEqual(updated_graph.nodes[1].node_id, "node-2")
         self.assertEqual(updated_graph.nodes[1].node_status, NodeStatus.READY)
+
+    def test_apply_patch_merges_notes_artifacts_and_evidence_with_append_semantics(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-merge",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-merge",
+                        name="Execute",
+                        kind="execution",
+                        notes=["Existing note"],
+                        artifacts=[
+                            ResultRef(ref_id="artifact-1", ref_type="file", title="Old artifact"),
+                        ],
+                        evidence=[
+                            ResultRef(ref_id="evidence-1", ref_type="search", title="Old evidence"),
+                        ],
+                        block_reason="old block",
+                        failure_reason="old failure",
+                    )
+                ],
+            )
+        )
+
+        updated_graph = store.apply_patch(
+            "graph-merge",
+            TaskGraphPatch(
+                node_updates=[
+                    NodePatch(
+                        node_id="node-1",
+                        notes=["", "New note"],
+                        artifacts=[
+                            ResultRef(ref_id="artifact-1", ref_type="file", title="Duplicate artifact"),
+                            ResultRef(ref_id="artifact-2", ref_type="file", title="New artifact"),
+                        ],
+                        evidence=[
+                            ResultRef(ref_id="evidence-1", ref_type="search", title="Duplicate evidence"),
+                            ResultRef(ref_id="evidence-2", ref_type="search", title="New evidence"),
+                        ],
+                        block_reason="new block",
+                        failure_reason="new failure",
+                    )
+                ]
+            ),
+        )
+
+        updated_node = updated_graph.nodes[0]
+        self.assertEqual(updated_node.notes, ["Existing note", "New note"])
+        self.assertEqual([item.ref_id for item in updated_node.artifacts], ["artifact-1", "artifact-2"])
+        self.assertEqual([item.ref_id for item in updated_node.evidence], ["evidence-1", "evidence-2"])
+        self.assertEqual(updated_node.block_reason, "new block")
+        self.assertEqual(updated_node.failure_reason, "new failure")
+
+    def test_apply_patch_treats_empty_patch_collections_as_noop_merge(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-empty-merge",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-empty-merge",
+                        name="Execute",
+                        kind="execution",
+                        notes=["Existing note"],
+                        artifacts=[ResultRef(ref_id="artifact-1", ref_type="file")],
+                        evidence=[ResultRef(ref_id="evidence-1", ref_type="search")],
+                    )
+                ],
+            )
+        )
+
+        updated_graph = store.apply_patch(
+            "graph-empty-merge",
+            TaskGraphPatch(
+                node_updates=[
+                    NodePatch(
+                        node_id="node-1",
+                        notes=[],
+                        artifacts=[],
+                        evidence=[],
+                    )
+                ]
+            ),
+        )
+
+        updated_node = updated_graph.nodes[0]
+        self.assertEqual(updated_node.notes, ["Existing note"])
+        self.assertEqual([item.ref_id for item in updated_node.artifacts], ["artifact-1"])
+        self.assertEqual([item.ref_id for item in updated_node.evidence], ["evidence-1"])
 
     def test_get_node_get_active_node_and_list_nodes_read_saved_graph(self):
         store = InMemoryTaskGraphStore()

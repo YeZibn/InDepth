@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Protocol
 
-from rtv2.task_graph.models import NodePatch, TaskGraphNode, TaskGraphPatch, TaskGraphState
+from rtv2.task_graph.models import NodePatch, ResultRef, TaskGraphNode, TaskGraphPatch, TaskGraphState
 
 
 class TaskGraphStore(Protocol):
@@ -109,12 +109,26 @@ class InMemoryTaskGraphStore:
         if patch.order is not None:
             node.order = patch.order
         if patch.artifacts is not None:
-            node.artifacts = list(patch.artifacts)
+            InMemoryTaskGraphStore._merge_result_refs(node.artifacts, patch.artifacts)
         if patch.evidence is not None:
-            node.evidence = list(patch.evidence)
+            InMemoryTaskGraphStore._merge_result_refs(node.evidence, patch.evidence)
         if patch.notes is not None:
-            node.notes = list(patch.notes)
+            InMemoryTaskGraphStore._merge_notes(node.notes, patch.notes)
         if patch.block_reason is not None:
             node.block_reason = patch.block_reason
         if patch.failure_reason is not None:
             node.failure_reason = patch.failure_reason
+
+    @staticmethod
+    def _merge_notes(target: list[str], incoming: list[str]) -> None:
+        for note in incoming:
+            if note:
+                target.append(note)
+
+    @staticmethod
+    def _merge_result_refs(target: list[ResultRef], incoming: list[ResultRef]) -> None:
+        existing_ids = {item.ref_id for item in target}
+        for item in incoming:
+            if item.ref_id not in existing_ids:
+                target.append(deepcopy(item))
+                existing_ids.add(item.ref_id)

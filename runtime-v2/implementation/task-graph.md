@@ -8,12 +8,13 @@
 
 1. `TaskGraphStatus`
 2. `NodeStatus`
-3. `TaskGraphNode`
-4. `NodePatch`
-5. `TaskGraphPatch`
-6. `TaskGraphState`
-7. `TaskGraphStore`
-8. `InMemoryTaskGraphStore`
+3. `ResultRef`
+4. `TaskGraphNode`
+5. `NodePatch`
+6. `TaskGraphPatch`
+7. `TaskGraphState`
+8. `TaskGraphStore`
+9. `InMemoryTaskGraphStore`
 
 对应代码：
 
@@ -99,7 +100,7 @@
 当前 `TaskGraphNode` 已定稿的边界如下：
 
 1. `owner` 第一版直接使用 `str`
-2. `artifacts / evidence` 第一版使用 `list[str]`
+2. `artifacts / evidence` 已升级为统一 `list[ResultRef]`
 3. `dependencies` 第一版只保存依赖 `node_id` 列表
 4. `block_reason / failure_reason` 从第一版进入正式结构
 5. `NodeStatus` 当前按 8 个正式状态收口：
@@ -193,8 +194,10 @@
    - `kind`
    - `description`
 3. `dependencies` 第一版允许整体替换
-4. `artifacts / evidence / notes` 第一版都按整字段替换处理
-5. `None` 统一表达“不修改”
+4. `notes` 第一版采用追加语义
+5. `artifacts / evidence` 第一版采用基于 `ResultRef.ref_id` 的去重追加语义
+6. `block_reason / failure_reason` 第一版采用覆盖语义
+7. `None` 统一表达“不修改”
 
 ## 当前边界
 
@@ -217,6 +220,48 @@
 4. `get_node`
 5. `get_active_node`
 6. `list_nodes`
+
+## `ResultRef` 的作用
+
+`ResultRef` 用于作为 `artifacts / evidence` 的统一最小引用结构。
+
+当前字段包括：
+
+1. `ref_id`
+2. `ref_type`
+3. `title`
+4. `content`
+
+它当前承担两类职责：
+
+1. 引用职责：
+   用统一结构表达执行产物或证据，而不再退回裸字符串。
+2. 去重职责：
+   为 `apply_patch(...)` 的追加式 merge 提供稳定的最小键位。
+
+## `InMemoryTaskGraphStore.apply_patch(...)` 的当前合并语义
+
+当前执行推进阶段，内存版 store 已正式落地以下最小 merge 规则：
+
+1. `notes`
+   - 只追加非空字符串
+   - 不做文本去重
+2. `artifacts`
+   - 使用 `ResultRef[]`
+   - 按 `ref_id` 去重追加
+   - 不覆盖历史列表
+3. `evidence`
+   - 使用 `ResultRef[]`
+   - 按 `ref_id` 去重追加
+   - 不覆盖历史列表
+4. `block_reason / failure_reason`
+   - 仍采用覆盖写入
+
+当前这一步明确：
+
+1. 当前只实现合并语义
+2. 还没有进入基础一致性校验
+3. 还没有进入状态流转校验
 
 它当前承担三类职责：
 

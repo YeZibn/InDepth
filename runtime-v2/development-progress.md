@@ -160,13 +160,48 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
+- 任务 02：已完成
 - 任务 03：未开始
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 019：完成模块 08 的任务 02 patch 合并语义
+
+- 状态：已完成
+- 范围：完成模块 08 的第二个子任务，只落 patch 合并语义，不提前进入基础一致性校验或状态流转校验
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/models.py` 引入统一引用结构 `ResultRef`
+  - 已把 `TaskGraphNode.artifacts / evidence` 与 `NodePatch.artifacts / evidence` 从裸 `list[str]` 升级为 `list[ResultRef]`
+  - 已在 `runtime-v2/src/rtv2/task_graph/store.py` 落地执行推进阶段的最小 merge 语义：
+    - `notes` 只追加非空字符串
+    - `artifacts` 按 `ref_id` 去重追加
+    - `evidence` 按 `ref_id` 去重追加
+    - `block_reason / failure_reason` 保持覆盖语义
+  - 当前已明确：
+    - `None` 仍表示“不修改”
+    - 空列表当前等价于 no-op merge，不表示清空
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - 已补内存版 store 测试：
+    - 追加 notes
+    - `ResultRef` 去重追加
+    - 空集合 no-op merge
+  - 已执行语法检查：
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py`
+  - 当前未执行完整自动化测试：
+    - 本机默认 `python3` 为 3.9
+    - 项目中存在 `dataclass(slots=True)`，运行测试需 Python 3.10+
+- 遗留问题：
+  - `apply_patch(...)` 还未落基础一致性校验
+  - `apply_patch(...)` 还未落状态流转校验
+- 下一步：
+  - 进入模块 08 的任务 03：实现 patch 基础一致性校验
 
 ### 2026-04-27
 

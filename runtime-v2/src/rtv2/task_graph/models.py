@@ -25,6 +25,16 @@ class NodeStatus(StrEnum):
 
 
 @dataclass(slots=True)
+class ResultRef:
+    """Minimal reference object used by artifacts and evidence collections."""
+
+    ref_id: str
+    ref_type: str
+    title: str = ""
+    content: str = ""
+
+
+@dataclass(slots=True)
 class TaskGraphNode:
     """Minimal formal execution node in a task graph."""
 
@@ -37,8 +47,8 @@ class TaskGraphNode:
     owner: str = ""
     dependencies: list[str] = field(default_factory=list)
     order: int = 0
-    artifacts: list[str] = field(default_factory=list)
-    evidence: list[str] = field(default_factory=list)
+    artifacts: list[ResultRef] = field(default_factory=list)
+    evidence: list[ResultRef] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     block_reason: str = ""
     failure_reason: str = ""
@@ -53,8 +63,8 @@ class NodePatch:
     owner: str | None = None
     dependencies: list[str] | None = None
     order: int | None = None
-    artifacts: list[str] | None = None
-    evidence: list[str] | None = None
+    artifacts: list[ResultRef] | None = None
+    evidence: list[ResultRef] | None = None
     notes: list[str] | None = None
     block_reason: str | None = None
     failure_reason: str | None = None
