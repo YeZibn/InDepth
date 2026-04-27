@@ -161,12 +161,46 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
+- 任务 03：已完成
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 020：完成模块 08 的任务 03 patch 基础一致性校验
+
+- 状态：已完成
+- 范围：完成模块 08 的第三个子任务，只落 patch 基础一致性校验，不提前进入状态流转校验
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/store.py` 为 `InMemoryTaskGraphStore.apply_patch(...)` 补齐基础一致性校验：
+    - `node_updates` 目标节点不存在时抛错
+    - `blocked` node patch 缺少 `block_reason` 时抛错
+    - `failed` node patch 缺少 `failure_reason` 时抛错
+    - `ResultRef.ref_id` 为空时抛错
+    - 新增 node 若为 `blocked / failed` 且缺少原因字段时抛错
+  - 当前已明确：
+    - 本任务只处理基础一致性，不处理状态流转合法性
+    - 状态流转集合仍留在模块 08 的任务 04
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - 已补内存版 store 反向测试：
+    - 缺少 `block_reason`
+    - 缺少 `failure_reason`
+    - patch 引用 `ref_id` 为空
+    - new node 引用或原因字段非法
+  - 已执行语法检查：
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py`
+  - 当前未执行完整自动化测试：
+    - 本机默认 `python3` 为 3.9
+    - 项目中存在 `dataclass(slots=True)`，运行测试需 Python 3.10+
+- 遗留问题：
+  - `apply_patch(...)` 还未落状态流转校验
+- 下一步：
+  - 进入模块 08 的任务 04：实现状态流转校验与 orchestrator 集成收口
 
 ### 2026-04-27
 

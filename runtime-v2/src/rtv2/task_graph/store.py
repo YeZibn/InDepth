@@ -55,11 +55,13 @@ class InMemoryTaskGraphStore:
         for node_patch in patch.node_updates:
             if node_patch.node_id not in node_index:
                 raise KeyError(f"Task graph node not found: {node_patch.node_id}")
+            self._validate_node_patch(node_patch)
             self._apply_node_patch(updated_nodes[node_index[node_patch.node_id]], node_patch)
 
         for new_node in patch.new_nodes:
             if new_node.node_id in node_index:
                 raise ValueError(f"Duplicate task graph node id: {new_node.node_id}")
+            self._validate_new_node(new_node)
             updated_nodes.append(deepcopy(new_node))
             node_index[new_node.node_id] = len(updated_nodes) - 1
 
@@ -132,3 +134,32 @@ class InMemoryTaskGraphStore:
             if item.ref_id not in existing_ids:
                 target.append(deepcopy(item))
                 existing_ids.add(item.ref_id)
+
+    @staticmethod
+    def _validate_node_patch(patch: NodePatch) -> None:
+        if patch.node_status is NodeStatus.BLOCKED and not patch.block_reason:
+            raise ValueError("Blocked node patch requires block_reason")
+        if patch.node_status is NodeStatus.FAILED and not patch.failure_reason:
+            raise ValueError("Failed node patch requires failure_reason")
+
+        InMemoryTaskGraphStore._validate_result_refs(patch.artifacts)
+        InMemoryTaskGraphStore._validate_result_refs(patch.evidence)
+
+    @staticmethod
+    def _validate_new_node(node: TaskGraphNode) -> None:
+        if node.node_status is NodeStatus.BLOCKED and not node.block_reason:
+            raise ValueError("Blocked node requires block_reason")
+        if node.node_status is NodeStatus.FAILED and not node.failure_reason:
+            raise ValueError("Failed node requires failure_reason")
+
+        InMemoryTaskGraphStore._validate_result_refs(node.artifacts)
+        InMemoryTaskGraphStore._validate_result_refs(node.evidence)
+
+    @staticmethod
+    def _validate_result_refs(refs: list[ResultRef] | None) -> None:
+        if refs is None:
+            return
+
+        for item in refs:
+            if not item.ref_id:
+                raise ValueError("ResultRef requires non-empty ref_id")

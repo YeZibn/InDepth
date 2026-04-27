@@ -186,6 +186,164 @@ class InMemoryTaskGraphStoreTests(unittest.TestCase):
         self.assertEqual([item.ref_id for item in updated_node.artifacts], ["artifact-1"])
         self.assertEqual([item.ref_id for item in updated_node.evidence], ["evidence-1"])
 
+    def test_apply_patch_raises_when_blocked_node_patch_has_no_block_reason(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-blocked-patch",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-blocked-patch",
+                        name="Execute",
+                        kind="execution",
+                        node_status=NodeStatus.RUNNING,
+                    )
+                ],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-blocked-patch",
+                TaskGraphPatch(
+                    node_updates=[
+                        NodePatch(
+                            node_id="node-1",
+                            node_status=NodeStatus.BLOCKED,
+                        )
+                    ]
+                ),
+            )
+
+    def test_apply_patch_raises_when_failed_node_patch_has_no_failure_reason(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-failed-patch",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-failed-patch",
+                        name="Execute",
+                        kind="execution",
+                        node_status=NodeStatus.RUNNING,
+                    )
+                ],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-failed-patch",
+                TaskGraphPatch(
+                    node_updates=[
+                        NodePatch(
+                            node_id="node-1",
+                            node_status=NodeStatus.FAILED,
+                        )
+                    ]
+                ),
+            )
+
+    def test_apply_patch_raises_when_patch_artifact_ref_id_is_empty(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-invalid-artifact",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-invalid-artifact",
+                        name="Execute",
+                        kind="execution",
+                    )
+                ],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-invalid-artifact",
+                TaskGraphPatch(
+                    node_updates=[
+                        NodePatch(
+                            node_id="node-1",
+                            artifacts=[ResultRef(ref_id="", ref_type="file")],
+                        )
+                    ]
+                ),
+            )
+
+    def test_apply_patch_raises_when_patch_evidence_ref_id_is_empty(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-invalid-evidence",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-invalid-evidence",
+                        name="Execute",
+                        kind="execution",
+                    )
+                ],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-invalid-evidence",
+                TaskGraphPatch(
+                    node_updates=[
+                        NodePatch(
+                            node_id="node-1",
+                            evidence=[ResultRef(ref_id="", ref_type="search")],
+                        )
+                    ]
+                ),
+            )
+
+    def test_apply_patch_raises_when_new_blocked_node_has_no_block_reason(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(TaskGraphState(graph_id="graph-new-blocked"))
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-new-blocked",
+                TaskGraphPatch(
+                    new_nodes=[
+                        TaskGraphNode(
+                            node_id="node-1",
+                            graph_id="graph-new-blocked",
+                            name="Blocked",
+                            kind="execution",
+                            node_status=NodeStatus.BLOCKED,
+                        )
+                    ]
+                ),
+            )
+
+    def test_apply_patch_raises_when_new_node_reference_has_empty_ref_id(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(TaskGraphState(graph_id="graph-new-ref"))
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-new-ref",
+                TaskGraphPatch(
+                    new_nodes=[
+                        TaskGraphNode(
+                            node_id="node-1",
+                            graph_id="graph-new-ref",
+                            name="New",
+                            kind="execution",
+                            artifacts=[ResultRef(ref_id="", ref_type="file")],
+                        )
+                    ]
+                ),
+            )
+
     def test_get_node_get_active_node_and_list_nodes_read_saved_graph(self):
         store = InMemoryTaskGraphStore()
         store.save_graph(
