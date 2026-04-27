@@ -5,6 +5,7 @@ from __future__ import annotations
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
 from rtv2.task_graph.models import (
+    NodePatch,
     NodeStatus,
     TaskGraphNode,
     TaskGraphPatch,
@@ -73,6 +74,9 @@ class RuntimeOrchestrator:
         selected_node = self.select_active_node(context)
         if selected_node is None:
             self.initialize_minimal_graph(context)
+        else:
+            context.runtime_state.active_node_id = selected_node.node_id
+            self.advance_node_minimally(context, selected_node)
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
         context.run_lifecycle.stop_reason = "execute_finished"
@@ -147,6 +151,52 @@ class RuntimeOrchestrator:
         return TaskGraphPatch(
             new_nodes=[initial_node],
             active_node_id=initial_node.node_id,
+        )
+
+    def advance_node_minimally(
+        self,
+        context: RunContext,
+        node: TaskGraphNode,
+    ) -> TaskGraphPatch | None:
+        """Return the minimal node status transition patch for the selected node."""
+
+        if node.node_status is NodeStatus.PENDING:
+            return self._advance_pending_node(context, node)
+        if node.node_status is NodeStatus.READY:
+            return TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=node.node_id,
+                    node_status=NodeStatus.RUNNING,
+                )]
+            )
+        if node.node_status is NodeStatus.RUNNING:
+            return TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=node.node_id,
+                    node_status=NodeStatus.COMPLETED,
+                )]
+            )
+        return None
+
+    def _advance_pending_node(
+        self,
+        context: RunContext,
+        node: TaskGraphNode,
+    ) -> TaskGraphPatch | None:
+        graph_state = context.domain_state.task_graph_state
+
+        for dependency_id in node.dependencies:
+            dependency_node = self._find_node(graph_state, dependency_id)
+            if dependency_node is None:
+                raise ValueError(f"Node dependency not found: {dependency_id}")
+            if dependency_node.node_status is not NodeStatus.COMPLETED:
+                return None
+
+        return TaskGraphPatch(
+            node_updates=[NodePatch(
+                node_id=node.node_id,
+                node_status=NodeStatus.READY,
+            )]
         )
 
     @staticmethod

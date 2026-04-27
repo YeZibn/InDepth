@@ -150,9 +150,33 @@
 3. 当前不写 store
 4. 当前不改 `graph_status`
 
+## `advance_node_minimally(...)` 的作用
+
+`advance_node_minimally(...)` 用于在不接 LLM、不接 tool 的前提下，给当前被选中的 node 产出最小状态推进 patch。
+
+当前最小规则如下：
+
+1. `pending -> ready`
+   - 前提：所有依赖节点都已经 `completed`
+2. `ready -> running`
+3. `running -> completed`
+4. 其他状态当前返回 `None`
+
+当前这一步明确：
+
+1. 缺失依赖节点时显式抛错
+2. 当前不写 `runtime_state`
+3. `runtime_state.active_node_id` 由 `run_execute_phase(...)` 在选中 node 后负责同步
+4. 当前不写 notes / artifacts / evidence 占位内容
+
+## 当前 execute 补充规则
+
+当前 `run_execute_phase(...)` 在选中 node 后，会先同步：
+
+1. `runtime_state.active_node_id = selected_node.node_id`
+
 ## 下一步
 
 orchestrator 层下一步预计进入：
 
-1. 最小 node 状态推进
-2. execute 结果回写 graph
+1. execute 结果回写 graph

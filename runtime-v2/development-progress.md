@@ -142,12 +142,41 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
+- 任务 03：已完成
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 016：完成模块 07 的任务 03 最小 node 状态推进
+
+- 状态：已完成
+- 范围：完成 execute phase 最小任务图推进模块中的第三个子任务，只落最小 node 状态推进 patch 生成和 execute 内的 runtime active 对齐，不提前进入 graph 写回
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 落地 `advance_node_minimally(...)`
+  - 当前最小推进规则已明确：
+    - `pending -> ready`，前提是依赖节点全部 `completed`
+    - `ready -> running`
+    - `running -> completed`
+    - 其他状态返回 `None`
+  - 当前已明确：
+    - 缺失依赖节点时显式抛错
+    - 当前不写 notes / artifacts / evidence 占位内容
+    - `advance_node_minimally(...)` 不写 `runtime_state`
+  - 当前 execute 内已明确：
+    - 在选中 node 后，先同步 `runtime_state.active_node_id`
+  - 已同步更新 orchestrator 实现说明：
+    - `runtime-v2/implementation/orchestrator.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已补依赖完成/未完成、缺失依赖、状态推进和 runtime active 对齐测试
+- 遗留问题：
+  - execute 结果回写 graph 还未进入实现
+- 下一步：
+  - 进入模块 07 的任务 04：讨论并实现 execute 结果回写 graph
 
 ### 2026-04-27
 

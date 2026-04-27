@@ -324,6 +324,189 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         self.assertIsNone(orchestrator.initialize_minimal_graph(context))
 
+    def test_advance_node_minimally_promotes_pending_node_when_dependencies_completed(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Advance pending node.",
+            )
+        )
+        dependency = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Dependency",
+            kind="execution",
+            node_status=NodeStatus.COMPLETED,
+        )
+        pending_node = TaskGraphNode(
+            node_id="node-2",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Pending",
+            kind="execution",
+            node_status=NodeStatus.PENDING,
+            dependencies=["node-1"],
+        )
+        context.domain_state.task_graph_state.nodes = [dependency, pending_node]
+
+        patch = orchestrator.advance_node_minimally(context, pending_node)
+
+        self.assertIsNotNone(patch)
+        self.assertEqual(patch.node_updates[0].node_id, "node-2")
+        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.READY)
+
+    def test_advance_node_minimally_keeps_pending_node_when_dependencies_not_completed(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Keep pending node.",
+            )
+        )
+        dependency = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Dependency",
+            kind="execution",
+            node_status=NodeStatus.READY,
+        )
+        pending_node = TaskGraphNode(
+            node_id="node-2",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Pending",
+            kind="execution",
+            node_status=NodeStatus.PENDING,
+            dependencies=["node-1"],
+        )
+        context.domain_state.task_graph_state.nodes = [dependency, pending_node]
+
+        self.assertIsNone(orchestrator.advance_node_minimally(context, pending_node))
+
+    def test_advance_node_minimally_raises_when_dependency_is_missing(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Missing dependency.",
+            )
+        )
+        pending_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Pending",
+            kind="execution",
+            node_status=NodeStatus.PENDING,
+            dependencies=["missing"],
+        )
+        context.domain_state.task_graph_state.nodes = [pending_node]
+
+        with self.assertRaises(ValueError):
+            orchestrator.advance_node_minimally(context, pending_node)
+
+    def test_advance_node_minimally_promotes_ready_to_running(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Ready node.",
+            )
+        )
+        ready_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Ready",
+            kind="execution",
+            node_status=NodeStatus.READY,
+        )
+
+        patch = orchestrator.advance_node_minimally(context, ready_node)
+
+        self.assertIsNotNone(patch)
+        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.RUNNING)
+
+    def test_advance_node_minimally_promotes_running_to_completed(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Running node.",
+            )
+        )
+        running_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        patch = orchestrator.advance_node_minimally(context, running_node)
+
+        self.assertIsNotNone(patch)
+        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.COMPLETED)
+
+    def test_advance_node_minimally_returns_none_for_non_progressing_statuses(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Static statuses.",
+            )
+        )
+
+        for status in (
+            NodeStatus.BLOCKED,
+            NodeStatus.PAUSED,
+            NodeStatus.FAILED,
+            NodeStatus.ABANDONED,
+            NodeStatus.COMPLETED,
+        ):
+            node = TaskGraphNode(
+                node_id=f"node-{status.value}",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name=status.value,
+                kind="execution",
+                node_status=status,
+            )
+            self.assertIsNone(orchestrator.advance_node_minimally(context, node))
+
+    def test_run_execute_phase_aligns_runtime_active_node_when_node_is_selected(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Execute selected node.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        ready_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Ready",
+            kind="execution",
+            node_status=NodeStatus.READY,
+        )
+        context.domain_state.task_graph_state.nodes = [ready_node]
+
+        executed = orchestrator.run_execute_phase(context)
+
+        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
+        self.assertEqual(executed.run_lifecycle.current_phase, RunPhase.FINALIZE)
+
 
 if __name__ == "__main__":
     unittest.main()
