@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
-- 开发状态：已完成模块 01、模块 02、模块 03、模块 04；模块 05 正在推进
-- 当前重点：推进模块 05，并按子任务逐个对齐后再落地
+- 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05；模块 06 正在推进
+- 当前重点：推进模块 06，并按子任务逐个对齐后再落地
 
 ---
 
@@ -107,9 +107,64 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 06：RuntimeOrchestrator 最小执行主链骨架
+
+- 模块目标：
+  - 建立 orchestrator 的正式执行主链骨架
+  - 从 `StartRunIdentity` 进入一次真实 run，而不是继续返回纯 stub
+  - 先打通最小 `prepare -> execute -> finalize` 链路，不提前引入 prompt、tool、verification 等复杂能力
+- 已定子任务：
+  - 任务 01：实现 `build_initial_context(...)`
+  - 任务 02：正式替换 `RuntimeOrchestrator.run(...)` stub
+  - 任务 03：实现 `prepare / execute / finalize` 最小 phase 壳
+  - 任务 04：实现 orchestrator 到 `HostRunResult` 的真实返回收口
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 012：完成模块 06 的任务 01 `build_initial_context(...)`
+
+- 状态：已完成
+- 范围：完成 RuntimeOrchestrator 主链骨架模块中的第一个子任务，只落初始上下文构建，不提前进入真实 phase 执行
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 落地 `build_initial_context(...)`
+  - `build_initial_context(...)` 当前正式从 `StartRunIdentity` 组装最小 `RunContext`
+  - 当前组装结果已明确：
+    - `run_identity` 直接映射自 `StartRunIdentity`
+    - `run_lifecycle` 初始化为 `running + PREPARE`
+    - `runtime_state` 初始化为空运行时控制壳
+    - `domain_state` 初始化为空领域壳
+  - 当前初始 `TaskGraphState` 已明确：
+    - 新建空 graph
+    - `nodes = []`
+    - `active_node_id = ""`
+    - `graph_status = active`
+    - `version = 1`
+  - 当前已明确：
+    - `graph_id` 不复用 `task_id`
+    - `graph_id` 由 orchestrator 内部生成
+  - 已新增 orchestrator 实现说明：
+    - `runtime-v2/implementation/orchestrator.md`
+  - 已同步实现说明入口：
+    - `runtime-v2/implementation/README.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已补初始上下文结构和 `graph_id` 递增测试
+- 遗留问题：
+  - `RuntimeOrchestrator.run(...)` 仍然是 stub
+  - `prepare / execute / finalize` 还未进入实现
+- 下一步：
+  - 进入模块 06 的任务 02：正式替换 `RuntimeOrchestrator.run(...)` stub
 
 ### 2026-04-26
 
