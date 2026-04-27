@@ -122,13 +122,51 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
-- 任务 03：未开始
-- 任务 04：未开始
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 013：完成模块 06 的任务 02 `RuntimeOrchestrator.run(...)`、任务 03 最小 phase 壳与任务 04 返回收口
+
+- 状态：已完成
+- 范围：完成 RuntimeOrchestrator 主链骨架模块中的任务 02、任务 03 和任务 04，正式替换 `run(...)` stub，落最小 `prepare -> execute -> finalize` 主链，并收口为真实 `HostRunResult`
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 正式替换 `RuntimeOrchestrator.run(...)` stub
+  - 当前 `run(...)` 调用顺序已明确：
+    - `build_initial_context(...)`
+    - `run_prepare_phase(...)`
+    - `run_execute_phase(...)`
+    - `run_finalize_phase(...)`
+  - 已落最小 phase 壳：
+    - `run_prepare_phase(...)`
+    - `run_execute_phase(...)`
+    - `run_finalize_phase(...)`
+  - 当前最小状态推进规则已明确：
+    - `PREPARE -> EXECUTE`
+    - `EXECUTE -> FINALIZE`
+    - `result_status = "completed"`
+    - `stop_reason = "execute_finished"`
+  - 当前 phase 顺序不对时显式抛错
+  - 当前 orchestrator 返回已不再使用 `runtime_state = "stub"`
+  - 当前最小真实返回已明确：
+    - `runtime_state = "completed"`
+    - `output_text = ""`
+  - 已同步更新 orchestrator 实现说明：
+    - `runtime-v2/implementation/orchestrator.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已补主链调用、phase 推进和乱序报错测试
+- 遗留问题：
+  - phase 内部仍然只是最小状态推进，不包含真实执行逻辑
+  - prompt / tool / verification 还未进入主链
+- 下一步：
+  - 讨论下一个小模块边界，决定是否开始 prompt/tool/model 接线，或先细化 execute phase
 
 ### 2026-04-27
 

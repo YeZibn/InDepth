@@ -115,7 +115,7 @@ class RuntimeHostTests(unittest.TestCase):
 
         self.assertEqual(run_result.task_id, "task-1")
         self.assertEqual(run_result.run_id, "run-1")
-        self.assertEqual(run_result.runtime_state, "stub")
+        self.assertEqual(run_result.runtime_state, "completed")
         self.assertEqual(run_result.output_text, "")
         self.assertEqual(host.host_state.current_task_id, "task-1")
         self.assertEqual(host.host_state.active_run_id, "run-1")
