@@ -92,6 +92,12 @@ type StepResult = {
 };
 ```
 
+这里补充一条当前正式对接结论：
+
+1. `ResultRef` 是当前执行推进阶段中 `artifacts / evidence` 的统一最小引用结构
+2. 当前不再沿用 `string` 作为正式 `artifacts / evidence` 承载类型
+3. 后续若需要拆分更细的 `ArtifactRef / EvidenceRef`，也应在 `ResultRef` 基础上演进，而不是回退到裸字符串
+
 ## 6. 当前阶段的核心分层
 
 当前阶段正式规定：
@@ -157,6 +163,13 @@ type StepResult = {
    - `order`
    - 通用 `active_node_id` 切换
 
+同时补充当前模块边界：
+
+1. 当前模块只处理执行推进 patch 提交链
+2. 不进入图结构重规划
+3. 不要求当前模块内实现 `StepResult`
+4. 但默认未来 `StepResult.patch` 的 graph 变更部分，应收敛为正式 `TaskGraphPatch`
+
 ## 10. 追加字段语义
 
 本任务明确规定：
@@ -200,6 +213,11 @@ type StepResult = {
 3. `followup_nodes`
 4. 图结构重规划
 5. 更完整的 phase 控制决策
+
+当前同时明确：
+
+1. `TaskGraphStore.apply_patch(...)` 是执行推进阶段的正式 graph 提交边界
+2. 它不仅负责 merge，也负责基础一致性校验与状态流转校验
 
 ## 14. 对其他任务的直接输入
 

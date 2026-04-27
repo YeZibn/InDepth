@@ -135,6 +135,8 @@
 
 1. `notes / artifacts / evidence` 采用追加语义
 2. `block_reason / failure_reason` 采用当前态覆盖语义
+3. `artifacts / evidence` 的正式承载结构为统一 `ResultRef`
+4. 当前不再把 `artifacts / evidence` 视为裸字符串数组设计
 
 ## 9. 当前阶段暂不开放的结构修改
 
@@ -147,6 +149,11 @@
 5. 通用 `active_node_id` 切换
 
 空图初始化新增最小 node 仍可作为 orchestrator 内建路径存在，但不视为通用 step 图重规划能力。
+
+当前补充一条模块 08 对接结论：
+
+1. 当前执行推进阶段的 patch 提交链，只处理节点执行结果类字段
+2. 图结构修改继续留到后续模块单独设计与实现
 
 ## 10. Followup Nodes 的接入规则
 

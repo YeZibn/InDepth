@@ -149,6 +149,11 @@ interface TaskGraphStore {
 }
 ```
 
+同时补充当前正式对接结论：
+
+1. `TaskGraphPatch` 是当前 graph 提交链的正式 patch 类型
+2. 当前模块虽然不实现 `StepResult`，但默认未来 `StepResult.patch` 中的 graph 变更部分应收敛为 `TaskGraphPatch`
+
 ## 9. Store 的职责边界
 
 第一版 `store` 只负责：
@@ -166,6 +171,14 @@ interface TaskGraphStore {
 4. 生成 patch
 
 这些都属于 `step` 的职责。
+
+当前模块补充规定：
+
+1. `TaskGraphStore.apply_patch(...)` 是执行推进阶段的正式 graph 提交边界
+2. 它不仅负责应用 patch，也负责：
+   - patch merge
+   - 基础一致性校验
+   - 状态流转校验
 
 ## 10. 当前阶段对 `apply_patch(...)` 的补充约束
 
@@ -187,6 +200,12 @@ interface TaskGraphStore {
    - 不做历史追加
 5. `node_status`
    - 按合法状态流转覆盖推进
+
+这里再明确：
+
+1. `notes` 继续使用 `string[]`
+2. `artifacts / evidence` 使用统一 `ResultRef[]`
+3. 当前执行推进阶段不再以 `string[]` 作为 `artifacts / evidence` 的正式设计目标
 
 ## 11. Step 与 Store 的分工
 

@@ -157,9 +157,51 @@
   - 任务 03：实现 patch 基础一致性校验
   - 任务 04：实现状态流转校验与 orchestrator 集成收口
 
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 018：完成模块 08 的任务 01 patch 提交链设计对接与收口
+
+- 状态：已完成
+- 范围：完成模块 08 的第一个子任务，对接当前 `TaskGraphStore.apply_patch(...)` 相关设计稿与现有实现思路，收口 patch 提交链的正式设计边界，不进入代码实现
+- 结果：
+  - 已确认 `artifacts / evidence` 不再沿用裸 `string` 作为正式设计目标
+  - 已确定统一最小引用结构：
+    - `ResultRef { ref_id, ref_type, title, content }`
+  - 已确认当前执行推进阶段仍只开放以下节点执行结果字段：
+    - `node_status`
+    - `block_reason`
+    - `failure_reason`
+    - `notes`
+    - `artifacts`
+    - `evidence`
+  - 已确认当前模块只处理执行推进 patch 提交链，不进入图结构重规划
+  - 已确认 `TaskGraphStore.apply_patch(...)` 是当前执行推进阶段的正式 graph 提交边界，职责包括：
+    - patch merge
+    - 基础一致性校验
+    - 状态流转校验
+  - 已确认当前模块虽然不实现 `StepResult`，但未来 `StepResult.patch` 的 graph 变更部分应收敛为 `TaskGraphPatch`
+  - 已同步更新设计稿：
+    - `runtime-v2/design/s3/step-orchestrator-contract-t5-design-v1.md`
+    - `runtime-v2/design/s5/task-graph-transition-rules-t5-design-v1.md`
+    - `runtime-v2/design/s5/task-graph-skeleton-store-t7-design-v1.md`
+- 验证结果：
+  - 本任务为设计对接与收口任务，无代码执行验证
+- 遗留问题：
+  - 当前代码模型中的 `artifacts / evidence` 仍是 `list[str]`
+  - 需要在后续实现任务中升级到正式引用结构并补测试
+- 下一步：
+  - 进入模块 08 的任务 02：实现 patch 合并语义
 
 ### 2026-04-27
 
