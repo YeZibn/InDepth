@@ -194,9 +194,10 @@
     - new node 引用或原因字段非法
   - 已执行语法检查：
     - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py`
-  - 当前未执行完整自动化测试：
-    - 本机默认 `python3` 为 3.9
-    - 项目中存在 `dataclass(slots=True)`，运行测试需 Python 3.10+
+  - 已使用升级后的 conda `agent` 环境执行：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 53 tests ... OK`
 - 遗留问题：
   - `apply_patch(...)` 还未落状态流转校验
 - 下一步：
@@ -228,9 +229,10 @@
     - 空集合 no-op merge
   - 已执行语法检查：
     - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py`
-  - 当前未执行完整自动化测试：
-    - 本机默认 `python3` 为 3.9
-    - 项目中存在 `dataclass(slots=True)`，运行测试需 Python 3.10+
+  - 已在后续升级后的 conda `agent` 环境中纳入统一回归验证：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 53 tests ... OK`
 - 遗留问题：
   - `apply_patch(...)` 还未落基础一致性校验
   - `apply_patch(...)` 还未落状态流转校验
@@ -291,12 +293,10 @@
     - `runtime-v2/implementation/orchestrator.md`
 - 验证结果：
   - 已补 execute 初始化 patch 回写、节点推进 patch 回写、graph version 递增与 runtime active 对齐测试
-  - 尝试执行：
-    - `python3 -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
-  - 当前环境阻塞：
-    - 系统默认 `python3` 为 3.9
-    - 项目代码使用 `dataclass(slots=True)`，需 Python 3.10+
-    - 因此当前未能在本机完成自动化测试跑通
+  - 已在后续升级后的 conda `agent` 环境中纳入统一回归验证：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 53 tests ... OK`
 - 遗留问题：
   - `TaskGraphStore.apply_patch(...)` 仍未进入执行推进专用的合并与状态流转校验增强
   - `StepResult` 与 step 正式执行协议仍属于后续模块

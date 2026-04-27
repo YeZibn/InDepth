@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Protocol
 
-from rtv2.task_graph.models import NodePatch, ResultRef, TaskGraphNode, TaskGraphPatch, TaskGraphState
+from rtv2.task_graph.models import NodePatch, NodeStatus, ResultRef, TaskGraphNode, TaskGraphPatch, TaskGraphState
 
 
 class TaskGraphStore(Protocol):
