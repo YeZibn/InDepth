@@ -162,11 +162,46 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 021：完成模块 08 的任务 04 状态流转校验与 orchestrator 集成收口
+
+- 状态：已完成
+- 范围：完成模块 08 的第四个子任务，落 `apply_patch(...)` 的状态流转校验，并确认增强后的 store 与 orchestrator 主链集成仍然成立
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/task_graph/store.py` 为 `InMemoryTaskGraphStore` 引入正式状态流转校验
+  - 当前执行推进阶段正式允许的最小流转集合为：
+    - `pending -> ready`
+    - `ready -> running`
+    - `running -> completed`
+    - `running -> blocked`
+    - `running -> failed`
+    - `blocked -> ready`
+  - 非法状态流转当前显式抛错，不做隐式修正
+  - 已补内存版 store 正反测试：
+    - 合法流转
+    - 非法流转
+    - `failed -> ready` 当前不允许
+  - 已确认增强后的 store 接入现有 orchestrator 后，`07-T04` 最小 write-back 闭环仍然成立
+  - 已同步更新 task graph 实现说明：
+    - `runtime-v2/implementation/task-graph.md`
+- 验证结果：
+  - 已执行语法检查：
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py`
+  - 已使用升级后的 conda `agent` 环境执行：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 59 tests ... OK`
+- 遗留问题：
+  - 当前仍未进入 `StepResult`、step 正式执行壳与更高层 graph 结构重规划
+- 下一步：
+  - 进入下一模块讨论
 
 ### 2026-04-27
 
@@ -197,7 +232,7 @@
   - 已使用升级后的 conda `agent` 环境执行：
     - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
   - 结果：
-    - `Ran 53 tests ... OK`
+    - `Ran 59 tests ... OK`
 - 遗留问题：
   - `apply_patch(...)` 还未落状态流转校验
 - 下一步：
@@ -232,7 +267,7 @@
   - 已在后续升级后的 conda `agent` 环境中纳入统一回归验证：
     - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
   - 结果：
-    - `Ran 53 tests ... OK`
+    - `Ran 59 tests ... OK`
 - 遗留问题：
   - `apply_patch(...)` 还未落基础一致性校验
   - `apply_patch(...)` 还未落状态流转校验
@@ -296,7 +331,7 @@
   - 已在后续升级后的 conda `agent` 环境中纳入统一回归验证：
     - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_state.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
   - 结果：
-    - `Ran 53 tests ... OK`
+    - `Ran 59 tests ... OK`
 - 遗留问题：
   - `TaskGraphStore.apply_patch(...)` 仍未进入执行推进专用的合并与状态流转校验增强
   - `StepResult` 与 step 正式执行协议仍属于后续模块

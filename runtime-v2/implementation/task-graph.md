@@ -261,7 +261,7 @@
 
 1. 当前已实现合并语义
 2. 当前已实现基础一致性校验
-3. 当前还没有进入状态流转校验
+3. 当前已实现状态流转校验
 
 它当前承担三类职责：
 
@@ -297,10 +297,18 @@
 7. `blocked` node patch 若缺少 `block_reason`，直接抛错
 8. `failed` node patch 若缺少 `failure_reason`，直接抛错
 9. `ResultRef.ref_id` 为空时，直接抛错
-10. 当前实现采用快照语义，避免外部对象引用直接污染 store 内部状态
+10. 当前执行推进阶段只允许以下状态流转：
+    - `pending -> ready`
+    - `ready -> running`
+    - `running -> completed`
+    - `running -> blocked`
+    - `running -> failed`
+    - `blocked -> ready`
+11. 非法状态流转直接抛错
+12. 当前实现采用快照语义，避免外部对象引用直接污染 store 内部状态
 
 ## 下一步
 
 task graph 层下一步预计进入：
 
-1. 落状态流转校验
+1. 进入下一模块边界讨论或更高层 step / store 协议收口

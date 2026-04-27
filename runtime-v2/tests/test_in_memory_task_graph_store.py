@@ -344,6 +344,176 @@ class InMemoryTaskGraphStoreTests(unittest.TestCase):
                 ),
             )
 
+    def test_apply_patch_allows_pending_to_ready_transition(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-pending-ready",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-pending-ready",
+                        name="Pending",
+                        kind="execution",
+                        node_status=NodeStatus.PENDING,
+                    )
+                ],
+            )
+        )
+
+        updated_graph = store.apply_patch(
+            "graph-pending-ready",
+            TaskGraphPatch(
+                node_updates=[NodePatch(node_id="node-1", node_status=NodeStatus.READY)]
+            ),
+        )
+
+        self.assertEqual(updated_graph.nodes[0].node_status, NodeStatus.READY)
+
+    def test_apply_patch_allows_running_to_blocked_transition_with_reason(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-running-blocked",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-running-blocked",
+                        name="Running",
+                        kind="execution",
+                        node_status=NodeStatus.RUNNING,
+                    )
+                ],
+            )
+        )
+
+        updated_graph = store.apply_patch(
+            "graph-running-blocked",
+            TaskGraphPatch(
+                node_updates=[
+                    NodePatch(
+                        node_id="node-1",
+                        node_status=NodeStatus.BLOCKED,
+                        block_reason="waiting",
+                    )
+                ]
+            ),
+        )
+
+        self.assertEqual(updated_graph.nodes[0].node_status, NodeStatus.BLOCKED)
+        self.assertEqual(updated_graph.nodes[0].block_reason, "waiting")
+
+    def test_apply_patch_allows_running_to_failed_transition_with_reason(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-running-failed",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-running-failed",
+                        name="Running",
+                        kind="execution",
+                        node_status=NodeStatus.RUNNING,
+                    )
+                ],
+            )
+        )
+
+        updated_graph = store.apply_patch(
+            "graph-running-failed",
+            TaskGraphPatch(
+                node_updates=[
+                    NodePatch(
+                        node_id="node-1",
+                        node_status=NodeStatus.FAILED,
+                        failure_reason="tool_error",
+                    )
+                ]
+            ),
+        )
+
+        self.assertEqual(updated_graph.nodes[0].node_status, NodeStatus.FAILED)
+        self.assertEqual(updated_graph.nodes[0].failure_reason, "tool_error")
+
+    def test_apply_patch_allows_blocked_to_ready_transition(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-blocked-ready",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-blocked-ready",
+                        name="Blocked",
+                        kind="execution",
+                        node_status=NodeStatus.BLOCKED,
+                        block_reason="waiting",
+                    )
+                ],
+            )
+        )
+
+        updated_graph = store.apply_patch(
+            "graph-blocked-ready",
+            TaskGraphPatch(
+                node_updates=[NodePatch(node_id="node-1", node_status=NodeStatus.READY)]
+            ),
+        )
+
+        self.assertEqual(updated_graph.nodes[0].node_status, NodeStatus.READY)
+
+    def test_apply_patch_raises_when_transition_is_not_allowed(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-illegal-transition",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-illegal-transition",
+                        name="Ready",
+                        kind="execution",
+                        node_status=NodeStatus.READY,
+                    )
+                ],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-illegal-transition",
+                TaskGraphPatch(
+                    node_updates=[NodePatch(node_id="node-1", node_status=NodeStatus.COMPLETED)]
+                ),
+            )
+
+    def test_apply_patch_raises_when_failed_to_ready_transition_is_requested(self):
+        store = InMemoryTaskGraphStore()
+        store.save_graph(
+            TaskGraphState(
+                graph_id="graph-failed-ready",
+                nodes=[
+                    TaskGraphNode(
+                        node_id="node-1",
+                        graph_id="graph-failed-ready",
+                        name="Failed",
+                        kind="execution",
+                        node_status=NodeStatus.FAILED,
+                        failure_reason="old_failure",
+                    )
+                ],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            store.apply_patch(
+                "graph-failed-ready",
+                TaskGraphPatch(
+                    node_updates=[NodePatch(node_id="node-1", node_status=NodeStatus.READY)]
+                ),
+            )
+
     def test_get_node_get_active_node_and_list_nodes_read_saved_graph(self):
         store = InMemoryTaskGraphStore()
         store.save_graph(
