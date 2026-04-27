@@ -1,6 +1,6 @@
 # S3-T4 Step Loop 最小职责定义（V1）
 
-更新时间：2026-04-22  
+更新时间：2026-04-27  
 状态：Draft  
 对应任务：`S3-T4`
 
@@ -149,6 +149,10 @@ compression 属于主链路运行保障步骤，因此：
 
 `step loop 负责执行当前 active node 的单步推进，不负责定义 task graph 的结构与调度规则。`
 
+同时补充一条当前阶段约束：
+
+`step` 内部允许采用 ReAct 式执行，但 ReAct 只作为 step 的内部求解机制，不直接成为 graph 状态写入机制。
+
 ## 7.1 Step Loop 的前提输入
 
 每轮 step 开始时，至少要从 `RunContext` 里拿到：
@@ -180,6 +184,20 @@ step loop 本身不制定 graph 规则，但可以通过工具结果或执行结
 5. 当前 node 写入 `artifacts`
 6. 当前 node 写入 `evidence`
 7. 当前 node 写入 `notes`
+
+这里的正式链路补充如下：
+
+1. `tool / llm / skill` 先产出 step 内部所需中间材料
+2. `step` 再统一收敛成本轮最终 `StepResult`
+3. `StepResult.patch` 作为 graph 正式修改入口
+4. orchestrator 接收 `StepResult` 后统一提交 patch
+
+因此当前明确：
+
+1. tool result 不直接改 graph
+2. LLM 不直接改 graph
+3. `step` 内部多轮 observe / act 不直接逐轮写 graph
+4. graph 只记录 step 收口后的正式结果
 
 ## 7.4 Step Loop 不应该做的事
 
@@ -232,3 +250,4 @@ step loop 与 `S6-T3` 对齐如下：
 3. `messages` 不进入 `RunContext`，但 compression 运行状态进入
 4. 每轮 step 默认绑定一个 `active node`
 5. step loop 推进当前 node，但不定义 task graph 的结构与调度规则
+6. `step` 可以内部使用 ReAct，但 graph 只接收最终 `StepResult.patch`

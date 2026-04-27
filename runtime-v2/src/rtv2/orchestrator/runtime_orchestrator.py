@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
+from rtv2.task_graph.store import TaskGraphStore
 from rtv2.task_graph.models import (
     NodePatch,
     NodeStatus,
@@ -17,7 +18,8 @@ from rtv2.task_graph.models import (
 class RuntimeOrchestrator:
     """Minimal runtime control skeleton for the main execution chain."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, graph_store: TaskGraphStore) -> None:
+        self.graph_store = graph_store
         self._graph_counter = 0
         self._node_counter = 0
 
@@ -72,11 +74,23 @@ class RuntimeOrchestrator:
             raise ValueError("Execute phase requires current_phase=EXECUTE")
 
         selected_node = self.select_active_node(context)
+        patch: TaskGraphPatch | None = None
         if selected_node is None:
-            self.initialize_minimal_graph(context)
+            patch = self.initialize_minimal_graph(context)
         else:
             context.runtime_state.active_node_id = selected_node.node_id
-            self.advance_node_minimally(context, selected_node)
+            patch = self.advance_node_minimally(context, selected_node)
+
+        if patch is not None:
+            self.graph_store.save_graph(context.domain_state.task_graph_state)
+            updated_graph = self.graph_store.apply_patch(
+                context.domain_state.task_graph_state.graph_id,
+                patch,
+            )
+            context.domain_state.task_graph_state = updated_graph
+            if patch.active_node_id is not None:
+                context.runtime_state.active_node_id = patch.active_node_id
+
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
         context.run_lifecycle.stop_reason = "execute_finished"

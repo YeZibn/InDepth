@@ -34,10 +34,19 @@ class StubHostIdGenerator:
         return f"run-{self.run_counter}"
 
 
+def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> RuntimeHost:
+    graph_store = InMemoryTaskGraphStore()
+    return RuntimeHost(
+        graph_store=graph_store,
+        orchestrator=RuntimeOrchestrator(graph_store=graph_store),
+        id_generator=id_generator or StubHostIdGenerator(),
+    )
+
+
 class RuntimeHostTests(unittest.TestCase):
     def test_runtime_host_keeps_core_dependencies_and_initial_host_state(self):
         graph_store = InMemoryTaskGraphStore()
-        orchestrator = RuntimeOrchestrator()
+        orchestrator = RuntimeOrchestrator(graph_store=graph_store)
         id_generator = StubHostIdGenerator()
 
         host = RuntimeHost(
@@ -55,11 +64,7 @@ class RuntimeHostTests(unittest.TestCase):
         self.assertEqual(id_generator.calls, ["session"])
 
     def test_get_host_state_returns_snapshot_copy(self):
-        host = RuntimeHost(
-            graph_store=InMemoryTaskGraphStore(),
-            orchestrator=RuntimeOrchestrator(),
-            id_generator=StubHostIdGenerator(),
-        )
+        host = create_runtime_host()
         host.host_state.current_task_id = "task-2"
         host.host_state.active_run_id = "run-2"
 
@@ -73,11 +78,7 @@ class RuntimeHostTests(unittest.TestCase):
 
     def test_start_task_generates_new_task_id_and_clears_active_run_id(self):
         id_generator = StubHostIdGenerator()
-        host = RuntimeHost(
-            graph_store=InMemoryTaskGraphStore(),
-            orchestrator=RuntimeOrchestrator(),
-            id_generator=id_generator,
-        )
+        host = create_runtime_host(id_generator)
         host.host_state.active_run_id = "run-9"
 
         task_ref = host.start_task(label="Implement host task flow")
@@ -89,11 +90,7 @@ class RuntimeHostTests(unittest.TestCase):
         self.assertEqual(id_generator.calls, ["session", "task"])
 
     def test_start_task_allows_repeated_explicit_task_switches(self):
-        host = RuntimeHost(
-            graph_store=InMemoryTaskGraphStore(),
-            orchestrator=RuntimeOrchestrator(),
-            id_generator=StubHostIdGenerator(),
-        )
+        host = create_runtime_host()
 
         first_task = host.start_task()
         second_task = host.start_task(label="Another task")
@@ -105,11 +102,7 @@ class RuntimeHostTests(unittest.TestCase):
 
     def test_submit_user_input_auto_creates_default_task_and_active_run(self):
         id_generator = StubHostIdGenerator()
-        host = RuntimeHost(
-            graph_store=InMemoryTaskGraphStore(),
-            orchestrator=RuntimeOrchestrator(),
-            id_generator=id_generator,
-        )
+        host = create_runtime_host(id_generator)
 
         run_result = host.submit_user_input("Continue runtime-v2 host implementation.")
 
@@ -123,11 +116,7 @@ class RuntimeHostTests(unittest.TestCase):
 
     def test_submit_user_input_reuses_existing_task_and_generates_new_run(self):
         id_generator = StubHostIdGenerator()
-        host = RuntimeHost(
-            graph_store=InMemoryTaskGraphStore(),
-            orchestrator=RuntimeOrchestrator(),
-            id_generator=id_generator,
-        )
+        host = create_runtime_host(id_generator)
         host.start_task(label="Host task")
 
         first_result = host.submit_user_input("First input")

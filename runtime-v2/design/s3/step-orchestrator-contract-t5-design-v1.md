@@ -1,6 +1,6 @@
 # S3-T5 Step / Orchestrator 契约（V1）
 
-更新时间：2026-04-22  
+更新时间：2026-04-27  
 状态：Draft  
 对应任务：`S3-T5`
 
@@ -10,19 +10,20 @@
 
 目标是：
 
-1. 明确 `step` 是唯一主判断中心
-2. 明确 `orchestrator` 是控制器，只执行 `StepResult`
-3. 明确 `StepResult` 必须完整到足以让控制器无需二次判断
+1. 明确 `step` 是当前 `active_node` 的执行者与判断者
+2. 明确 `orchestrator` 是控制器，负责接收并提交 `StepResult`
+3. 明确 `StepResult` 是 execute 执行推进的正式收口结构
 
 ## 2. 正式结论
 
 本任务最终结论如下：
 
 1. `step` 是当前 `active_node` 的执行者与判断者
-2. `orchestrator` 是控制器，只负责执行 `StepResult`
-3. `phase` 切换由 `step` 决定
-4. `StepResult` 必须足够完整，令 orchestrator 无需再判断
-5. `step` 允许增量扩展 graph，但不允许重写已有 node 定义
+2. `step` 可以内部采用 ReAct 执行方式
+3. `tool / llm / skill` 只提供中间材料，不直接改 graph
+4. `patch` 是 `StepResult` 的一部分，不是独立 tool
+5. `orchestrator` 负责接收 `StepResult`、做一致性校验并执行 patch
+6. 当前阶段只开放执行推进，不开放图结构重规划
 
 ## 3. Step 的角色
 
@@ -30,16 +31,17 @@
 
 1. 读取当前正式上下文
 2. 推进当前 `active_node`
-3. 生成当前 node 的执行产出
-4. 判断当前 node 接下来怎么走
-5. 决定下一步 `phase`
-6. 必要时追加多个 `followup_nodes`
+3. 在内部执行 observe / think / act 闭环
+4. 调用 `tool / llm / skill` 获取中间材料
+5. 生成当前 node 的最终执行产出
+6. 将本轮结果收敛为正式 `StepResult`
 
 `step` 不负责：
 
-1. 直接修改已有 node 定义
-2. 直接落正式 graph 状态
-3. 直接修改 `RunContext`
+1. 直接落正式 graph 状态
+2. 直接修改 `RunContext`
+3. 让 tool 直接改 graph
+4. 在当前阶段重规划 graph 结构
 
 ## 4. Orchestrator 的角色
 
@@ -49,143 +51,157 @@
 
 1. 驱动 `step`
 2. 接收 `StepResult`
-3. 应用 `node_patch`
-4. 执行 `node_decision`
-5. 执行 `runtime_control`
-6. 维护正式状态一致性
+3. 校验 `StepResult` 是否与当前执行阶段约束一致
+4. 应用 `patch`
+5. 维护正式状态一致性
+6. 把更新后的 graph 回写正式上下文
 
 它不负责：
 
-1. 对 `StepResult` 做二次语义判断
-2. 重新决定 phase
-3. 重新决定 node 去向
+1. 代替 `step` 生成业务结论
+2. 让 tool 直接落正式 graph 状态
+3. 在当前阶段替 `step` 发明图结构变更
 
 ## 5. StepResult 最小正式接口
 
 ```ts
+type ResultRef = {
+  ref_id: string;
+  ref_type: string;
+  title?: string;
+  content?: string;
+};
+
 type NodePatch = {
-  append_artifacts?: string[];
-  append_evidence?: string[];
-  append_notes?: string[];
-};
-
-type NodeExecutionDecision = {
-  node_action: "continue" | "block" | "complete" | "fail" | "switch" | "abandon";
-  target_node_id?: string;
+  node_status?: "ready" | "running" | "blocked" | "completed" | "failed";
   block_reason?: string;
-  blocked_by?: "user" | "verification" | "system" | "tool" | "dependency";
-  resume_signal?: string;
-};
-
-type RuntimeControlDecision = {
-  next_phase?: "prepare" | "execute" | "finalize";
-  consume_signals?: Array<
-    "user_reply" | "verification_result" | "subagent_result" | "async_tool_result"
-  >;
-};
-
-type FollowupNodeRequest = {
-  node_id: string;
-  name: string;
-  description?: string;
-  kind?: string;
-  depends_on: string[];
+  failure_reason?: string;
+  append_notes?: string[];
+  append_artifacts?: ResultRef[];
+  append_evidence?: ResultRef[];
 };
 
 type StepResult = {
-  node_patch?: NodePatch;
-  node_decision: NodeExecutionDecision;
-  runtime_control?: RuntimeControlDecision;
-  followup_nodes?: FollowupNodeRequest[];
+  output_text?: string;
+  status: "completed" | "blocked" | "failed";
+  patch?: NodePatch;
+  artifacts?: ResultRef[];
+  evidence?: ResultRef[];
+  block_reason?: string;
+  failure_reason?: string;
 };
 ```
 
-## 6. NodePatch 规则
+## 6. 当前阶段的核心分层
+
+当前阶段正式规定：
+
+1. `tool / llm / skill` 负责提供中间材料
+2. `step` 负责把中间材料收敛成最终 `StepResult`
+3. `patch` 是 `StepResult` 的一部分，不是独立 tool
+4. `orchestrator` 负责接收 `StepResult` 并统一提交 patch
+
+## 7. StepResult 状态规则
 
 本任务明确规定：
 
-1. `NodePatch` 只作用于当前 `active_node`
-2. `NodePatch` 只允许追加
-3. `artifacts / evidence / notes` 第一版都先用 `string[]`
-4. 不允许覆盖、删除、重排已有内容
+1. `StepResult.status` 第一版只保留：
+   - `completed`
+   - `blocked`
+   - `failed`
+2. 当前不引入：
+   - `running`
+   - `partial`
+   - `cancelled`
+3. `completed` 表示本轮 step 已完成收口
+4. `blocked` 表示本轮 step 当前无法继续推进
+5. `failed` 表示本轮 step 已进入失败态
 
-## 7. NodeDecision 规则
-
-## 7.1 switch
-
-本任务明确规定：
-
-1. `switch` 表示当前 node 暂停推进
-2. `switch` 不代表当前 node 结束
-3. `switch` 必须给出 `target_node_id`
-4. orchestrator 执行 `switch` 时：
-   - 当前 node -> `paused`
-   - 目标 node -> `running`
-   - `active_node_id` 切换到目标 node
-
-## 7.2 abandon
+## 8. StepResult 与 patch 的一致性
 
 本任务明确规定：
 
-1. `abandon` 表示当前 node 被正式放弃
-2. `abandon` 不等于 `fail`
-3. `abandon` 后当前 node -> `abandoned`
-4. `abandon` 必须给出后续承接目标
+1. `StepResult.status` 是 step 对本轮执行结果的主声明
+2. `patch` 是该结果在 graph 上的正式落地表达
+3. 二者原则上必须语义一致
+4. 发生冲突时，由 orchestrator 显式报错，不做隐式修正
 
-承接目标至少满足以下其一：
+第一版允许的特殊情况如下：
 
-1. 提供 `target_node_id`
-2. 提供 `followup_nodes`
+1. `status = completed` 且 `patch = None`
+2. `status = failed` 且 `patch = None`，作为异常兜底路径
 
-## 8. Followup Nodes 规则
+第一版默认不允许：
+
+1. `status = blocked` 且 `patch = None`
+2. `status = blocked` 但没有 `block_reason`
+3. `status = failed` 但没有 `failure_reason`
+
+## 9. 当前阶段 patch 权限范围
+
+本任务明确规定：
+
+1. 当前阶段只开放执行推进 patch
+2. `patch` 只作用于当前 `active_node`
+3. 允许直接修改的字段只有：
+   - `node_status`
+   - `block_reason`
+   - `failure_reason`
+   - `notes`
+   - `artifacts`
+   - `evidence`
+4. 当前不开放：
+   - `new_nodes`
+   - `dependencies`
+   - `owner`
+   - `order`
+   - 通用 `active_node_id` 切换
+
+## 10. 追加字段语义
 
 本任务明确规定：
 
-1. `step` 有权读取当前 graph
-2. `step` 可以一次追加多个 `followup_nodes`
-3. `followup_nodes` 使用正式机器 `node_id`
-4. `depends_on` 必填
-5. `depends_on` 可引用已有 node
-6. `depends_on` 可引用同批新增 node
-7. `followup_nodes` 允许形成局部 DAG
-8. `followup_nodes` 不允许形成环
-9. 不允许生成孤立 node
+1. `notes` 采用追加语义
+2. `artifacts` 采用追加语义
+3. `evidence` 采用追加语义
+4. `block_reason / failure_reason` 作为当前态字段覆盖写入
 
-落图后初始状态规则如下：
+## 11. Phase 与 StepResult 的关系
 
-1. 依赖已满足 -> `ready`
-2. 依赖未满足 -> `pending`
-
-如果 `target_node_id` 指向新增 node，则该目标在落图后必须可执行。
-
-## 9. Phase 与 StepResult 的关系
-
-本任务明确规定：
+当前阶段补充约束如下：
 
 1. `StepResult` 属于当前 phase 的输出
-2. `runtime_control.next_phase` 由 `step` 决定
-3. orchestrator 不再补充 phase 判断
-4. `StepResult` 在当前 phase 语义下必须自洽
+2. 当前阶段不要求 step 直接决定 phase
+3. `StepResult` 在当前 phase 语义下必须自洽
+4. 当前重点是 execute 内部执行推进，不扩展更大控制面
 
-## 10. Node 状态迁移约束
+## 12. Node 状态迁移约束
 
-本任务直接沿用以下关键迁移：
+本任务当前直接沿用以下关键迁移：
 
 1. `pending -> ready`
 2. `ready -> running`
-3. `running -> paused`
-4. `paused -> ready`
-5. `running -> blocked`
-6. `blocked -> ready`
-7. `running -> completed`
-8. `running -> failed`
-9. `running -> abandoned`
+3. `running -> blocked`
+4. `blocked -> ready`
+5. `running -> completed`
+6. `running -> failed`
 
 同时明确规定：
 
-1. `active_node_id` 若存在，必须对应一个 `running` node
+1. 当前阶段只收紧执行推进所需流转
+2. 图重规划相关流转留待后续单独设计
 
-## 11. 对其他任务的直接输入
+## 13. 后续扩展边界
+
+以下能力仍保留为后续专题，不在本轮执行推进契约内落地：
+
+1. `switch`
+2. `abandon`
+3. `followup_nodes`
+4. 图结构重规划
+5. 更完整的 phase 控制决策
+
+## 14. 对其他任务的直接输入
 
 `S3-T5` 直接服务：
 
@@ -202,12 +218,12 @@ type StepResult = {
 3. `S5-T3` 最小 node 定义
 4. `S5-T4` 执行图关系模型
 
-## 12. 本任务结论摘要
+## 15. 本任务结论摘要
 
 可以压缩成 5 句话：
 
 1. `step` 是唯一主判断中心
-2. `orchestrator` 是控制器，只执行 `StepResult`
-3. `StepResult` 必须完整到无需控制器补判断
-4. `step` 允许增量扩展 graph，但不修改已有 node 定义
-5. `switch / abandon / followup_nodes` 构成第一版 graph 推进主接口
+2. `step` 可以内部使用 ReAct，但 graph 只接收最终 `StepResult`
+3. `patch` 是 `StepResult` 的一部分，不是独立 tool
+4. `orchestrator` 负责校验并提交 patch
+5. 当前阶段只开放执行推进，不开放图结构重规划

@@ -143,11 +143,54 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
+
+### 模块 08：TaskGraphStore patch 提交链增强
+
+- 模块目标：
+  - 把当前已经打通的 `execute -> patch -> apply_patch(...) -> graph` 链路，与现有设计稿重新对齐
+  - 先收口 patch 提交链的正式设计边界，再逐步进入实现
+  - 在设计对齐基础上，逐步完成 patch 合并、基础校验、状态流转校验与 orchestrator 集成收口
+- 已定子任务：
+  - 任务 01：对接现有设计稿并收口 patch 提交链设计
+  - 任务 02：实现 patch 合并语义
+  - 任务 03：实现 patch 基础一致性校验
+  - 任务 04：实现状态流转校验与 orchestrator 集成收口
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 017：完成模块 07 的任务 04 execute 结果最小回写 graph
+
+- 状态：已完成
+- 范围：完成 execute phase 最小任务图推进模块中的第四个子任务，只落最小 patch write-back 闭环，不提前引入 `StepResult`、ReAct step 正式执行模型或更强的 store 校验策略
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 为 `RuntimeOrchestrator` 引入 `TaskGraphStore` 依赖
+  - 已在 `run_execute_phase(...)` 打通最小回写链路：
+    - 空图时调用 `initialize_minimal_graph(...)` 产出 patch
+    - 选中 node 时调用 `advance_node_minimally(...)` 产出 patch
+    - patch 非空时通过 `graph_store.apply_patch(...)` 正式写回 graph
+    - 用最新 graph 覆盖 `context.domain_state.task_graph_state`
+    - patch 若带 `active_node_id`，则同步 `runtime_state.active_node_id`
+  - 已同步更新 host / orchestrator 测试构造方式，使 orchestrator 显式持有 graph store
+  - 已同步更新 orchestrator 实现说明：
+    - `runtime-v2/implementation/orchestrator.md`
+- 验证结果：
+  - 已补 execute 初始化 patch 回写、节点推进 patch 回写、graph version 递增与 runtime active 对齐测试
+  - 尝试执行：
+    - `python3 -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 当前环境阻塞：
+    - 系统默认 `python3` 为 3.9
+    - 项目代码使用 `dataclass(slots=True)`，需 Python 3.10+
+    - 因此当前未能在本机完成自动化测试跑通
+- 遗留问题：
+  - `TaskGraphStore.apply_patch(...)` 仍未进入执行推进专用的合并与状态流转校验增强
+  - `StepResult` 与 step 正式执行协议仍属于后续模块
+- 下一步：
+  - 进入下一模块或后续子任务时，再单独推进 `apply_patch(...)` 规则增强
 
 ### 2026-04-27
 

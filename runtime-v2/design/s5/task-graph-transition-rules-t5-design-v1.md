@@ -1,6 +1,6 @@
 # S5-T5 Task Graph 状态推进规则（V1）
 
-更新时间：2026-04-23  
+更新时间：2026-04-27  
 状态：Draft  
 对应任务：`S5-T5`
 
@@ -28,9 +28,9 @@
 1. 第一版 `node_status` 正式集合扩展为 8 个
 2. 正式状态流转只能由 `step` 决定
 3. `failed -> ready` 允许
-4. followup nodes 可以一次新增数组
-5. 新增 nodes 必须显式写出关系
-6. `switch` 与 `abandon` 是两种不同语义
+4. 当前阶段只先落执行推进，不落图结构重规划
+5. 当前阶段 `step` 只允许回写节点执行结果字段
+6. `switch`、`abandon` 与 followup nodes 留待后续模块落地
 
 ## 3. 正式 Node Status 集合
 
@@ -120,7 +120,35 @@
 
 最后是否形成正式 `NodePatch / GraphPatch`，只能由 `step` 决定。
 
-## 8. Followup Nodes 的接入规则
+## 8. 当前阶段允许的 patch 字段
+
+当前执行推进阶段，`step` 只允许通过 patch 修改以下字段：
+
+1. `node_status`
+2. `block_reason`
+3. `failure_reason`
+4. `notes`
+5. `artifacts`
+6. `evidence`
+
+同时明确：
+
+1. `notes / artifacts / evidence` 采用追加语义
+2. `block_reason / failure_reason` 采用当前态覆盖语义
+
+## 9. 当前阶段暂不开放的结构修改
+
+当前阶段明确不开放以下 graph 修改能力：
+
+1. `new_nodes`
+2. `dependencies`
+3. `owner`
+4. `order`
+5. 通用 `active_node_id` 切换
+
+空图初始化新增最小 node 仍可作为 orchestrator 内建路径存在，但不视为通用 step 图重规划能力。
+
+## 10. Followup Nodes 的接入规则
 
 第一版允许：
 
@@ -133,7 +161,7 @@
 3. 不允许系统自动补依赖关系
 4. `dependencies` 必须显式写出
 
-### 8.1 初始状态规则
+### 10.1 初始状态规则
 
 第一版默认：
 
@@ -143,7 +171,7 @@
 
 1. 若 `step` 明确判断该 node 当前已具备执行条件，可直接写成 `ready`
 
-## 9. `switch` 的语义
+## 11. `switch` 的语义
 
 第一版 `switch` 定义如下：
 
@@ -160,7 +188,7 @@
 1. 当前 node 已永久终止
 2. 当前 node 的工作被正式迁移完毕
 
-## 10. `abandon` 的语义
+## 12. `abandon` 的语义
 
 第一版 `abandon` 定义如下：
 
@@ -172,7 +200,7 @@
 1. 当前 active node 进入 `abandoned`
 2. 必须指定唯一承接目标
 
-## 10.1 承接目标规则
+## 12.1 承接目标规则
 
 第一版明确规定：
 
@@ -188,7 +216,7 @@
 1. 本轮新增的 followup nodes 可以是数组
 2. 真正承接当前 node 主线的目标只能有一个
 
-## 11. `switch` 与 `abandon` 的区别
+## 13. `switch` 与 `abandon` 的区别
 
 第一版明确区分如下：
 
@@ -215,7 +243,7 @@
 2. 当前 node 状态变为 `abandoned`
 3. 必须指定唯一承接目标
 
-## 12. 对后续任务的直接输入
+## 14. 对后续任务的直接输入
 
 `S5-T5` 直接服务：
 
@@ -224,13 +252,13 @@
 3. `S5-T7` task graph skeleton
 4. `S11` closeout 中的 node 结果表达
 
-## 13. 本任务结论摘要
+## 15. 本任务结论摘要
 
 可以压缩成 6 句话：
 
 1. 第一版 `node_status` 正式集合扩成 8 个
 2. 正式状态流转只能由 `step` 决定
 3. `failed -> ready` 允许
-4. followup nodes 可以新增数组，但必须显式写关系
-5. `switch` 表示暂停并切焦点
-6. `abandon` 表示终止并迁移主线，且必须有唯一承接目标
+4. 当前阶段先只落执行推进，不落结构重规划
+5. 节点执行结果 patch 只开放有限字段
+6. `switch / abandon / followup nodes` 留待后续模块再正式落地

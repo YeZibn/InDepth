@@ -83,6 +83,10 @@
    - 推进到 `EXECUTE`
 2. `run_execute_phase(...)`
    - 要求输入 phase 为 `EXECUTE`
+   - 先产出最小 `TaskGraphPatch | None`
+   - 若 patch 非空，则通过 `TaskGraphStore.apply_patch(...)` 正式回写 graph
+   - 用返回的新 graph 覆盖 `context.domain_state.task_graph_state`
+   - 若 patch 带 `active_node_id`，则同步 `runtime_state.active_node_id`
    - 推进到 `FINALIZE`
    - 写入：
      - `result_status = "completed"`
@@ -175,8 +179,29 @@
 
 1. `runtime_state.active_node_id = selected_node.node_id`
 
+当前 execute 结果回写 graph 的最小链路如下：
+
+1. 空图时：
+   - 调用 `initialize_minimal_graph(...)`
+   - 拿到初始化 patch
+   - 通过 `graph_store.apply_patch(...)` 写回 graph
+2. 已有选中 node 时：
+   - 调用 `advance_node_minimally(...)`
+   - 拿到最小推进 patch
+   - 通过 `graph_store.apply_patch(...)` 写回 graph
+3. patch 写回完成后：
+   - `context.domain_state.task_graph_state` 被替换为最新 graph
+   - 若 patch 指定 `active_node_id`，则同步到 `runtime_state.active_node_id`
+
+当前这一步明确：
+
+1. orchestrator 现在正式依赖 `TaskGraphStore`
+2. 当前只打通最小 write-back 闭环
+3. 当前不引入 `StepResult`
+4. 当前不引入更完整的 patch 合并/强校验策略
+
 ## 下一步
 
 orchestrator 层下一步预计进入：
 
-1. execute 结果回写 graph
+1. `TaskGraphStore.apply_patch(...)` 的执行推进合并与校验增强

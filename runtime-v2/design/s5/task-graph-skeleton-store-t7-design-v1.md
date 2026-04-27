@@ -1,6 +1,6 @@
 # S5-T7 Task Graph Skeleton 与 Store 接口（V1）
 
-更新时间：2026-04-23  
+更新时间：2026-04-27  
 状态：Draft  
 对应任务：`S5-T7`
 
@@ -167,7 +167,28 @@ interface TaskGraphStore {
 
 这些都属于 `step` 的职责。
 
-## 10. Step 与 Store 的分工
+## 10. 当前阶段对 `apply_patch(...)` 的补充约束
+
+当前执行推进阶段，`store.apply_patch(...)` 对 patch 的合并规则补充如下：
+
+1. `notes`
+   - 非空字符串直接追加
+   - 第一版不做文本去重
+2. `artifacts`
+   - 按 `ref_id` 追加
+   - 已存在相同 `ref_id` 时忽略重复项
+   - 空 `ref_id` 视为非法
+3. `evidence`
+   - 按 `ref_id` 追加
+   - 已存在相同 `ref_id` 时忽略重复项
+   - 空 `ref_id` 视为非法
+4. `block_reason / failure_reason`
+   - 作为当前态字段覆盖写入
+   - 不做历史追加
+5. `node_status`
+   - 按合法状态流转覆盖推进
+
+## 11. Step 与 Store 的分工
 
 第一版明确规定：
 
@@ -176,10 +197,9 @@ interface TaskGraphStore {
 负责：
 
 1. 产生正式 graph 决策
-2. 指定新的 `active_node_id`
-3. 指定 `graph_status`
-4. 指定 `node_updates`
-5. 指定 `new_nodes`
+2. 在当前阶段生成节点执行结果 patch
+3. 指定 `node_updates`
+4. 在后续阶段才扩展图结构规划能力
 
 ### `store`
 
@@ -189,7 +209,13 @@ interface TaskGraphStore {
 2. 保证 graph 写回一致
 3. 输出更新后的 graph
 
-## 11. 为什么不把 Store 做重
+同时明确：
+
+1. `store` 不生成 patch
+2. `store` 不决定业务语义
+3. `store` 只应用 patch 并返回新 graph
+
+## 12. 为什么不把 Store 做重
 
 第一版不把 `store` 扩成重型 service，原因如下：
 
@@ -204,7 +230,7 @@ interface TaskGraphStore {
 3. resolver
 4. graph planner
 
-## 12. 对后续任务的直接输入
+## 13. 对后续任务的直接输入
 
 `S5-T7` 直接服务：
 
@@ -213,7 +239,7 @@ interface TaskGraphStore {
 3. `S10` subagent graph 绑定
 4. `S12` graph 事件与测试骨架
 
-## 13. 本任务结论摘要
+## 14. 本任务结论摘要
 
 可以压缩成 6 句话：
 
@@ -222,4 +248,4 @@ interface TaskGraphStore {
 3. `graph_status` 只保留 `active / blocked / completed / abandoned`
 4. `version` 保留
 5. `step` 决定 graph 如何变化
-6. `store` 只应用变化，不负责调度
+6. `store` 只应用变化，不负责调度，也不生成 patch
