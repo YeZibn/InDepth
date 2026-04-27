@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
-- 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05；模块 06 正在推进
-- 当前重点：推进模块 06，并按子任务逐个对齐后再落地
+- 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05、模块 06
+- 当前重点：讨论并推进模块 07，继续按子任务逐个对齐后再落地
 
 ---
 
@@ -126,9 +126,62 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 07：Execute Phase 最小任务图推进
+
+- 模块目标：
+  - 让 execute phase 开始真正推进 task graph，而不再只是简单切 phase
+  - 为后续 prompt/tool/model 接线之前，先建立最小任务图推进闭环
+  - 先让 execute 能够选择节点、初始化空图、推进节点状态并回写 graph
+- 已定子任务：
+  - 任务 01：选择当前执行节点
+  - 任务 02：空图初始化最小节点
+  - 任务 03：最小 node 状态推进
+  - 任务 04：execute 结果回写 graph
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 014：完成模块 07 的任务 01 选择当前执行节点
+
+- 状态：已完成
+- 范围：完成 execute phase 最小任务图推进模块中的第一个子任务，只落 execute 内部的最小规则选择器，不提前进入空图初始化、状态推进或 graph 回写
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 落地 `select_active_node(...)`
+  - 当前正式选择优先级已明确：
+    - 优先 `runtime_state.active_node_id`
+    - 其次 `task_graph_state.active_node_id`
+    - 再其次第一个 `ready / running` node
+    - 若无可执行 node，则返回 `None`
+  - 当前已明确：
+    - `select_active_node(...)` 不接 LLM
+    - 不自动把 `pending` 提升成 `ready`
+    - 不修改 runtime 或 graph 状态
+    - 不写 patch
+    - 不调用 store
+  - 当前已明确：
+    - 若 runtime active node 引用失效，则显式抛错
+    - 若 graph active node 引用失效，则显式抛错
+  - 已同步更新 orchestrator 实现说明：
+    - `runtime-v2/implementation/orchestrator.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已补优先级、空结果和失效引用报错测试
+- 遗留问题：
+  - 空图初始化最小节点还未进入实现
+  - 最小 node 状态推进还未进入实现
+  - execute 结果回写 graph 还未进入实现
+- 下一步：
+  - 进入模块 07 的任务 02：讨论并实现空图初始化最小节点
 
 ### 2026-04-27
 

@@ -104,10 +104,30 @@
 
 这些内容会在模块 06 后续子任务中继续落地。
 
+## `select_active_node(...)` 的作用
+
+`select_active_node(...)` 用于作为 execute phase 内部的最小规则选择器，决定当前应推进哪个 node。
+
+当前规则按优先级如下：
+
+1. 优先读取 `runtime_state.active_node_id`
+2. 否则读取 `task_graph_state.active_node_id`
+3. 否则返回第一个 `node_status in {ready, running}` 的 node
+4. 若仍无可执行 node，则返回 `None`
+
+当前这一步明确：
+
+1. 不接 LLM
+2. 不自动把 `pending` 提升成 `ready`
+3. 不修改 runtime 或 graph 状态
+4. 不写 patch
+5. 不调用 store
+6. 若 active node 引用失效，则显式抛错
+
 ## 下一步
 
 orchestrator 层下一步预计进入：
 
-1. 正式替换 `run(...)` stub
-2. `prepare / execute / finalize` 最小 phase 壳
-3. orchestrator 到 `HostRunResult` 的真实返回收口
+1. execute phase 的空图初始化最小节点
+2. 最小 node 状态推进
+3. execute 结果回写 graph

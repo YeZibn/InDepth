@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
-from rtv2.task_graph.models import TaskGraphState, TaskGraphStatus
+from rtv2.task_graph.models import NodeStatus, TaskGraphNode, TaskGraphState, TaskGraphStatus
 
 
 class RuntimeOrchestrator:
@@ -63,6 +63,7 @@ class RuntimeOrchestrator:
         if context.run_lifecycle.current_phase is not RunPhase.EXECUTE:
             raise ValueError("Execute phase requires current_phase=EXECUTE")
 
+        self.select_active_node(context)
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
         context.run_lifecycle.stop_reason = "execute_finished"
@@ -86,3 +87,33 @@ class RuntimeOrchestrator:
 
         self._graph_counter += 1
         return f"graph-{self._graph_counter}"
+
+    def select_active_node(self, context: RunContext) -> TaskGraphNode | None:
+        """Select the current executable node using minimal rule-based priority."""
+
+        graph_state = context.domain_state.task_graph_state
+
+        if context.runtime_state.active_node_id:
+            node = self._find_node(graph_state, context.runtime_state.active_node_id)
+            if node is None:
+                raise ValueError("runtime_state.active_node_id points to a missing node")
+            return node
+
+        if graph_state.active_node_id:
+            node = self._find_node(graph_state, graph_state.active_node_id)
+            if node is None:
+                raise ValueError("task_graph_state.active_node_id points to a missing node")
+            return node
+
+        for node in graph_state.nodes:
+            if node.node_status in {NodeStatus.READY, NodeStatus.RUNNING}:
+                return node
+
+        return None
+
+    @staticmethod
+    def _find_node(graph_state: TaskGraphState, node_id: str) -> TaskGraphNode | None:
+        for node in graph_state.nodes:
+            if node.node_id == node_id:
+                return node
+        return None
