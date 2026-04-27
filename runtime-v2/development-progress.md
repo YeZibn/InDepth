@@ -141,13 +141,49 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
+- 任务 02：已完成
 - 任务 03：未开始
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-27
+
+#### 记录 015：完成模块 07 的任务 02 空图初始化最小节点
+
+- 状态：已完成
+- 范围：完成 execute phase 最小任务图推进模块中的第二个子任务，只落空图时的最小初始化 patch 生成，不提前进入节点状态推进或 graph 写回
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 落地 `initialize_minimal_graph(...)`
+  - 当前仅在 `task_graph_state.nodes` 为空时触发
+  - 当前只生成 1 个最小初始 node
+  - 初始 node 当前已明确：
+    - `name = "Handle user request"`
+    - `kind = "execution"`
+    - `description = run_identity.user_input`
+    - `node_status = ready`
+    - `owner = "main"`
+    - `dependencies = []`
+    - `order = 1`
+  - 当前返回 `TaskGraphPatch`
+  - 当前 patch 同时回写 `active_node_id`
+  - 当前已明确：
+    - 空图初始化既是兜底，也是第一版最小起始策略
+    - 不直接改 graph
+    - 不写 store
+    - 不改 `graph_status`
+  - 已同步更新 orchestrator 实现说明：
+    - `runtime-v2/implementation/orchestrator.md`
+- 验证结果：
+  - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已补空图生成 patch 和非空图返回 `None` 的测试
+- 遗留问题：
+  - 最小 node 状态推进还未进入实现
+  - execute 结果回写 graph 还未进入实现
+- 下一步：
+  - 进入模块 07 的任务 03：讨论并实现最小 node 状态推进
 
 ### 2026-04-27
 

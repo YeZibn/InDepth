@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
-from rtv2.task_graph.models import NodeStatus, TaskGraphNode, TaskGraphState, TaskGraphStatus
+from rtv2.task_graph.models import (
+    NodeStatus,
+    TaskGraphNode,
+    TaskGraphPatch,
+    TaskGraphState,
+    TaskGraphStatus,
+)
 
 
 class RuntimeOrchestrator:
@@ -12,6 +18,7 @@ class RuntimeOrchestrator:
 
     def __init__(self) -> None:
         self._graph_counter = 0
+        self._node_counter = 0
 
     def build_initial_context(self, start_run_identity: StartRunIdentity) -> RunContext:
         """Build the minimal formal run context for a new run."""
@@ -63,7 +70,9 @@ class RuntimeOrchestrator:
         if context.run_lifecycle.current_phase is not RunPhase.EXECUTE:
             raise ValueError("Execute phase requires current_phase=EXECUTE")
 
-        self.select_active_node(context)
+        selected_node = self.select_active_node(context)
+        if selected_node is None:
+            self.initialize_minimal_graph(context)
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
         context.run_lifecycle.stop_reason = "execute_finished"
@@ -88,6 +97,12 @@ class RuntimeOrchestrator:
         self._graph_counter += 1
         return f"graph-{self._graph_counter}"
 
+    def _create_node_id(self) -> str:
+        """Create a node id inside the orchestrator boundary."""
+
+        self._node_counter += 1
+        return f"node-{self._node_counter}"
+
     def select_active_node(self, context: RunContext) -> TaskGraphNode | None:
         """Select the current executable node using minimal rule-based priority."""
 
@@ -110,6 +125,29 @@ class RuntimeOrchestrator:
                 return node
 
         return None
+
+    def initialize_minimal_graph(self, context: RunContext) -> TaskGraphPatch | None:
+        """Create the first executable node when the current graph is empty."""
+
+        graph_state = context.domain_state.task_graph_state
+        if graph_state.nodes:
+            return None
+
+        initial_node = TaskGraphNode(
+            node_id=self._create_node_id(),
+            graph_id=graph_state.graph_id,
+            name="Handle user request",
+            kind="execution",
+            description=context.run_identity.user_input,
+            node_status=NodeStatus.READY,
+            owner="main",
+            dependencies=[],
+            order=1,
+        )
+        return TaskGraphPatch(
+            new_nodes=[initial_node],
+            active_node_id=initial_node.node_id,
+        )
 
     @staticmethod
     def _find_node(graph_state: TaskGraphState, node_id: str) -> TaskGraphNode | None:

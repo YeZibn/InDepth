@@ -268,6 +268,62 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             orchestrator.select_active_node(context)
 
+    def test_initialize_minimal_graph_returns_patch_for_empty_graph(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Handle this request.",
+            )
+        )
+        context.domain_state.task_graph_state.active_node_id = "stale-node"
+
+        patch = orchestrator.initialize_minimal_graph(context)
+
+        self.assertIsNotNone(patch)
+        self.assertEqual(len(patch.new_nodes), 1)
+        initial_node = patch.new_nodes[0]
+        self.assertEqual(initial_node.node_id, "node-1")
+        self.assertEqual(initial_node.graph_id, context.domain_state.task_graph_state.graph_id)
+        self.assertEqual(initial_node.name, "Handle user request")
+        self.assertEqual(initial_node.kind, "execution")
+        self.assertEqual(initial_node.description, "Handle this request.")
+        self.assertEqual(initial_node.node_status, NodeStatus.READY)
+        self.assertEqual(initial_node.owner, "main")
+        self.assertEqual(initial_node.dependencies, [])
+        self.assertEqual(initial_node.order, 1)
+        self.assertEqual(initial_node.artifacts, [])
+        self.assertEqual(initial_node.evidence, [])
+        self.assertEqual(initial_node.notes, [])
+        self.assertEqual(initial_node.block_reason, "")
+        self.assertEqual(initial_node.failure_reason, "")
+        self.assertEqual(patch.active_node_id, "node-1")
+        self.assertIsNone(patch.graph_status)
+
+    def test_initialize_minimal_graph_returns_none_when_graph_is_not_empty(self):
+        orchestrator = RuntimeOrchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Existing node test.",
+            )
+        )
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-existing",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Existing",
+                kind="execution",
+                node_status=NodeStatus.READY,
+            )
+        ]
+
+        self.assertIsNone(orchestrator.initialize_minimal_graph(context))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -124,10 +124,35 @@
 5. 不调用 store
 6. 若 active node 引用失效，则显式抛错
 
+## `initialize_minimal_graph(...)` 的作用
+
+`initialize_minimal_graph(...)` 用于在当前 graph 为空时，产出第一版最小起始节点 patch。
+
+当前规则如下：
+
+1. 只有 `task_graph_state.nodes` 为空时才触发
+2. 当前只新增 1 个最小初始 node
+3. 初始 node 当前固定为：
+   - `name = "Handle user request"`
+   - `kind = "execution"`
+   - `description = run_identity.user_input`
+   - `node_status = ready`
+   - `owner = "main"`
+   - `dependencies = []`
+   - `order = 1`
+4. 当前返回 `TaskGraphPatch`
+5. patch 当前同时回写 `active_node_id`
+
+当前这一步明确：
+
+1. 空图初始化既是兜底，也是第一版最小起始策略
+2. 当前不直接改 graph
+3. 当前不写 store
+4. 当前不改 `graph_status`
+
 ## 下一步
 
 orchestrator 层下一步预计进入：
 
-1. execute phase 的空图初始化最小节点
-2. 最小 node 状态推进
-3. execute 结果回写 graph
+1. 最小 node 状态推进
+2. execute 结果回写 graph
