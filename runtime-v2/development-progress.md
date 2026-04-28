@@ -302,7 +302,7 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
+- 任务 03：已完成
 - 任务 04：未开始
 - 任务 05：未开始
 - 任务 06：未开始
@@ -313,6 +313,51 @@
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 050：完成模块 15 的任务 03 Runtime Memory 模型与 Store 接口落地
+
+- 状态：已完成
+- 范围：完成模块 15 的任务 03，正式落地 runtime memory 模型、查询对象与 sqlite store 接口，不进入具体 sqlite SQL 实现
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/memory/models.py`
+    - `runtime-v2/src/rtv2/memory/store.py`
+  - 已更新导出入口：
+    - `runtime-v2/src/rtv2/memory/__init__.py`
+  - 已正式落地：
+    - `RuntimeMemoryEntry`
+    - `RuntimeMemoryEntryType`
+    - `RuntimeMemoryRole`
+    - `ReflexionTrigger`
+    - `ReplanSignal`
+    - `RuntimeMemoryQuery`
+    - `RuntimeMemoryProcessorInput`
+    - `RuntimeMemoryProcessorOutput`
+    - `RuntimeMemoryStore`
+  - 当前实现特征：
+    - `RuntimeMemoryEntry` 已包含 sqlite schema 对应的正式字段
+    - `reflexion` entry 具备最小结构化约束
+    - `RuntimeMemoryQuery` 作为统一过滤输入对象
+    - store 接口已固定：
+      - `append_entry(...)`
+      - `list_entries_for_run(...)`
+      - `list_entries(...)`
+      - `get_latest_entries(...)`
+  - 已新增单测：
+    - `runtime-v2/tests/test_runtime_memory_models.py`
+    - 已覆盖：
+      - context entry 最小合法构造
+      - reflexion entry 结构化约束
+      - 非法 reflexion 字段校验
+      - query limit 校验
+      - store 接口契约子类化
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_models.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 44 tests ... OK`
+- 下一步：
+  - 进入模块 15 的任务 04，实现 sqlite store 的最小追加、按 run 读取与按条件过滤读取
 
 #### 记录 049：完成模块 15 的任务 02 Runtime Memory sqlite schema 与正式模型定稿
 
