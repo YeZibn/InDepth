@@ -10,6 +10,7 @@ from rtv2.memory.models import (
     RuntimeMemoryQuery,
     RuntimeMemoryRole,
 )
+from rtv2.memory.sqlite_store import SQLiteRuntimeMemoryStore
 from rtv2.memory.store import RuntimeMemoryStore
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "RuntimeMemoryProcessorOutput",
     "RuntimeMemoryQuery",
     "RuntimeMemoryRole",
+    "SQLiteRuntimeMemoryStore",
     "RuntimeMemoryStore",
 ]

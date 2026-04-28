@@ -303,7 +303,7 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
 - 任务 05：未开始
 - 任务 06：未开始
 - 任务 07：未开始
@@ -313,6 +313,52 @@
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 051：完成模块 15 的任务 04 SQLite Runtime Memory Store 最小读写落地
+
+- 状态：已完成
+- 范围：完成模块 15 的任务 04，正式落地 sqlite 版 runtime memory store，包括建表、索引、追加写入、按 run 读取、按条件过滤读取与 latest 读取，不进入 processor 与主链接线
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/memory/sqlite_store.py`
+  - 已更新导出入口：
+    - `runtime-v2/src/rtv2/memory/__init__.py`
+  - 已正式实现：
+    - `SQLiteRuntimeMemoryStore`
+    - `runtime_memory_entries` 单表初始化
+    - 第一版最小索引：
+      - `(task_id, run_id)`
+      - `(run_id, step_id)`
+      - `(run_id, node_id)`
+      - `(entry_type)`
+      - `(tool_name)`
+    - `append_entry(...)`
+    - `list_entries_for_run(...)`
+    - `list_entries(...)`
+    - `get_latest_entries(...)`
+  - 当前实现特征：
+    - `seq` 作为稳定排序键
+    - `entry_id` 保留业务唯一标识
+    - `related_result_refs` 采用 JSON 序列化
+    - `reflexion` 结构化字段可完整往返 sqlite <-> 模型
+    - `get_latest_entries(...)` 采用：
+      - `seq DESC` 截取
+      - 返回前再恢复成 `seq ASC`
+  - 已新增单测：
+    - `runtime-v2/tests/test_runtime_memory_sqlite_store.py`
+    - 已覆盖：
+      - 追加写入并回填 `seq`
+      - 按 run 稳定升序读取
+      - 按 `step_id / node_id / entry_type / tool_name` 过滤
+      - latest 读取顺序恢复
+      - limit 读取行为
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_models.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_sqlite_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 49 tests ... OK`
+- 下一步：
+  - 进入模块 15 的任务 05，实现 runtime memory processor 并输出 `prompt_context_text`
 
 #### 记录 050：完成模块 15 的任务 03 Runtime Memory 模型与 Store 接口落地
 
