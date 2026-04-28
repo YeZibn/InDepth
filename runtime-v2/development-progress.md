@@ -243,9 +243,95 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 13：ReAct Step 最小执行骨架
+
+- 模块目标：
+  - 在当前 runtime-v2 中正式落地单轮 ReAct step 的最小执行结构
+  - 固定 `Actor / observation / action / tool call / StepResult` 之间的边界
+  - 为后续 `Solver` 多轮循环、`Reflexion` 与 memory 接线提供正式执行骨架
+- 已定子任务：
+  - 任务 01：对齐 ReAct 在当前 runtime-v2 中的正式位置，并修订已有设计稿中的相关表述
+  - 任务 02：确定单轮 ReAct step 的最小结构与输入输出边界
+  - 任务 03：实现最小 ReAct step 骨架代码，不接完整 memory / reflexion
+  - 任务 04：让 execute 链能够通过该最小 step 骨架产出 `StepResult`，并补测试与文档
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 040：完成模块 13 的任务 02 单轮 ReAct Step 输入输出边界定稿
+
+- 状态：已完成
+- 范围：完成模块 13 的任务 02，正式收口单轮 ReAct step 的最小输入输出结构，并纠正其建模视角回到 agent step 本体，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 单轮 ReAct step 的主视角应是 agent I/O
+    - 而不是 runtime 内部状态参数建模
+  - 已正式确定：
+    - 第一版单轮 ReAct step 只定义：
+      - `ReActStepInput`
+      - `ReActStepOutput`
+  - 已正式确定：
+    - `ReActStepInput` 当前最小只包含：
+      - `step_prompt`
+  - 已正式确定：
+    - `ReActStepOutput` 当前最小包含：
+      - `thought`
+      - `action`
+      - `observation`
+      - `step_result`
+  - 已正式确定：
+    - `thought / action / observation / step_prompt` 当前都先用字符串字段
+  - 已正式确定：
+    - `step_result` 仍然是 runtime / orchestrator 真正消费的正式结果
+  - 已正式确定：
+    - `RunContext / current_node` 不直接暴露为 step 协议字段
+    - 它们属于 runtime 内部状态，应通过 prompt assembly 进入 `step_prompt`
+- 验证结果：
+  - 本任务为结构定稿任务，无代码执行验证
+- 遗留问题：
+  - 最小 ReAct step 代码骨架仍未落地
+  - `step_prompt` 的正式装配入口仍未落地
+- 下一步：
+  - 进入模块 13 的任务 03，开始实现最小 ReAct step 骨架代码
+
+### 2026-04-28
+
+#### 记录 039：完成模块 13 的任务 01 ReAct 位置对齐与边界收口
+
+- 状态：已完成
+- 范围：完成模块 13 的任务 01，正式对齐 ReAct 在当前 runtime-v2 中的实现位置与模块边界，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 模块 13 当前只落单轮 ReAct step
+    - 不直接落完整 `Solver` 多轮循环
+  - 已正式确定：
+    - `Actor` 是单轮 ReAct step 的执行主体
+    - `Solver` 仍暂不在本模块成型
+  - 已正式确定：
+    - 单轮 ReAct step 的正式输出仍然是 `StepResult`
+  - 已正式确定：
+    - `Reflexion` 与 `Completion Evaluator` 在本模块不实现
+    - 仅作为后续正式挂点预留
+  - 已正式确定：
+    - 本模块的目标是建立正式执行骨架
+    - 不追求这一轮的智能性完整
+- 验证结果：
+  - 本任务为方向对齐任务，无代码执行验证
+- 遗留问题：
+  - 单轮 ReAct step 的最小输入输出结构仍未定稿
+  - ReAct step 与当前 execute 链的接线方式仍未定稿
+- 下一步：
+  - 进入模块 13 的任务 02，讨论单轮 ReAct step 的最小结构与输入输出边界
 
 ### 2026-04-28
 
