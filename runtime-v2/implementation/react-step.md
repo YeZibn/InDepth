@@ -119,8 +119,12 @@
 5. 若 `step_result.patch` 非空：
    - 仍由现有 `TaskGraphStore.apply_patch(...)` 回写 graph
 6. 若 `step_result.patch` 为空：
-   - 当前不额外生成补丁
-   - 只表示 execute 已经通过真实 ReAct step 获得了一次正式 `StepResult`
+   - orchestrator 当前会根据 `status_signal` 做最小主链收口
+   - 当前最小映射如下：
+     - `ready_for_completion -> node_status=COMPLETED`
+     - `blocked -> node_status=BLOCKED`
+     - `failed -> node_status=FAILED`
+   - `progressed` 当前仍允许不生成 patch
 
 ## 当前输出约束
 

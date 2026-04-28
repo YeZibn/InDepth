@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.solver import ReActStepInput, ReActStepRunner
-from rtv2.solver.models import StepResult
+from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
 from rtv2.task_graph.store import TaskGraphStore
+from rtv2.tools import ToolRegistry
 from rtv2.task_graph.models import (
     NodePatch,
     NodeStatus,
@@ -25,9 +26,11 @@ class RuntimeOrchestrator:
         *,
         graph_store: TaskGraphStore,
         react_step_runner: ReActStepRunner | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.graph_store = graph_store
-        self.react_step_runner = react_step_runner or ReActStepRunner()
+        self.tool_registry = tool_registry
+        self.react_step_runner = react_step_runner or ReActStepRunner(tool_registry=tool_registry)
         self._graph_counter = 0
         self._node_counter = 0
 
@@ -192,7 +195,7 @@ class RuntimeOrchestrator:
                     step_prompt=self.build_react_step_prompt(context, node),
                 )
             )
-            return react_output.step_result
+            return self._materialize_running_node_step_result(node, react_output.step_result)
         return None
 
     def _advance_pending_node(
@@ -233,6 +236,45 @@ class RuntimeOrchestrator:
         context.domain_state.task_graph_state = updated_graph
         if patch.active_node_id is not None:
             context.runtime_state.active_node_id = patch.active_node_id
+
+    @staticmethod
+    def _materialize_running_node_step_result(
+        node: TaskGraphNode,
+        step_result: StepResult | None,
+    ) -> StepResult | None:
+        if step_result is None or step_result.patch is not None:
+            return step_result
+
+        if step_result.status_signal is StepStatusSignal.READY_FOR_COMPLETION:
+            step_result.patch = TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=node.node_id,
+                    node_status=NodeStatus.COMPLETED,
+                )]
+            )
+            return step_result
+
+        if step_result.status_signal is StepStatusSignal.BLOCKED:
+            step_result.patch = TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=node.node_id,
+                    node_status=NodeStatus.BLOCKED,
+                    block_reason=step_result.reason,
+                )]
+            )
+            return step_result
+
+        if step_result.status_signal is StepStatusSignal.FAILED:
+            step_result.patch = TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=node.node_id,
+                    node_status=NodeStatus.FAILED,
+                    failure_reason=step_result.reason,
+                )]
+            )
+            return step_result
+
+        return step_result
 
     @staticmethod
     def build_react_step_prompt(context: RunContext, node: TaskGraphNode) -> str:

@@ -281,13 +281,53 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
-- 任务 05：未开始
+- 任务 05：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 047：完成模块 14 的任务 05 runtime 主链接入最小 Tool 能力
+
+- 状态：已完成
+- 范围：完成模块 14 的任务 05，让 runtime 主链正式接入 tool-aware 的 `ReActStepRunner`，并补测试、实现说明与开发进度
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+  - 已正式实现：
+    - `RuntimeOrchestrator.__init__(...)` 支持注入：
+      - `tool_registry: ToolRegistry | None`
+    - 当外部未显式传入 `react_step_runner` 时：
+      - orchestrator 会基于 `tool_registry` 自动装配 `ReActStepRunner`
+    - 当外部同时传入 `react_step_runner` 与 `tool_registry` 时：
+      - 以显式 `react_step_runner` 优先
+    - execute 主链当前仍只在 `RUNNING` node 上消费 ReAct step
+    - 当前若 ReAct step 返回最终 `step_result` 但未携带 patch：
+      - orchestrator 会基于 `status_signal` 做最小主链状态物化：
+        - `ready_for_completion -> COMPLETED`
+        - `blocked -> BLOCKED`
+        - `failed -> FAILED`
+  - 已更新测试：
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - 已覆盖：
+      - `tool_registry` 自动装配 tool-aware runner
+      - 显式 `react_step_runner` 覆盖自动装配
+      - 无 patch 的 `FAILED` 信号可被主链物化回 node 状态
+  - 已更新实现说明：
+    - `runtime-v2/implementation/react-step.md`
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 44 tests ... OK`
+- 遗留问题：
+  - 当前默认 tool 集仍未正式定义
+  - 当前 tool 执行过程还未接入统一 memory 记录流
+  - 当前主链仍只消费最终 `step_result`，不暴露中间 tool 轨迹
+- 下一步：
+  - 模块 14 已收尾，可进入 memory 相关新模块讨论与落地
 
 #### 记录 046：完成模块 14 的任务 04 ReActStepRunner 单次 Tool Call 与结果回填
 

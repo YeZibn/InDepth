@@ -10,11 +10,13 @@ if str(SRC) not in sys.path:
 
 from rtv2.host.interfaces import StartRunIdentity
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
+from rtv2.model.base import ModelOutput
 from rtv2.solver.react_step import ReActStepOutput
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import RunPhase
 from rtv2.task_graph.models import NodePatch, NodeStatus, TaskGraphNode, TaskGraphPatch, TaskGraphStatus
 from rtv2.task_graph.store import InMemoryTaskGraphStore
+from rtv2.tools import ToolRegistry, tool
 
 
 class FakeReActStepRunner:
@@ -39,7 +41,47 @@ def create_orchestrator(react_step_runner=None) -> RuntimeOrchestrator:
     )
 
 
+class SequenceModelProvider:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.calls = []
+
+    def generate(self, messages, tools, config=None):
+        self.calls.append({"messages": messages, "tools": tools, "config": config})
+        if not self.outputs:
+            raise AssertionError("No fake model outputs left")
+        return self.outputs.pop(0)
+
+
+@tool(
+    name="echo_text",
+    description="Echo text.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+        },
+        "required": ["text"],
+    },
+)
+def echo_text(text: str) -> str:
+    return f"echo:{text}"
+
+
 class RuntimeOrchestratorTests(unittest.TestCase):
+    def test_explicit_react_step_runner_takes_priority_over_tool_registry_auto_wiring(self):
+        registry = ToolRegistry()
+        registry.register(echo_text)
+        explicit_runner = FakeReActStepRunner()
+
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            react_step_runner=explicit_runner,
+            tool_registry=registry,
+        )
+
+        self.assertIs(orchestrator.react_step_runner, explicit_runner)
+
     def test_build_initial_context_creates_minimal_formal_run_context(self):
         orchestrator = create_orchestrator()
 
@@ -664,6 +706,92 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(executed.runtime_state.active_node_id, "node-1")
         self.assertEqual(executed.domain_state.task_graph_state.version, 2)
+
+    def test_run_execute_phase_auto_wires_tool_aware_react_runner_from_tool_registry(self):
+        registry = ToolRegistry()
+        registry.register(echo_text)
+        provider = SequenceModelProvider([
+            ModelOutput(
+                content='{"thought":"need tool","action":"call tool","observation":"","tool_call":{"tool_name":"echo_text","arguments":{"text":"hello"}}}',
+                raw={},
+            ),
+            ModelOutput(
+                content='{"thought":"tool done","action":"complete node","observation":"echo:hello","status_signal":"ready_for_completion","reason":"tool provided enough information"}',
+                raw={},
+            ),
+        ])
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            tool_registry=registry,
+        )
+        orchestrator.react_step_runner.model_provider = provider
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Run tool-aware react step.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Running",
+                kind="execution",
+                description="Process the current user request.",
+                node_status=NodeStatus.RUNNING,
+            )
+        ]
+
+        executed = orchestrator.run_execute_phase(context)
+
+        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual(provider.calls[0]["tools"][0]["name"], "echo_text")
+        self.assertEqual(provider.calls[1]["tools"], [])
+        self.assertEqual(
+            executed.domain_state.task_graph_state.nodes[0].node_status,
+            NodeStatus.COMPLETED,
+        )
+        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
+
+    def test_advance_node_minimally_materializes_failed_signal_without_patch(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="tool failed",
+                action="stop current node",
+                observation="failure observed",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.FAILED,
+                    reason="tool execution failed",
+                ),
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Running node failure.",
+            )
+        )
+        running_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        step_result = orchestrator.advance_node_minimally(context, running_node)
+
+        self.assertIsNotNone(step_result)
+        self.assertEqual(step_result.status_signal, StepStatusSignal.FAILED)
+        self.assertIsNotNone(step_result.patch)
+        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.FAILED)
+        self.assertEqual(step_result.patch.node_updates[0].failure_reason, "tool execution failed")
 
 
 if __name__ == "__main__":
