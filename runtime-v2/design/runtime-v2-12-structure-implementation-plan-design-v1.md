@@ -1,19 +1,19 @@
-# runtime-v2 十二个重点框架结构实施计划（V1）
+# runtime-v2 十三个重点框架结构实施计划（V1）
 
 更新时间：2026-04-24  
 状态：Draft
 
 ## 1. 目的
 
-这份文档将 `runtime-v2` 的后续建设，直接按之前约定的 12 个重点框架结构来组织。
+这份文档将 `runtime-v2` 的后续建设，直接按当前收敛的 13 个重点框架结构来组织。
 
 这里的核心假设是：
 
-1. 这 12 个部分不是讨论目录，而是后续真正要逐步实现的 12 个重点结构。
+1. 这 13 个部分不是讨论目录，而是后续真正要逐步实现的 13 个重点结构。
 2. 每个重点结构都需要继续拆成可落地的子任务。
 3. 各结构之间天然存在代码交叉，因此计划不能按瀑布式切分，只能按“结构分组 + 子任务交叉推进”的方式组织。
 
-因此，本文不再按阶段拆一级目录，而是按 12 个重点结构拆分，并在每个结构下明确：
+因此，本文不再按阶段拆一级目录，而是按 13 个重点结构拆分，并在每个结构下明确：
 
 1. 结构目标
 2. 落地子任务
@@ -25,7 +25,7 @@
 
 ### 2.1 以结构为主，以阶段为辅
 
-后续实现工作以这 12 个结构为主线组织；阶段只用于判断整体推进程度，不作为代码切分边界。
+后续实现工作以这 13 个结构为主线组织；阶段只用于判断整体推进程度，不作为代码切分边界。
 
 ### 2.2 子任务允许跨结构并行推进
 
@@ -57,12 +57,12 @@
 
 本文采用统一任务编号：
 
-1. 一级结构编号使用 `S1` 到 `S12`。
+1. 一级结构编号使用 `S1` 到 `S13`。
 2. 每个结构下的落地子任务使用 `Sx-Ty`。
 3. `Sx-Ty` 只表示任务归属，不表示严格串行顺序。
 4. 真正的建议实现顺序以本文后面的“总实现顺序表”为准。
 
-## 3. 十二个重点结构总表
+## 3. 十三个重点结构总表
 
 | 编号 | 重点结构 | 核心作用 | 优先级 |
 |---|---|---|---|
@@ -78,6 +78,7 @@
 | S10 | SubAgent 协作层 | 提供角色化协作和并行执行 | P1 |
 | S11 | 验证、判定与收尾层 | 定义完成判定和结果收口 | P1 |
 | S12 | 观测、复盘与工程化层 | 提供事件、测试、复盘、迁移基础设施 | P1 |
+| S13 | Planner / Solver / Reflexion / Re-plan 运行框架层 | 收口规划、执行纠偏、重规划判定与主链映射 | P0 |
 
 ## 4. 分结构实施计划
 
@@ -190,6 +191,17 @@
 1. 先完成职责拆解和主控对象定义。
 2. 再完成 phase engine 与 step loop 约束。
 3. 然后落最小 skeleton。
+
+当前补充框架对齐结论：
+
+1. `PreparePhase` 对应后续 `Planner`
+2. `ExecutePhase` 对应后续 `Solver`
+3. `Solver` 第一版在单个 node 内允许多轮 step
+4. `Solver` 内部采用轻量三段逻辑：
+   - `Actor` 负责 ReAct 求解
+   - `Completion Evaluator` 只负责 node 进入 `completed` 前的完成判定
+   - `Reflexion` 作为轻量纠偏步骤存在
+5. `Reflexion` 当前不抬升为独立顶层 phase 或大组件
 
 ## 4.4 S4 状态模型层
 
@@ -378,6 +390,13 @@
 2. 再定定位与挂载点。
 3. 然后统一做 memory skeleton。
 
+当前补充框架对齐结论：
+
+1. `Reflexion` 的主落点是 runtime memory
+2. 这类记忆属于运行期短期纠偏记忆
+3. 它的作用是为后续 solve 或更高层 re-plan 提供失败归因和下一步策略
+4. 当前不以 task graph 作为 reflexion 的主存储
+
 ## 4.9 S9 Skills 与扩展能力层
 
 结构目标：
@@ -488,12 +507,18 @@
 2. 再定完成语义和证据要求。
 3. 然后落 verification skeleton。
 
+当前补充框架对齐结论：
+
+1. 当前 `verification` 仍然只服务 `FinalizePhase` 的最终守门
+2. `verification` 不等于 `Reflexion`
+3. `Reflexion` 属于 `Solver` 内部的执行中纠偏逻辑
+4. 最终验证失败后的回退执行，仍属于 finalize pipeline 的外层控制问题，而不是 reflexion 本身
+
 ## 4.12 S12 观测、复盘与工程化层
 
 结构目标：
 
 1. 为 v2 提供正式事件模型、证据链、测试分层和迁移支撑。
-2. 让 v2 从一开始就具备可验证、可回放、可维护的工程基础。
 
 落地子任务：
 
@@ -525,6 +550,96 @@
 1. 先做 inventory 与事件模型。
 2. 再定证据链和测试分层。
 3. 最后落测试和观测 skeleton。
+
+## 4.13 S13 Planner / Solver / Reflexion / Re-plan 运行框架层
+
+结构目标：
+
+1. 收口 `Planner / Solver / Reflexion / Re-plan` 在 runtime-v2 中的正式运行框架。
+2. 对齐现有 `prepare / execute / finalize / verification` 与目标架构之间的映射关系。
+3. 明确 node 内 solve、运行期纠偏、重规划判定与回流到 planning 的边界。
+
+落地子任务：
+
+1. `S13-T1` 对齐 `Planner / Solver / Reflexion / Re-plan` 与 `prepare / execute / finalize / verification` 的映射关系。
+   产物：phase mapping spec。
+2. `S13-T2` 定义 `Solver` 的内部结构与 node 内循环边界。
+   产物：solver loop design。
+3. `S13-T3` 定义 `Reflexion` 的触发条件、写入位置与最小语义。
+   产物：reflexion runtime memory note。
+4. `S13-T4` 定义 `Re-plan` 的判定条件、判定结果与回流流程。
+   产物：replan gate design。
+5. `S13-T5` 统一修正相关旧设计稿中的框架表述与编号引用。
+   产物：design alignment patch。
+6. `S13-T6` 定义 `StepResult` 的最小正式结构。
+   产物：step result schema note。
+7. `S13-T7` 定义统一 `runtime memory` 记录流与 `reflexion` entry 的最小正式结构。
+   产物：runtime memory entry note。
+
+交叉依赖：
+
+1. 强依赖 S3 Runtime 主编排层。
+2. 强依赖 S4 状态模型层。
+3. 强依赖 S5 任务编排与执行图层。
+4. 与 S8 记忆系统层强交叉。
+5. 与 S11 验证、判定与收尾层强交叉。
+
+建议启动顺序：
+
+1. 先定 phase mapping 与 solver loop。
+2. 再定 reflexion 与 re-plan 的边界。
+3. 然后补齐 `StepResult` 与统一 runtime memory 结构。
+4. 最后统一修正文档与接口口径。
+
+当前补充框架对齐结论：
+
+1. `Planner = PreparePhase`
+2. `Solver = ExecutePhase`
+3. `Verification = FinalizePhase` 内的最终守门链路
+4. `Reflexion` 不单独成为 phase，而是 `Solver` 内部的轻量纠偏机制
+5. `Solver` 是 node 级求解器，单个 node 内允许多轮 step
+6. 单轮 step 由 `Actor` 完成，`Actor` 内部可采用 `ReAct`
+7. `Completion Evaluator` 只在 node 尝试进入 `completed` 前触发
+8. `Reflexion` 只在 completion fail、node blocked、node failed 时触发
+9. `Reflexion` 主落点是 runtime memory，内容保持精简结构化
+10. `Reflexion` 可输出 `replan_signal`，但当前只作为建议信号
+11. `Re-plan` 不是重规划执行器，而是 runtime 外层的 run 级重规划判定器
+12. `Re-plan` 不直接生成新计划，只负责判断是否需要回到 `PreparePhase`
+13. 真正的重规划由 `PreparePhase` 执行
+14. `Re-plan` 的最小判定结果当前收敛为：
+    - `no_replan`
+    - `need_replan`
+15. 当结果为 `need_replan` 时，需要附带 `reason`
+16. 当前最小原因集合包括：
+    - `node_failed`
+    - `persistent_blocked`
+    - `repeated_completion_fail`
+    - `final_verification_fail`
+17. `StepResult` 是 `Actor -> Solver` 的最小运行时结构化交接对象
+18. `StepResult` 的最小字段当前收敛为：
+    - `result_refs`
+    - `status_signal`
+    - `reason`
+    - `patch`
+19. `patch` 直接挂正式 `TaskGraphPatch`，并来自 tool 的结构化返回结果
+20. 统一 `runtime memory` 采用单条记录流，不拆 `context` 与 `reflexion` 存储区
+21. 统一 memory entry 通过 `entry_type` 区分 `context / reflexion`
+22. 统一 memory entry 的最小锚点包括：
+    - `role`
+    - `run_id`
+    - `step_id`
+    - `node_id`
+    - `created_at`
+    - `related_result_refs`
+    - `tool_name`
+    - `tool_call_id`
+23. 当 `entry_type = reflexion` 时，附加字段最小收敛为：
+    - `trigger`
+    - `reason`
+    - `next_try_hint`
+    - `replan_signal`
+24. 当前 `PreparePhase / ExecutePhase / Re-plan / Finalize` 都读取全量 `runtime memory`
+25. 当前阶段不引入按阶段裁剪的 `memory view`
 
 ## 5. 总实现顺序表
 
@@ -649,7 +764,7 @@
 
 ## 6. 建议的整体启动顺序
 
-虽然实现组织按 12 个结构展开，但建议整体启动顺序如下：
+虽然实现组织按 13 个结构展开，但建议整体启动顺序如下：
 
 ### 第一批立即启动
 
@@ -665,6 +780,7 @@
 2. S11 验证、判定与收尾层
 3. S12 观测、复盘与工程化层
 4. S2 入口与宿主层
+5. S13 Planner / Solver / Reflexion / Re-plan 运行框架层
 
 ### 第三批接入增强能力
 
@@ -694,6 +810,7 @@
 | S10 SubAgent 协作层 | S1、S3、S5、S12 |
 | S11 验证、判定与收尾层 | S1、S3、S4、S8、S12 |
 | S12 观测、复盘与工程化层 | S3、S4、S6、S8、S11 |
+| S13 Planner / Solver / Reflexion / Re-plan 运行框架层 | S3、S4、S5、S8、S11 |
 
 ## 8. 当前建议优先推进的子任务集合
 
@@ -709,18 +826,18 @@
 
 这些子任务当前最值得优先推进，原因如下：
 
-1. 十二结构第一版设计稿已经全部闭合。
+1. `S1 ~ S12` 第一版设计稿已经闭合，`S13` 正在补充收口。
 2. `S2-T5` 已把等待后的继续推进统一收敛为宿主侧“重开新 run”。
 3. 当前重点已经从补设计缺口转到统一口径与准备实现。
 4. 后续推进更适合围绕接口对齐、状态一致性和实现顺序展开。
 
 ## 9. 结论
 
-后续实现 `runtime-v2` 时，应当把这 12 个重点框架结构视为真正的实施主线。  
+后续实现 `runtime-v2` 时，应当把这 13 个重点框架结构视为真正的实施主线。  
 每个结构都不是“顺手补一下”的附属模块，而是需要单独建模、单独拆子任务、单独落地的核心部分。
 
 因此，推荐的推进方式是：
 
-1. 用这 12 个结构组织整体工作。
+1. 用这 13 个结构组织整体工作。
 2. 用每个结构下的子任务组织具体实施。
 3. 接受结构之间的天然交叉，并通过交叉依赖来安排推进顺序，而不是试图按瀑布式阶段强行隔离代码。

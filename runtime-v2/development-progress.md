@@ -17,9 +17,9 @@
 ## 当前总体状态
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
-- 设计文档状态：`S1 ~ S12` 第一版设计稿已完成
+- 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，`S13` 正在补充
 - 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05、模块 06
-- 当前重点：讨论并推进模块 07，继续按子任务逐个对齐后再落地
+- 当前重点：已完成模块 09 的设计收口，下一步进入后续模块讨论或转入对应实现任务
 
 ---
 
@@ -164,9 +164,465 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 09：Planner / Solver / Reflexion 与重规划框架对齐
+
+- 模块目标：
+  - 收口 `Planner / Solver / Reflexion` 在 runtime-v2 中的正式运行框架
+  - 对齐现有 `prepare / execute / finalize / verification` 设计与目标架构之间的关系
+  - 补齐当前缺失的 `Reflexion` 设计位，并同步更新相关设计稿
+  - 将 `re-plan / 重规划` 正式纳入运行框架，明确其与 solver、reflexion、verification 的关系
+- 已定子任务：
+  - 任务 01：对齐 `Planner / Solver / Reflexion / 重规划` 与 `prepare / execute / finalize / verification` 的映射关系
+  - 任务 02：确定 `Solver` 的内部结构与 node 内循环边界
+  - 任务 03：确定 `Reflexion` 的触发条件、写入位置与最小语义
+  - 任务 04：确定 `重规划` 的触发条件、输入来源、产物边界与和 `Planner` 的关系
+  - 任务 05：新增 `S13` 设计模块并同步修正文档中的旧表述与引用
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+
+### 模块 10：StepResult 与 Unified Runtime Memory 最小正式结构
+
+- 模块目标：
+  - 为 `Solver` 的 node 内循环补齐最小正式结果结构
+  - 为 unified `runtime memory` 与其中的 `reflexion` entry 补齐最小正式结构
+  - 收口它们与 `Solver / Re-plan / PreparePhase` 之间的消费关系
+- 已定子任务：
+  - 任务 01：对齐模块目标，并核对当前设计稿中 `StepResult / runtime memory` 的缺口与不一致
+  - 任务 02：确定 `StepResult` 的最小正式结构
+  - 任务 03：确定 unified `runtime memory` 与 `reflexion` entry 的最小正式结构
+  - 任务 04：同步更新设计稿与开发进度，并确认它们与 `Solver / Re-plan / PreparePhase` 的接口关系
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+
+### 模块 11：StepResult 正式结构与最小执行接线
+
+- 模块目标：
+  - 将 `StepResult` 的设计结论正式落成代码结构
+  - 在不引入完整 `Solver` 类的前提下，为当前 execute 链路补齐最小 `StepResult` 接线
+  - 保持现有 patch 提交链可用，同时把 `TaskGraphPatch` 降为 `StepResult` 的一个字段
+- 已定子任务：
+  - 任务 01：对齐当前实现与设计稿，确定 `StepResult` 的代码落点、命名与最小接线范围
+  - 任务 02：实现 `StepResult` 模型与相关最小枚举/类型
+  - 任务 03：将当前 execute 最小推进链改成先产出 `StepResult`，再由 orchestrator 消费
+  - 任务 04：补测试、更新实现文档与开发进度
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 031：完成模块 10 的任务 04 设计稿回写与接口关系收口
+
+- 状态：已完成
+- 范围：完成模块 10 的任务 04，同步更新设计稿与开发进度，并收口 `StepResult`、统一 `runtime memory` 与 `Solver / Re-plan / PreparePhase / Finalize` 的接口关系，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - `Solver` 直接消费 `StepResult`
+    - 使用 `status_signal / reason / patch / result_refs` 推进 node 状态判断
+  - 已正式确定：
+    - `Reflexion` 触发后向统一 `runtime memory` 追加 `entry_type = reflexion` 的 entry
+    - 不改写已有 `StepResult`
+    - 不直接改写 graph
+  - 已正式确定：
+    - `PreparePhase / ExecutePhase / Re-plan / Finalize` 当前都读取全量 `runtime memory`
+    - 当前阶段不引入按阶段裁剪的 `memory view`
+  - 已正式确定：
+    - `Re-plan` 判定与 `PreparePhase` 重规划都基于统一 memory 上下文
+    - 后续若出现上下文膨胀或阶段噪声，再单独引入分阶段 memory view
+  - 已同步回写：
+    - 总设计书中的 `S13` 相关结论
+    - 模块 10 设计稿
+    - 开发进度中的模块 10 完成状态
+- 验证结果：
+  - 本任务为设计文档回写任务，无代码执行验证
+- 遗留问题：
+  - `result_refs` 的正式字段细节仍未定稿
+  - `content` 字段与结构化附加字段之间的最小书写规则仍未定稿
+  - 统一 `runtime memory` 的持久化模型与 API contract 仍未定稿
+- 下一步：
+  - 进入下一个开发模块讨论，或回到 `S13`/memory 相关结构开始增量实现
+
+### 2026-04-28
+
+#### 记录 030：完成模块 10 的任务 03 Unified Runtime Memory 与 Reflexion Entry 最小结构定稿
+
+- 状态：已完成
+- 范围：完成模块 10 的任务 03，正式收口统一 `runtime memory` 记录流与其中 `reflexion` 语义 entry 的最小正式结构，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - `runtime memory` 采用统一记录流
+    - `context` 与 `reflexion` 不拆分存储区
+    - 所有运行期记忆统一以 entry 形式写入
+  - 已正式确定：
+    - 统一 memory entry 通过 `entry_type` 区分：
+      - `context`
+      - `reflexion`
+    - 此设计用于保留更自然的时间线语义，并表达何时、因何发生反思
+  - 已正式确定：
+    - 统一 memory entry 的最小字段包括：
+      - `entry_id`
+      - `entry_type`
+      - `content`
+      - `role`
+      - `run_id`
+      - `step_id`
+      - `node_id`
+      - `created_at`
+      - `related_result_refs`
+      - `tool_name`（可选）
+      - `tool_call_id`（可选）
+  - 已正式确定：
+    - 该结构借鉴旧版 InDepth runtime memory 中的 `role / tool_call_id / run_id / step_id / created_at` 等锚点语义
+    - 同时补入 v2 需要的 `node_id`
+  - 已正式确定：
+    - 当 `entry_type = reflexion` 时，附加字段最小收敛为：
+      - `trigger`
+      - `reason`
+      - `next_try_hint`
+      - `replan_signal`
+  - 已正式确定：
+    - `replan_signal` 当前最小语义仍保持：
+      - `none`
+      - `suggested`
+  - 已正式确定：
+    - `Solver / Re-plan / PreparePhase` 读取的是同一条 runtime memory 记录流
+    - 但可按 `entry_type`、锚点字段与结果引用进行筛选
+- 验证结果：
+  - 本任务为设计定稿任务，无代码执行验证
+- 遗留问题：
+  - 模块 10 相关设计稿与总设计书仍未同步回写
+  - `StepResult` 与 `runtime memory` 进入 `PreparePhase` 的具体输入 contract 仍未定稿
+  - `content` 字段与结构化附加字段之间的最小书写规则仍未定稿
+- 下一步：
+  - 进入模块 10 的任务 04，统一更新设计稿与开发进度，并收口其与 `Solver / Re-plan / PreparePhase` 的接口关系
+
+### 2026-04-28
+
+#### 记录 029：完成模块 10 的任务 02 StepResult 最小正式结构定稿
+
+- 状态：已完成
+- 范围：完成模块 10 的任务 02，正式收口 `StepResult` 的最小正式结构与边界，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - `StepResult` 不是额外的 step 总结层
+    - 而是 `Actor -> Solver` 的最小运行时结构化交接对象
+  - 已正式确定：
+    - `StepResult` 应尽量从当前 step 已有执行产物中收口
+    - 不引入额外一次重生成或长文本总结
+  - 已正式确定：
+    - `StepResult` 的最小字段先收敛为：
+      - `result_refs`
+      - `status_signal`
+      - `reason`
+      - `patch`
+  - 已正式确定：
+    - `result_refs` 表示本轮新增、且可被后续阶段消费的结果引用集合
+    - 当前不再拆分 `artifacts / evidence`
+    - 继续沿用统一引用思路
+  - 已正式确定：
+    - `status_signal` 是给 `Solver` 的局部推进信号
+    - 当前最小枚举为：
+      - `progressed`
+      - `ready_for_completion`
+      - `blocked`
+      - `failed`
+  - 已正式确定：
+    - `reason` 只在 `status_signal != progressed` 时要求必填
+  - 已正式确定：
+    - `patch` 直接挂正式 `TaskGraphPatch`
+    - 该字段应来自 tool 的结构化返回结果
+    - 不再由 `Solver` 二次拼装 patch
+- 验证结果：
+  - 本任务为设计定稿任务，无代码执行验证
+- 遗留问题：
+  - `Reflexion Memory` 的最小字段集合仍未定稿
+  - `StepResult` 与 `PreparePhase` 重规划输入的具体接口关系仍未定稿
+  - `result_refs` 的正式字段细节仍未定稿
+- 下一步：
+  - 进入模块 10 的任务 03，讨论 `Reflexion Memory` 的最小正式结构
+
+### 2026-04-28
+
+#### 记录 028：完成模块 10 的任务 01 目标对齐与设计缺口确认
+
+- 状态：已完成
+- 范围：完成模块 10 的任务 01，正式对齐 `StepResult / Reflexion Memory` 模块目标，并确认当前设计稿中的缺口与边界，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 模块 10 只处理 `StepResult` 与 `Reflexion Memory` 的最小正式结构
+    - 当前不展开更复杂的策略层设计
+  - 已正式确定：
+    - `StepResult` 与 `Reflexion Memory` 是两个独立对象
+    - 不合并成单一执行结果结构
+  - 已正式确定：
+    - `StepResult` 主要服务 `Solver`
+    - 作为 `Actor` 每轮 step 后交给 `Solver` 的正式结果对象
+  - 已正式确定：
+    - `Reflexion Memory` 主要服务后续 `Solver` 纠偏以及 `Re-plan / PreparePhase` 消费
+  - 已正式确认当前设计缺口：
+    - `S13` 已明确二者必须存在
+    - 但尚未定义正式 schema
+    - 当前模块的主要任务是补齐结构空位，而不是修正旧结论
+- 验证结果：
+  - 本任务为设计对齐任务，无代码执行验证
+- 遗留问题：
+  - `StepResult` 的最小字段集合仍未定稿
+  - `Reflexion Memory` 的最小字段集合仍未定稿
+  - 二者与 `PreparePhase` 重规划输入的具体接口关系仍未定稿
+- 下一步：
+  - 进入模块 10 的任务 02，讨论 `StepResult` 的最小正式结构
+
+### 2026-04-28
+
+#### 记录 027：完成模块 09 的任务 05 新增 S13 并统一回写设计文档
+
+- 状态：已完成
+- 范围：完成模块 09 的任务 05，在总设计书中新增 `S13`，补模块 09 的正式设计稿，并统一修正文档中的旧表述与编号引用，不进入代码实现
+- 结果：
+  - 已在总设计书中将整体结构从 `12` 个扩展为 `13` 个
+  - 已新增：
+    - `S13 Planner / Solver / Reflexion / Re-plan 运行框架层`
+  - 已在总设计书中补齐 `S13-T1 ~ S13-T5` 子任务、交叉依赖、建议启动顺序与当前框架结论
+  - 已新增模块 09 的正式设计稿：
+    - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - 已统一修正旧文档中的以下口径：
+    - “12 个重点结构”更新为“13 个重点结构”
+    - `Re-plan` 不再表述为直接执行重规划，而是重规划判定后回流 `PreparePhase`
+    - `S13` 已纳入总表、交叉关系和整体启动顺序
+  - 已同步更新开发进度中的设计状态与模块 09 子任务完成状态
+- 验证结果：
+  - 本任务为设计文档回写任务，无代码执行验证
+- 遗留问题：
+  - `Reflexion` 的正式 memory schema 仍未定稿
+  - `StepResult` 的正式 schema 仍未定稿
+  - `PreparePhase` 在重规划场景下的具体输入输出 contract 仍未定稿
+- 下一步：
+  - 进入下一模块讨论，或回到 `S13` 相关结构开始增量实现
+
+### 2026-04-28
+
+#### 记录 026：完成模块 09 的任务 04 重规划判定与回流流程定稿
+
+- 状态：已完成
+- 范围：完成模块 09 的任务 04，正式收口 `Re-plan` 的触发条件、判定职责与回流到 `PreparePhase` 的流程边界，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - `Re-plan` 不是重规划执行器
+    - 而是 runtime 外层的 run 级重规划判定器
+  - 已正式确定：
+    - `Re-plan` 不单独成为固定 phase
+    - 只在升级条件满足时作为控制动作参与主链
+  - 已正式确定：
+    - `blocked` 只有在无法局部解除时才允许升级进入 `Re-plan`
+    - `completion fail` 只有达到阈值后才允许升级进入 `Re-plan`
+  - 已正式确定：
+    - 是否真正进入 `Re-plan`
+    - 由 runtime 外层控制逻辑结合 node 状态、graph 状态、失败历史、runtime memory 与 verification 结果决定
+  - 已正式确定：
+    - `Re-plan` 只负责判断是否需要重规划
+    - 并输出重规划判定结果与回流到 `PreparePhase` 的输入上下文
+  - 已正式确定：
+    - 真正的重规划不由 `Re-plan` 执行
+    - 而是回到 `PreparePhase` 由 `Planner` 基于已有目标、graph、结果与记忆重新规划
+  - 已正式确定：
+    - `Re-plan` 的最小判定结果先收敛为：
+      - `no_replan`
+      - `need_replan`
+  - 已正式确定：
+    - 当判定为 `need_replan` 时
+    - 需要附带 `reason`
+    - 当前最小原因集合包括：
+      - `node_failed`
+      - `persistent_blocked`
+      - `repeated_completion_fail`
+      - `final_verification_fail`
+  - 已正式确定：
+    - `PreparePhase` 接收重规划输入后产出新的 planning 结果
+    - 再继续后续 `ExecutePhase`
+- 验证结果：
+  - 本任务为设计定稿任务，无代码执行验证
+- 遗留问题：
+  - `Reflexion` 的正式 memory schema 仍未定稿
+  - `StepResult` 的正式 schema 仍未定稿
+  - `PreparePhase` 在重规划场景下的具体输入输出 contract 仍未定稿
+- 下一步：
+  - 进入模块 09 的任务 05，新增 `S13` 设计模块并统一修正文档中的旧表述与引用
+
+### 2026-04-28
+
+#### 记录 025：完成模块 09 的任务 03 Reflexion 触发条件与最小语义定稿
+
+- 状态：已完成
+- 范围：完成模块 09 的任务 03，正式收口 `Reflexion` 的触发条件、写入位置、语义边界与最小升级信号，不进入代码实现
+- 结果：
+  - 已正式确定 `Reflexion` 只在以下三类事件触发：
+    - `Completion Evaluator` 判定当前 node 不能进入 `completed`
+    - `Solver` 判定当前 node 进入 `blocked`
+    - `Solver` 判定当前 node 进入 `failed`
+  - 已正式确定：
+    - `Reflexion` 主落点写入 `runtime memory`
+    - 不直接作为 `task graph` 的主存储
+  - 已正式确定：
+    - `Reflexion` 的作用是记录局部失败原因、纠偏线索与下一步尝试提示
+    - 它服务于后续 solve 与更高层 `re-plan`
+  - 已正式确定：
+    - `Reflexion` 不是正式验证结果
+    - 不是最终 node 状态
+    - 也不直接回写 graph
+  - 已正式确定：
+    - `Reflexion` 内容保持精简结构化
+    - 不采用长篇总结式文本
+  - 已正式确定：
+    - `Reflexion` 可输出 `replan_signal`
+    - 当前只作为建议信号，不构成强制触发
+  - 已正式确定：
+    - 是否真正进入 `Re-plan`
+    - 由 `Solver` 或 runtime 外层控制逻辑结合全局上下文决定
+- 验证结果：
+  - 本任务为设计定稿任务，无代码执行验证
+- 遗留问题：
+  - `Re-plan` 的触发条件分级与 graph 级产物边界仍未定稿
+  - `Reflexion` 的正式 memory schema 仍未定稿
+  - `StepResult` 的正式 schema 仍未定稿
+- 下一步：
+  - 进入模块 09 的任务 04，讨论 `Re-plan` 的触发条件、输入来源与 graph 级产物边界
+
+### 2026-04-28
+
+#### 记录 024：完成模块 09 的任务 02 Solver 内部结构与 node 内循环边界定稿
+
+- 状态：已完成
+- 范围：完成模块 09 的任务 02，正式收口 `Solver` 的内部结构、node 内循环方式与正式状态收口责任，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - `Solver` 是 node 级求解器，不是单次 step 执行器
+    - 单个 node 内允许多轮 step
+  - 已正式确定：
+    - `Solver` 内部的三个核心环节为 `Actor / Completion Evaluator / Reflexion`
+    - 不再额外拆出独立 `Executor` 或 `Controller` 作为设计模块
+  - 已正式确定：
+    - 单轮 step 由 `Actor` 完成
+    - `Actor` 内部可采用 `ReAct`
+    - 本轮观察、行动、工具调用与结果整理统一属于 `Actor` 的职责
+  - 已正式确定：
+    - `Completion Evaluator` 只在 node 尝试进入 `completed` 前触发
+    - 它只负责判断当前 node 是否足够完成
+  - 已正式确定：
+    - `Reflexion` 在完成判定失败、或 node 进入 `blocked / failed` 时触发
+    - 它服务于后续 solve 与更高层 `re-plan`
+  - 已正式确定：
+    - `Solver` 通过消费每轮 `StepResult` 并结合 node 当前状态与运行约束
+    - 决定 node 进入 `continue / completed / blocked / failed`
+  - 已正式确定：
+    - `completed / blocked / failed` 的正式状态收口责任属于 `Solver`
+    - 不直接交由单次 `Actor` 或 `Completion Evaluator` 输出决定
+  - 已正式确定：
+    - `StepResult` 可先作为抽象结果对象存在
+    - 本任务不继续展开其详细字段结构
+- 验证结果：
+  - 本任务为设计定稿任务，无代码执行验证
+- 遗留问题：
+  - `Reflexion` 的最小触发条件和记忆结构仍未定稿
+  - `Re-plan` 的触发条件分级与 graph 级产物边界仍未定稿
+  - `StepResult` 的正式 schema 仍未定稿
+- 下一步：
+  - 进入模块 09 的任务 03，讨论 `Reflexion` 的触发条件、写入位置与最小语义
+
+### 2026-04-28
+
+#### 记录 023：完成模块 09 的任务 01 运行框架映射关系定稿
+
+- 状态：已完成
+- 范围：完成模块 09 的任务 01，正式收口 `Planner / Solver / Reflexion / 重规划` 与 `prepare / execute / finalize / verification` 的映射关系，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - `Planner = PreparePhase`
+    - `Solver = ExecutePhase`
+    - `Verification = FinalizePhase` 内的最终守门链路
+  - 已正式确定：
+    - `Reflexion` 不单独成为 phase，而是 `Solver` 内部的轻量纠偏机制
+  - 已正式确定：
+    - `重规划（Re-plan）` 不单独成为固定 phase
+    - 而是 runtime 外层的 run 级控制动作
+  - 已正式确定：
+    - `Solver` 优先处理 node 内局部求解
+    - 只有局部求解不足时才升级进入 `Re-plan`
+  - 已正式确定：
+    - `Re-plan` 可由 `Solver` 侧的局部求解不足触发
+    - 也可由 `Verification` 侧的最终验证失败触发
+  - 已正式确定：
+    - `Re-plan` 触发后会重新进入 `PreparePhase`
+    - 并基于已有 graph、结果与 runtime memory 重写 plan
+  - 已正式确定：
+    - `Reflexion` 的输出主落点进入 runtime memory
+    - 它可作为后续 `Solver` 与 `Re-plan` 的输入
+  - 已正式确定：
+    - `Verification` 与 `Reflexion` 分层明确
+    - 前者服务最终结果守门，后者服务执行中纠偏
+- 验证结果：
+  - 本任务为设计定稿任务，无代码执行验证
+- 遗留问题：
+  - `Solver` 的 node 内部结构与 step 循环仍未定稿
+  - `Reflexion` 的最小记忆 schema 仍未定稿
+  - `Re-plan` 的触发条件分级与 graph 级产物边界仍未定稿
+- 下一步：
+  - 进入模块 09 的任务 02，讨论 `Solver` 的内部结构与 node 内循环边界
+
+### 2026-04-27
+
+#### 记录 022：完成模块 09 前一版 Planner / Solver / Reflexion 框架定稿
+
+- 状态：已完成
+- 范围：完成模块 09 前一版框架讨论，正式收口 `Planner / Solver / Reflexion` 轻量框架，并同步补齐设计稿，不进入代码实现
+- 结果：
+  - 已正式确定运行分层：
+    - `Planner = PreparePhase`
+    - `Solver = ExecutePhase`
+    - `Verification = FinalizePhase` 内的最终守门链路
+  - 已正式确定：
+    - `Reflexion` 不单独升为大组件
+    - 而是 `Solver` 内部的轻量纠偏步骤
+  - 已正式确定 `Solver` 内部边界：
+    - `Actor` 负责 ReAct 求解
+    - `Completion Evaluator` 只服务 node 进入 `completed` 前的完成判定
+    - `Reflexion` 在 completion fail、blocked、failed 时触发
+  - 已正式确定：
+    - 单个 node 内允许多轮 step
+    - `blocked / failed` 由 `Solver` 决定
+    - `Reflexion` 主落点写入 runtime memory
+    - 当前 `verification` 不等于 `Reflexion`
+  - 已新增模块 09 定稿目录与文档：
+    - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - 已同步补充总设计书：
+    - `runtime-v2/design/runtime-v2-12-structure-implementation-plan-design-v1.md`
+- 验证结果：
+  - 本任务为框架定稿任务，无代码执行验证
+- 遗留问题：
+  - 当时尚未将 `re-plan / 重规划` 正式纳入同一框架讨论
+  - `StepResult` 最小正式结构仍未定稿
+  - runtime memory 中 reflexion 的详细 schema 仍未定稿
+  - solver 内部 prompt 注入流程仍未定稿
+- 下一步：
+  - 以当前记录为基础，重新打开模块 09，补入 `重规划` 并拆分为新的多个子任务继续推进
 
 ### 2026-04-27
 
