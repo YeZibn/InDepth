@@ -274,7 +274,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             orchestrator.select_active_node(context)
 
-    def test_initialize_minimal_graph_returns_patch_for_empty_graph(self):
+    def test_initialize_minimal_graph_returns_step_result_for_empty_graph(self):
         orchestrator = create_orchestrator()
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -286,11 +286,12 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         )
         context.domain_state.task_graph_state.active_node_id = "stale-node"
 
-        patch = orchestrator.initialize_minimal_graph(context)
+        step_result = orchestrator.initialize_minimal_graph(context)
 
-        self.assertIsNotNone(patch)
-        self.assertEqual(len(patch.new_nodes), 1)
-        initial_node = patch.new_nodes[0]
+        self.assertIsNotNone(step_result)
+        self.assertIsNotNone(step_result.patch)
+        self.assertEqual(len(step_result.patch.new_nodes), 1)
+        initial_node = step_result.patch.new_nodes[0]
         self.assertEqual(initial_node.node_id, "node-1")
         self.assertEqual(initial_node.graph_id, context.domain_state.task_graph_state.graph_id)
         self.assertEqual(initial_node.name, "Handle user request")
@@ -305,8 +306,8 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(initial_node.notes, [])
         self.assertEqual(initial_node.block_reason, "")
         self.assertEqual(initial_node.failure_reason, "")
-        self.assertEqual(patch.active_node_id, "node-1")
-        self.assertIsNone(patch.graph_status)
+        self.assertEqual(step_result.patch.active_node_id, "node-1")
+        self.assertIsNone(step_result.patch.graph_status)
 
     def test_initialize_minimal_graph_returns_none_when_graph_is_not_empty(self):
         orchestrator = create_orchestrator()

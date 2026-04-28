@@ -19,7 +19,7 @@
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，`S13` 正在补充
 - 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05、模块 06
-- 当前重点：已完成模块 09 的设计收口，下一步进入后续模块讨论或转入对应实现任务
+- 当前重点：推进 execute 到 `StepResult` 的统一收口，并为后续 solver / memory 接线继续铺路
 
 ---
 
@@ -240,12 +240,61 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
-- 任务 04：未开始
+- 任务 03：已完成
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 038：完成模块 12 的任务 04 测试、实现说明与开发进度同步
+
+- 状态：已完成
+- 范围：完成模块 12 的任务 04，补齐最小回归测试、更新实现说明并同步开发进度，不进入更大范围的 solver/memory 改造
+- 结果：
+  - 已更新 orchestrator 实现说明：
+    - `initialize_minimal_graph(...)` 当前正式返回 `StepResult | None`
+    - execute 当前两个输出口都已统一到 `StepResult`
+    - `_apply_step_result(...)` 成为 orchestrator 当前最小统一消费入口
+  - 已更新 orchestrator 测试断言：
+    - 空图初始化场景已改为校验 `StepResult.patch`
+  - 已同步更新模块 12 的当前进度与开发记录
+- 验证结果：
+  - 已执行语法检查：
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py`
+  - 结果：
+    - `Ran 45 tests ... OK`
+- 遗留问题：
+  - orchestrator 对 `StepResult` 的完整消费仍未落地
+  - `result_refs / status_signal / reason` 当前仍未进入 execute 控制逻辑
+- 下一步：
+  - 进入下一个开发模块讨论，或继续推进 unified runtime memory 的代码骨架
+
+### 2026-04-28
+
+#### 记录 037：完成模块 12 的任务 03 orchestrator 最小 StepResult 消费入口收口
+
+- 状态：已完成
+- 范围：完成模块 12 的任务 03，将 orchestrator 内部对 `StepResult` 的最小消费逻辑收口为统一入口，不改变现有行为
+- 结果：
+  - 已在 `RuntimeOrchestrator` 中新增：
+    - `_apply_step_result(...)`
+  - 已正式实现：
+    - `run_execute_phase(...)` 不再直接内联 `step_result -> patch -> graph write-back` 逻辑
+    - 空图初始化和 node 推进两个分支统一交由 `_apply_step_result(...)` 消费
+  - 已正式确定：
+    - `_apply_step_result(...)` 当前只消费 `StepResult.patch`
+    - 统一负责 graph patch 回写与 `active_node_id` 同步
+- 验证结果：
+  - 已纳入模块 12 任务 04 的回归验证
+- 遗留问题：
+  - 当前仍未消费 `StepResult.result_refs / status_signal / reason`
+- 下一步：
+  - 进入任务 04，补测试、实现说明与开发进度同步
 
 ### 2026-04-28
 

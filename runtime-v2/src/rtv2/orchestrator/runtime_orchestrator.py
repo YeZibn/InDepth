@@ -81,16 +81,7 @@ class RuntimeOrchestrator:
             context.runtime_state.active_node_id = selected_node.node_id
             step_result = self.advance_node_minimally(context, selected_node)
 
-        patch = step_result.patch if step_result is not None else None
-        if patch is not None:
-            self.graph_store.save_graph(context.domain_state.task_graph_state)
-            updated_graph = self.graph_store.apply_patch(
-                context.domain_state.task_graph_state.graph_id,
-                patch,
-            )
-            context.domain_state.task_graph_state = updated_graph
-            if patch.active_node_id is not None:
-                context.runtime_state.active_node_id = patch.active_node_id
+        self._apply_step_result(context, step_result)
 
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
@@ -223,6 +214,22 @@ class RuntimeOrchestrator:
                 )]
             )
         )
+
+    def _apply_step_result(self, context: RunContext, step_result: StepResult | None) -> None:
+        """Consume the current minimal step result and write back its graph patch."""
+
+        patch = step_result.patch if step_result is not None else None
+        if patch is None:
+            return
+
+        self.graph_store.save_graph(context.domain_state.task_graph_state)
+        updated_graph = self.graph_store.apply_patch(
+            context.domain_state.task_graph_state.graph_id,
+            patch,
+        )
+        context.domain_state.task_graph_state = updated_graph
+        if patch.active_node_id is not None:
+            context.runtime_state.active_node_id = patch.active_node_id
 
     @staticmethod
     def _find_node(graph_state: TaskGraphState, node_id: str) -> TaskGraphNode | None:
