@@ -262,11 +262,96 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 14：本地 Tool 调用最小接线
+
+- 模块目标：
+  - 在当前 runtime-v2 中正式落地最小本地 tool 调用能力
+  - 收口 tool 在 `prepare / execute / finalize` 中的正式位置与运行边界
+  - 打通单轮 `ReAct step -> tool call -> observation -> StepResult` 最小闭环
+- 已定子任务：
+  - 任务 01：对齐现有设计稿与当前代码状态，确定 tool 模块的正式目标、边界与接线范围
+  - 任务 02：确定最小 tool 协议与核心模型
+  - 任务 03：实现最小 tool registry 与本地 executor
+  - 任务 04：让 `ReActStepRunner` 支持单轮最多一次 tool call，并完成 tool 结果回填
+  - 任务 05：让 runtime 主链接入该最小 tool 能力，并补测试、实现文档与开发记录
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：未开始
+- 任务 04：未开始
+- 任务 05：未开始
+
 ---
 
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 043：完成模块 14 的任务 01 Tool 模块目标与边界对齐
+
+- 状态：已完成
+- 范围：完成模块 14 的任务 01，对齐 runtime-v2 当前阶段中 tool 模块的正式目标、边界与主接线范围，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 模块 14 当前只覆盖本地同步工具
+    - 不进入异步等待型工具、并发工具执行与多轮工具链
+  - 已正式确定：
+    - 设计边界上允许 `prepare / execute / finalize` 都发起 tool 调用
+    - 但第一版真正落地时，优先接 `solver / ReAct step` 主链
+  - 已正式确定：
+    - tool 的第一版结果先统一回填为字符串化 `observation`
+    - 不提前引入复杂 artifact/result tree
+  - 已正式确定：
+    - 单轮 step 最多只允许一次 tool call
+  - 已正式确定：
+    - tool 不是独立 phase
+    - 而是 runtime 执行过程中的可调用能力层
+- 下一步：
+  - 进入模块 14 的任务 02，确定最小 tool 协议与核心模型
+
+#### 记录 044：完成模块 14 的任务 02 最小 Tool 协议定稿
+
+- 状态：已完成
+- 范围：完成模块 14 的任务 02，在参考旧版 tool 系统的基础上，收口 runtime-v2 第一版最小 tool 协议，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 借鉴旧版的核心分层：
+      - `ToolSpec`
+      - `ToolRegistry`
+      - runtime 执行而非模型直接执行
+      - schema 暴露而非函数本体暴露
+    - 不引入旧版中 event / todo binding / memory / prepare guard 等重逻辑
+  - 已正式确定最小核心对象：
+    - `ToolSpec`
+    - `ToolCall`
+    - `ToolResult`
+    - `ToolRegistry`
+    - `LocalToolExecutor`
+  - 已正式确定：
+    - 引入轻量 `decorator + hook`
+    - 但不直接照搬旧版完整复杂体系
+  - 已正式确定：
+    - `tool(...) decorator` 返回可直接注册对象
+  - 已正式确定：
+    - `hook` 当前只支持同步调用
+    - `hook` 允许修改参数和结果
+  - 已正式确定：
+    - 第一版先不引入：
+      - `hidden`
+      - `requires_confirmation`
+      - `stop_after_tool_call`
+      - `call_id`
+  - 已正式确定：
+    - `ToolResult.output_text` 统一收口为字符串
+  - 已正式确定：
+    - 第一版参数校验只做最小集合：
+      - tool 是否存在
+      - arguments 是否为 `dict`
+      - 必填字段是否缺失
+- 下一步：
+  - 进入模块 14 的任务 03，落地最小 `ToolRegistry / LocalToolExecutor / decorator / hook`
 
 #### 记录 042：完成模块 13 的任务 04 execute 主链接入最小 ReAct Step
 
