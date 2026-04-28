@@ -280,7 +280,7 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
 - 任务 05：未开始
 
 ---
@@ -288,6 +288,53 @@
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 046：完成模块 14 的任务 04 ReActStepRunner 单次 Tool Call 与结果回填
+
+- 状态：已完成
+- 范围：完成模块 14 的任务 04，让 `ReActStepRunner` 支持单轮最多一次本地 tool call，并在 tool 执行后完成最终 `StepResult` 回填，不接入 orchestrator 主链
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/solver/react_step.py`
+  - 已正式实现：
+    - `ReActStepOutput` 扩展为：
+      - `tool_call: ToolCall | None`
+      - `step_result: StepResult | None`
+    - `ReActStepRunner` 支持注入：
+      - `ToolRegistry`
+      - `LocalToolExecutor`
+    - 第一轮请求可向模型透传最小 tool schemas
+    - 第一轮若产生 tool call：
+      - runtime 执行一次本地工具
+      - 再发起第二轮请求
+      - 第二轮要求直接返回最终 JSON 结果
+    - 当前支持两种 tool call 解析来源：
+      - OpenAI-compatible `tool_calls`
+      - JSON 中的 `tool_call`
+    - 当前若第二轮继续请求 tool：
+      - 直接按失败收口
+    - 当前若模型既不给合法 tool call，也不给合法最终结果：
+      - 直接按失败收口
+  - 已更新测试：
+    - `runtime-v2/tests/test_react_step.py`
+    - 已覆盖：
+      - 无工具直返最终结果
+      - 单次 tool call -> tool 执行 -> 第二轮最终收口
+      - 无 executor 时的失败收口
+      - 第二轮再次请求 tool 时的失败收口
+  - 已更新实现说明：
+    - `runtime-v2/implementation/react-step.md`
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 35 tests ... OK`
+- 遗留问题：
+  - 当前 tool 结果还未接入统一 memory 记录流
+  - 当前 orchestrator 主链还未消费 tool-aware 的 ReAct step 结果
+  - 当前仅支持单轮最多一次本地同步 tool call
+- 下一步：
+  - 进入模块 14 的任务 05，或按你的节奏切到下一模块的 memory 讨论与落地
 
 #### 记录 045：完成模块 14 的任务 03 最小 ToolRegistry 与本地 Executor 落地
 
