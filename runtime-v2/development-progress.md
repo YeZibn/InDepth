@@ -259,12 +259,54 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
+- 任务 03：已完成
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 041：完成模块 13 的任务 03 最小 ReAct Step 骨架与真实 LLM 接入
+
+- 状态：已完成
+- 范围：完成模块 13 的任务 03，在 `runtime-v2` 内独立落地最小 ReAct step 骨架与真实 LLM 接入，只借鉴旧版 `.env` 约定与 OpenAI-compatible chat 协议，不直接依赖旧版 `app/*` 代码
+- 结果：
+  - 已新增最小模型接入层：
+    - `runtime-v2/src/rtv2/model/base.py`
+    - `runtime-v2/src/rtv2/model/http_chat_provider.py`
+    - `runtime-v2/src/rtv2/model/__init__.py`
+  - 已新增最小 ReAct step 骨架：
+    - `runtime-v2/src/rtv2/solver/react_step.py`
+  - 已正式落地：
+    - `ReActStepInput(step_prompt)`
+    - `ReActStepOutput(thought, action, observation, step_result)`
+    - `ReActStepRunner`
+  - 已正式实现：
+    - `.env / LLM_*` 驱动的最小 `HttpChatModelProvider`
+    - 单轮 `step_prompt -> LLM -> JSON -> ReActStepOutput -> StepResult` 收口链
+  - 当前明确：
+    - 只接真实 LLM
+    - 不接 tool calling
+    - `StepResult.patch` 第一版允许为空
+  - 已新增单测：
+    - `runtime-v2/tests/test_react_step.py`
+  - 已新增实现说明：
+    - `runtime-v2/implementation/react-step.md`
+- 验证结果：
+  - 已执行语法检查：
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/model/base.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/model/http_chat_provider.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py`
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 25 tests ... OK`
+- 遗留问题：
+  - 当前 ReAct step 还未接入 execute 主链
+  - 当前不支持 tool calling
+  - 当前 `step_prompt` 的正式装配入口仍未落地
+- 下一步：
+  - 进入模块 13 的任务 04，让 execute 链能够通过该最小 step 骨架产出 `StepResult`
 
 ### 2026-04-28
 
