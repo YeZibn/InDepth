@@ -21,11 +21,10 @@ class RuntimeMemoryProcessor:
         self,
         input: RuntimeMemoryProcessorInput,
     ) -> RuntimeMemoryProcessorOutput:
-        entries = self.memory_store.list_entries_for_run(task_id=input.task_id, run_id=input.run_id)
         if input.task_id:
             task_entries = self.memory_store.list_entries_for_task(task_id=input.task_id)
         else:
-            task_entries = entries
+            task_entries = []
 
         lines = [
             "Runtime Context Anchor:",

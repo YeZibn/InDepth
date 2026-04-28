@@ -19,6 +19,8 @@
    [task-graph.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/task-graph.md)
 4. RuntimeOrchestrator：
    [orchestrator.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/orchestrator.md)
+5. Runtime Memory：
+   [memory.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/memory.md)
 
 ## 预留实现块
 
@@ -27,5 +29,4 @@
 1. `tools.md`
 2. `prompting.md`
 3. `finalize.md`
-4. `memory.md`
-5. `subagent.md`
+4. `subagent.md`

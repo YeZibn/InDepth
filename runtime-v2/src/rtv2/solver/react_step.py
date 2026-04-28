@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from dataclasses import dataclass
+from uuid import uuid4
 
+from rtv2.memory import RuntimeMemoryEntry, RuntimeMemoryEntryType, RuntimeMemoryRole, RuntimeMemoryStore
 from rtv2.model import GenerationConfig, HttpChatModelProvider, ModelOutput, ModelProvider
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.tools import LocalToolExecutor, ToolCall, ToolRegistry
@@ -15,6 +18,10 @@ class ReActStepInput:
     """Minimal agent-facing input for a single ReAct step."""
 
     step_prompt: str
+    task_id: str = ""
+    run_id: str = ""
+    step_id: str = ""
+    node_id: str = ""
 
 
 @dataclass(slots=True)
@@ -38,6 +45,7 @@ class ReActStepRunner:
         generation_config: GenerationConfig | None = None,
         tool_registry: ToolRegistry | None = None,
         tool_executor: LocalToolExecutor | None = None,
+        memory_store: RuntimeMemoryStore | None = None,
     ) -> None:
         self.model_provider = model_provider or HttpChatModelProvider(
             default_config=GenerationConfig(temperature=0.2, max_tokens=800)
@@ -52,6 +60,7 @@ class ReActStepRunner:
             if tool_registry is not None
             else None
         )
+        self.memory_store = memory_store
 
     def run_step(self, step_input: ReActStepInput) -> ReActStepOutput:
         """Execute one minimal ReAct step and return structured output."""
@@ -66,20 +75,28 @@ class ReActStepRunner:
         initial_output = self._parse_model_output(initial_model_output, allow_tool_call=True)
         if initial_output.tool_call is None:
             if initial_output.step_result is None:
-                return self._build_failed_output(
-                    observation=initial_output.observation or initial_model_output.content.strip(),
-                    reason="react step did not return a final step_result",
+                return self._persist_and_return(
+                    step_input,
+                    self._build_failed_output(
+                        observation=initial_output.observation or initial_model_output.content.strip(),
+                        reason="react step did not return a final step_result",
+                    ),
                 )
-            return initial_output
+            return self._persist_and_return(step_input, initial_output)
 
         if self.tool_executor is None:
-            return self._build_failed_output(
-                thought=initial_output.thought,
-                action=initial_output.action,
-                reason="react step requested a tool call but no tool executor is configured",
+            return self._persist_and_return(
+                step_input,
+                self._build_failed_output(
+                    thought=initial_output.thought,
+                    action=initial_output.action,
+                    reason="react step requested a tool call but no tool executor is configured",
+                ),
             )
 
+        self._append_tool_call_entry(step_input, initial_output)
         tool_result = self.tool_executor.execute(initial_output.tool_call)
+        self._append_tool_result_entry(step_input, initial_output.tool_call, tool_result)
         followup_messages = self._build_followup_messages(
             step_input=step_input,
             tool_call=initial_output.tool_call,
@@ -92,27 +109,36 @@ class ReActStepRunner:
         )
         final_output = self._parse_model_output(final_model_output, allow_tool_call=False)
         if final_output.tool_call is not None:
-            return self._build_failed_output(
-                thought=final_output.thought or initial_output.thought,
-                action=final_output.action or initial_output.action,
-                observation=tool_result.output_text,
-                reason="react step returned an unexpected second tool call",
-                tool_call=initial_output.tool_call,
+            return self._persist_and_return(
+                step_input,
+                self._build_failed_output(
+                    thought=final_output.thought or initial_output.thought,
+                    action=final_output.action or initial_output.action,
+                    observation=tool_result.output_text,
+                    reason="react step returned an unexpected second tool call",
+                    tool_call=initial_output.tool_call,
+                ),
             )
         if final_output.step_result is None:
-            return self._build_failed_output(
+            return self._persist_and_return(
+                step_input,
+                self._build_failed_output(
+                    thought=final_output.thought or initial_output.thought,
+                    action=final_output.action or initial_output.action,
+                    observation=initial_output.observation or initial_model_output.content.strip(),
+                    reason="react step did not return a final step_result after tool execution",
+                    tool_call=initial_output.tool_call,
+                )
+            )
+        return self._persist_and_return(
+            step_input,
+            ReActStepOutput(
                 thought=final_output.thought or initial_output.thought,
                 action=final_output.action or initial_output.action,
                 observation=final_output.observation or tool_result.output_text,
-                reason="react step did not return a final step_result after tool execution",
                 tool_call=initial_output.tool_call,
-            )
-        return ReActStepOutput(
-            thought=final_output.thought or initial_output.thought,
-            action=final_output.action or initial_output.action,
-            observation=final_output.observation or tool_result.output_text,
-            tool_call=initial_output.tool_call,
-            step_result=final_output.step_result,
+                step_result=final_output.step_result,
+            ),
         )
 
     @staticmethod
@@ -271,6 +297,100 @@ class ReActStepRunner:
         if tool_result.success:
             return tool_result.output_text
         return f"Tool execution failed: {tool_result.error}"
+
+    def _persist_and_return(
+        self,
+        step_input: ReActStepInput,
+        output: ReActStepOutput,
+    ) -> ReActStepOutput:
+        self._append_assistant_step_entry(step_input, output)
+        return output
+
+    def _append_assistant_step_entry(
+        self,
+        step_input: ReActStepInput,
+        output: ReActStepOutput,
+    ) -> None:
+        if self.memory_store is None or not step_input.task_id or not step_input.run_id or not step_input.step_id:
+            return
+        content_lines = [
+            f"thought: {output.thought}",
+            f"action: {output.action}",
+            f"observation: {output.observation}",
+        ]
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=self._new_entry_id(),
+                task_id=step_input.task_id,
+                run_id=step_input.run_id,
+                step_id=step_input.step_id,
+                node_id=step_input.node_id,
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.ASSISTANT,
+                content="\n".join(content_lines),
+                created_at=self._now_iso(),
+            )
+        )
+
+    def _append_tool_call_entry(self, step_input: ReActStepInput, output: ReActStepOutput) -> None:
+        if self.memory_store is None or output.tool_call is None:
+            return
+        if not step_input.task_id or not step_input.run_id or not step_input.step_id:
+            return
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=self._new_entry_id(),
+                task_id=step_input.task_id,
+                run_id=step_input.run_id,
+                step_id=step_input.step_id,
+                node_id=step_input.node_id,
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.ASSISTANT,
+                content=(
+                    f"tool_call: {output.tool_call.tool_name}\n"
+                    f"arguments: {json.dumps(output.tool_call.arguments, ensure_ascii=False)}"
+                ),
+                tool_name=output.tool_call.tool_name,
+                tool_call_id=self._build_tool_call_id(step_input, output.tool_call),
+                created_at=self._now_iso(),
+            )
+        )
+
+    def _append_tool_result_entry(
+        self,
+        step_input: ReActStepInput,
+        tool_call: ToolCall,
+        tool_result,
+    ) -> None:
+        if self.memory_store is None or not step_input.task_id or not step_input.run_id or not step_input.step_id:
+            return
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=self._new_entry_id(),
+                task_id=step_input.task_id,
+                run_id=step_input.run_id,
+                step_id=step_input.step_id,
+                node_id=step_input.node_id,
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.TOOL,
+                content=self._format_tool_result_text(tool_result),
+                tool_name=tool_call.tool_name,
+                tool_call_id=self._build_tool_call_id(step_input, tool_call),
+                created_at=self._now_iso(),
+            )
+        )
+
+    @staticmethod
+    def _build_tool_call_id(step_input: ReActStepInput, tool_call: ToolCall) -> str:
+        return f"{step_input.run_id}:{step_input.step_id}:{tool_call.tool_name}"
+
+    @staticmethod
+    def _new_entry_id() -> str:
+        return f"entry-{uuid4()}"
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
     def _build_failed_output(

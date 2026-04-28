@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
+from rtv2.memory import (
+    RuntimeMemoryEntry,
+    RuntimeMemoryEntryType,
+    RuntimeMemoryProcessor,
+    RuntimeMemoryProcessorInput,
+    RuntimeMemoryQuery,
+    RuntimeMemoryRole,
+    RuntimeMemoryStore,
+    SQLiteRuntimeMemoryStore,
+)
 from rtv2.solver import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
@@ -27,12 +40,20 @@ class RuntimeOrchestrator:
         graph_store: TaskGraphStore,
         react_step_runner: ReActStepRunner | None = None,
         tool_registry: ToolRegistry | None = None,
+        memory_store: RuntimeMemoryStore | None = None,
+        memory_processor: RuntimeMemoryProcessor | None = None,
     ) -> None:
         self.graph_store = graph_store
         self.tool_registry = tool_registry
-        self.react_step_runner = react_step_runner or ReActStepRunner(tool_registry=tool_registry)
+        self.memory_store = memory_store or SQLiteRuntimeMemoryStore()
+        self.memory_processor = memory_processor or RuntimeMemoryProcessor(memory_store=self.memory_store)
+        self.react_step_runner = react_step_runner or ReActStepRunner(
+            tool_registry=tool_registry,
+            memory_store=self.memory_store,
+        )
         self._graph_counter = 0
         self._node_counter = 0
+        self._step_counter = 0
 
     def build_initial_context(self, start_run_identity: StartRunIdentity) -> RunContext:
         """Build the minimal formal run context for a new run."""
@@ -123,6 +144,12 @@ class RuntimeOrchestrator:
         self._node_counter += 1
         return f"node-{self._node_counter}"
 
+    def _create_step_id(self) -> str:
+        """Create a step id inside the orchestrator boundary."""
+
+        self._step_counter += 1
+        return f"step-{self._step_counter}"
+
     def select_active_node(self, context: RunContext) -> TaskGraphNode | None:
         """Select the current executable node using minimal rule-based priority."""
 
@@ -190,9 +217,14 @@ class RuntimeOrchestrator:
                 )
             )
         if node.node_status is NodeStatus.RUNNING:
+            step_id = self._create_step_id()
             react_output = self.react_step_runner.run_step(
                 ReActStepInput(
                     step_prompt=self.build_react_step_prompt(context, node),
+                    task_id=context.run_identity.task_id,
+                    run_id=context.run_identity.run_id,
+                    step_id=step_id,
+                    node_id=node.node_id,
                 )
             )
             return self._materialize_running_node_step_result(node, react_output.step_result)
@@ -276,14 +308,25 @@ class RuntimeOrchestrator:
 
         return step_result
 
-    @staticmethod
-    def build_react_step_prompt(context: RunContext, node: TaskGraphNode) -> str:
+    def build_react_step_prompt(self, context: RunContext, node: TaskGraphNode) -> str:
         """Assemble the minimal agent-facing prompt for a running node."""
 
+        self._append_run_user_input_entry(context)
+        prompt_context = self.memory_processor.build_prompt_context_text(
+            RuntimeMemoryProcessorInput(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                current_phase=context.run_lifecycle.current_phase.value,
+                active_node_id=node.node_id,
+                user_input=context.run_identity.user_input,
+                compression_state=context.runtime_state.compression_state,
+            )
+        )
         return "\n".join([
             "You are executing one minimal ReAct step for the current runtime node.",
             "",
-            f"User request: {context.run_identity.user_input}",
+            "Task-level runtime context:",
+            prompt_context.prompt_context_text,
             "",
             "Current node:",
             f"- node_id: {node.node_id}",
@@ -298,6 +341,31 @@ class RuntimeOrchestrator:
             "- Report the resulting observation for this single step.",
             "- Return a minimal step status signal for runtime consumption.",
         ])
+
+    def _append_run_user_input_entry(self, context: RunContext) -> None:
+        existing_entries = self.memory_store.list_entries(
+            RuntimeMemoryQuery(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                step_id="run-start",
+                node_id="",
+            )
+        )
+        if existing_entries:
+            return
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=f"entry-{uuid4()}",
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                step_id="run-start",
+                node_id="",
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.USER,
+                content=context.run_identity.user_input,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
 
     @staticmethod
     def _find_node(graph_state: TaskGraphState, node_id: str) -> TaskGraphNode | None:

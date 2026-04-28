@@ -305,7 +305,7 @@
 - 任务 03：已完成
 - 任务 04：已完成
 - 任务 05：已完成
-- 任务 06：未开始
+- 任务 06：已完成
 - 任务 07：未开始
 
 ---
@@ -313,6 +313,59 @@
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 053：完成模块 15 的任务 06 Runtime Memory 主链接线与 step_prompt 接入
+
+- 状态：已完成
+- 范围：完成模块 15 的任务 06，把 step / tool / observation 正式写入 runtime memory，并让 `step_prompt` 接入 runtime memory processor
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/solver/react_step.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+  - 已正式实现：
+    - `ReActStepInput` 增加：
+      - `task_id`
+      - `run_id`
+      - `step_id`
+      - `node_id`
+    - `ReActStepRunner` 支持注入 `RuntimeMemoryStore`
+    - `ReActStepRunner` 当前负责写入：
+      - tool call entry
+      - tool result entry
+      - step 完成后的 assistant entry
+    - `RuntimeOrchestrator` 当前负责写入：
+      - run 级 user input entry
+    - `RuntimeOrchestrator.build_react_step_prompt(...)` 当前改为：
+      - 调用 `RuntimeMemoryProcessor`
+      - 把 task 级 `prompt_context_text` 拼入 step prompt
+  - 当前实现特征：
+    - 第一版 `step_prompt` 已从“手工少量字段拼接”升级为“task 级 runtime memory 上下文 + 当前 node 锚点”
+    - 多 run 的 task 级上下文会保留旧 run 的 user 输入原文
+    - 当前主链仍保持：
+      - orchestrator 消费最终 `step_result`
+      - 中间 memory 轨迹主要服务 prompt 装配
+  - 已新增实现说明：
+    - `runtime-v2/implementation/memory.md`
+    - `runtime-v2/implementation/README.md`
+  - 已更新测试：
+    - `runtime-v2/tests/test_react_step.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_host.py`
+    - 已覆盖：
+      - `ReActStepRunner` 写入 step/tool 轨迹
+      - orchestrator 在新 run 的 prompt 中读取同 task 的旧 run 上下文
+      - 测试环境下 sqlite memory 隔离
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_models.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_sqlite_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_processor.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 61 tests ... OK`
+- 遗留问题：
+  - 当前 `reflexion` 仍未正式写入 runtime memory
+  - 当前尚未做 context budget / compression 裁剪
+  - 当前主链还未把 memory 轨迹进一步结构化注入 prompt blocks
+- 下一步：
+  - 进入模块 15 的任务 07，补最终收尾文档与测试确认，或直接开始下一模块讨论
 
 #### 记录 052：完成模块 15 的任务 05 Runtime Memory Processor 与 prompt_context_text 生成
 

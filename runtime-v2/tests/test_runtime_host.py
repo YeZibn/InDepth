@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from rtv2.memory import SQLiteRuntimeMemoryStore
 from rtv2.host.runtime_host import RuntimeHost
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
 from rtv2.task_graph.store import InMemoryTaskGraphStore
@@ -36,9 +38,13 @@ class StubHostIdGenerator:
 
 def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> RuntimeHost:
     graph_store = InMemoryTaskGraphStore()
+    db_dir = tempfile.mkdtemp()
     return RuntimeHost(
         graph_store=graph_store,
-        orchestrator=RuntimeOrchestrator(graph_store=graph_store),
+        orchestrator=RuntimeOrchestrator(
+            graph_store=graph_store,
+            memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
+        ),
         id_generator=id_generator or StubHostIdGenerator(),
     )
 
@@ -46,7 +52,12 @@ def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> Runt
 class RuntimeHostTests(unittest.TestCase):
     def test_runtime_host_keeps_core_dependencies_and_initial_host_state(self):
         graph_store = InMemoryTaskGraphStore()
-        orchestrator = RuntimeOrchestrator(graph_store=graph_store)
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        orchestrator = RuntimeOrchestrator(
+            graph_store=graph_store,
+            memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(tmpdir.name) / "runtime_memory.db")),
+        )
         id_generator = StubHostIdGenerator()
 
         host = RuntimeHost(

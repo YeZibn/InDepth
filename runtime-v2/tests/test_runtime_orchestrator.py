@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.host.interfaces import StartRunIdentity
+from rtv2.memory import (
+    RuntimeMemoryEntry,
+    RuntimeMemoryEntryType,
+    RuntimeMemoryQuery,
+    RuntimeMemoryRole,
+    SQLiteRuntimeMemoryStore,
+)
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
 from rtv2.model.base import ModelOutput
 from rtv2.solver.react_step import ReActStepOutput
@@ -35,9 +43,11 @@ class FakeReActStepRunner:
 
 
 def create_orchestrator(react_step_runner=None) -> RuntimeOrchestrator:
+    db_dir = tempfile.mkdtemp()
     return RuntimeOrchestrator(
         graph_store=InMemoryTaskGraphStore(),
         react_step_runner=react_step_runner,
+        memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
     )
 
 
@@ -69,6 +79,11 @@ def echo_text(text: str) -> str:
 
 
 class RuntimeOrchestratorTests(unittest.TestCase):
+    def create_memory_store(self) -> SQLiteRuntimeMemoryStore:
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        return SQLiteRuntimeMemoryStore(db_file=str(Path(tmpdir.name) / "runtime_memory.db"))
+
     def test_explicit_react_step_runner_takes_priority_over_tool_registry_auto_wiring(self):
         registry = ToolRegistry()
         registry.register(echo_text)
@@ -78,6 +93,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             graph_store=InMemoryTaskGraphStore(),
             react_step_runner=explicit_runner,
             tool_registry=registry,
+            memory_store=self.create_memory_store(),
         )
 
         self.assertIs(orchestrator.react_step_runner, explicit_runner)
@@ -547,7 +563,9 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(step_result.patch)
         self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.COMPLETED)
         self.assertEqual(len(react_runner.inputs), 1)
-        self.assertIn("User request: Running node.", react_runner.inputs[0].step_prompt)
+        self.assertIn("Task-level runtime context:", react_runner.inputs[0].step_prompt)
+        self.assertIn("- user_input: Running node.", react_runner.inputs[0].step_prompt)
+        self.assertIn("## Run run-1", react_runner.inputs[0].step_prompt)
         self.assertIn("- node_id: node-1", react_runner.inputs[0].step_prompt)
         self.assertIn("- status: running", react_runner.inputs[0].step_prompt)
 
@@ -723,6 +741,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         orchestrator = RuntimeOrchestrator(
             graph_store=InMemoryTaskGraphStore(),
             tool_registry=registry,
+            memory_store=self.create_memory_store(),
         )
         orchestrator.react_step_runner.model_provider = provider
         context = orchestrator.build_initial_context(
@@ -755,6 +774,52 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             NodeStatus.COMPLETED,
         )
         self.assertEqual(executed.runtime_state.active_node_id, "node-1")
+
+    def test_build_react_step_prompt_reads_task_level_runtime_memory_across_runs(self):
+        memory_store = self.create_memory_store()
+        memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id="entry-1",
+                task_id="task-1",
+                run_id="run-1",
+                step_id="run-start",
+                node_id="",
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.USER,
+                content="Previous run input.",
+                created_at="2026-04-28T22:00:00+08:00",
+            )
+        )
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            memory_store=memory_store,
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-2",
+                user_input="Current run input.",
+            )
+        )
+        node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            description="Process the current request.",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        prompt = orchestrator.build_react_step_prompt(context, node)
+
+        self.assertIn("## Run run-1", prompt)
+        self.assertIn("Previous run input.", prompt)
+        self.assertIn("## Run run-2", prompt)
+        self.assertIn("Current run input.", prompt)
+        entries = memory_store.list_entries(RuntimeMemoryQuery(task_id="task-1", run_id="run-2"))
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].content, "Current run input.")
 
     def test_advance_node_minimally_materializes_failed_signal_without_patch(self):
         react_runner = FakeReActStepRunner(

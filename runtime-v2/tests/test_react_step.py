@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from rtv2.memory import RuntimeMemoryQuery, SQLiteRuntimeMemoryStore
 from rtv2.model.base import ModelOutput
 from rtv2.solver.react_step import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepStatusSignal
@@ -159,6 +161,47 @@ class ReActStepRunnerTests(unittest.TestCase):
             output.step_result.reason,
             "react step returned an unexpected second tool call",
         )
+
+    def test_run_step_persists_assistant_and_tool_entries_when_memory_store_is_configured(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        memory_store = SQLiteRuntimeMemoryStore(db_file=str(Path(tmpdir.name) / "runtime_memory.db"))
+        registry = ToolRegistry()
+        registry.register(echo_text)
+        provider = SequenceModelProvider([
+            ModelOutput(
+                content='{"thought":"need file data","action":"call tool","observation":"","tool_call":{"tool_name":"echo_text","arguments":{"text":"hello"}}}',
+                raw={},
+            ),
+            ModelOutput(
+                content='{"thought":"tool finished","action":"use tool result","observation":"echo:hello","status_signal":"ready_for_completion","reason":"tool provided enough information"}',
+                raw={},
+            ),
+        ])
+        runner = ReActStepRunner(
+            model_provider=provider,
+            tool_registry=registry,
+            memory_store=memory_store,
+        )
+
+        runner.run_step(
+            ReActStepInput(
+                step_prompt="Do one step.",
+                task_id="task-1",
+                run_id="run-1",
+                step_id="step-1",
+                node_id="node-1",
+            )
+        )
+
+        entries = memory_store.list_entries(RuntimeMemoryQuery(task_id="task-1", run_id="run-1"))
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(entries[0].role.value, "assistant")
+        self.assertEqual(entries[0].tool_name, "echo_text")
+        self.assertEqual(entries[1].role.value, "tool")
+        self.assertEqual(entries[1].content, "echo:hello")
+        self.assertEqual(entries[2].role.value, "assistant")
+        self.assertIn("thought: tool finished", entries[2].content)
 
 
 if __name__ == "__main__":
