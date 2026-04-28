@@ -107,6 +107,13 @@ type StepResult = {
 3. `patch` 是 `StepResult` 的一部分，不是独立 tool
 4. `orchestrator` 负责接收 `StepResult` 并统一提交 patch
 
+当前实现补充说明：
+
+1. `runtime-v2` 当前已经开始将 execute 链的正式输出迁移到 `StepResult`
+2. 但当前仍处于最小接线阶段
+3. orchestrator 目前只消费 `StepResult.patch`
+4. 更完整的 `StepResult` 语义消费仍留待后续模块继续补齐
+
 ## 7. StepResult 状态规则
 
 本任务明确规定：

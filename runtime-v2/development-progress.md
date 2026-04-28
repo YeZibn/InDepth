@@ -224,9 +224,61 @@
 - 任务 03：已完成
 - 任务 04：已完成
 
+### 模块 12：Execute 链路的 StepResult 收口与设计稿修订
+
+- 模块目标：
+  - 将 execute 链路中遗留的直接 `TaskGraphPatch` 返回口统一收口到 `StepResult`
+  - 明确 orchestrator 当前如何消费 `StepResult`
+  - 同步修订相关设计稿与实现说明，使其与当前代码状态一致
+- 已定子任务：
+  - 任务 01：对齐模块目标，并修订已有设计稿中 execute / StepResult 的旧表述
+  - 任务 02：将 `initialize_minimal_graph(...)` 统一改为返回 `StepResult`
+  - 任务 03：收口 orchestrator 内部对 `StepResult` 的最小消费入口
+  - 任务 04：补测试、更新实现文档与开发进度
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 035：完成模块 12 的任务 01 方向对齐与设计稿修订
+
+- 状态：已完成
+- 范围：完成模块 12 的任务 01，正式对齐模块目标，并修订 execute / `StepResult` 相关设计稿中的过渡态表述，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 模块 12 的目标是收口 execute 输出边界
+    - 不新增更高层架构
+  - 已正式确定：
+    - 当前 execute 的正式输出方向都应统一收敛到 `StepResult`
+  - 已正式确定：
+    - 当前 orchestrator 已开始消费 `StepResult`
+    - 但仍处于过渡态
+  - 已正式确定：
+    - 当前实际只消费 `StepResult.patch`
+    - `result_refs / status_signal / reason` 的更完整消费语义留待后续模块继续补齐
+  - 已正式确定：
+    - 本模块不进入 solver loop、memory、reflexion 写入
+    - 只处理 execute 到 `StepResult` 的统一
+  - 已同步修订：
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/design/s13/stepresult-runtime-memory-t6-to-t7-design-v1.md`
+    - `runtime-v2/design/s3/step-orchestrator-contract-t5-design-v1.md`
+- 验证结果：
+  - 本任务为设计修订任务，无代码执行验证
+- 遗留问题：
+  - `initialize_minimal_graph(...)` 当前仍直接返回 `TaskGraphPatch`
+  - orchestrator 对 `StepResult` 的完整消费仍未落地
+- 下一步：
+  - 进入模块 12 的任务 02，将 `initialize_minimal_graph(...)` 统一改为返回 `StepResult`
 
 ### 2026-04-28
 

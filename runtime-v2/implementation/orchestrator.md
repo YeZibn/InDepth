@@ -202,6 +202,9 @@
 2. 当前只打通最小 write-back 闭环
 3. 当前已引入最小 `StepResult`
 4. 当前不引入更完整的 patch 合并/强校验策略
+5. 当前 orchestrator 对 `StepResult` 的消费仍处于过渡态
+6. 当前实际只消费 `StepResult.patch`
+7. `result_refs / status_signal / reason` 的更完整消费语义留待后续模块继续补齐
 
 ## 下一步
 

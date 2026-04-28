@@ -136,6 +136,13 @@
 4. `Re-plan` 判定与 `PreparePhase` 重规划都基于统一 memory 上下文
 5. 若后续出现上下文膨胀、阶段噪声或性能问题，再单独引入分阶段 `memory view`
 
+当前实现补充说明：
+
+1. execute 链正在从“直接输出 `TaskGraphPatch`”迁移到“统一输出 `StepResult`”
+2. 当前 orchestrator 已开始接入 `StepResult`
+3. 但当前仍处于过渡态，实际只消费 `StepResult.patch`
+4. `result_refs / status_signal / reason` 的更完整执行语义仍留待后续模块继续落地
+
 ## 9. 当前未展开部分
 
 本模块当前明确不进入：
