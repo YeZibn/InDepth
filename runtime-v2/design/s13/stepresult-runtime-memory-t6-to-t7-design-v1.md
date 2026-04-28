@@ -140,8 +140,9 @@
 
 1. execute 链正在从“直接输出 `TaskGraphPatch`”迁移到“统一输出 `StepResult`”
 2. 当前 orchestrator 已开始接入 `StepResult`
-3. 但当前仍处于过渡态，实际只消费 `StepResult.patch`
-4. `result_refs / status_signal / reason` 的更完整执行语义仍留待后续模块继续落地
+3. 当前空图初始化与最小 node 推进都已统一输出 `StepResult`
+4. 但当前仍处于过渡态，实际只消费 `StepResult.patch`
+5. `result_refs / status_signal / reason` 的更完整执行语义仍留待后续模块继续落地
 
 ## 9. 当前未展开部分
 

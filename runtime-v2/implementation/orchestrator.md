@@ -130,7 +130,8 @@
 
 ## `initialize_minimal_graph(...)` 的作用
 
-`initialize_minimal_graph(...)` 用于在当前 graph 为空时，产出第一版最小起始节点 patch。
+`initialize_minimal_graph(...)` 用于在当前 graph 为空时，产出第一版最小起始节点结果。
+当前正式返回 `StepResult | None`，而不是直接返回 `TaskGraphPatch`。
 
 当前规则如下：
 
@@ -144,7 +145,7 @@
    - `owner = "main"`
    - `dependencies = []`
    - `order = 1`
-4. 当前返回 `TaskGraphPatch`
+4. 当前返回带正式 `TaskGraphPatch` 的最小 `StepResult`
 5. patch 当前同时回写 `active_node_id`
 
 当前这一步明确：
@@ -185,7 +186,8 @@
 
 1. 空图时：
    - 调用 `initialize_minimal_graph(...)`
-   - 初始化 patch 会被包装为最小 `StepResult`
+   - 直接拿到最小 `StepResult`
+   - 从 `step_result.patch` 提取 graph patch
    - 通过 `graph_store.apply_patch(...)` 写回 graph
 2. 已有选中 node 时：
    - 调用 `advance_node_minimally(...)`

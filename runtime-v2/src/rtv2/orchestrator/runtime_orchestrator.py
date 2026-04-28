@@ -75,11 +75,8 @@ class RuntimeOrchestrator:
             raise ValueError("Execute phase requires current_phase=EXECUTE")
 
         selected_node = self.select_active_node(context)
-        step_result: StepResult | None = None
         if selected_node is None:
-            patch = self.initialize_minimal_graph(context)
-            if patch is not None:
-                step_result = StepResult(patch=patch)
+            step_result = self.initialize_minimal_graph(context)
         else:
             context.runtime_state.active_node_id = selected_node.node_id
             step_result = self.advance_node_minimally(context, selected_node)
@@ -148,7 +145,7 @@ class RuntimeOrchestrator:
 
         return None
 
-    def initialize_minimal_graph(self, context: RunContext) -> TaskGraphPatch | None:
+    def initialize_minimal_graph(self, context: RunContext) -> StepResult | None:
         """Create the first executable node when the current graph is empty."""
 
         graph_state = context.domain_state.task_graph_state
@@ -166,9 +163,11 @@ class RuntimeOrchestrator:
             dependencies=[],
             order=1,
         )
-        return TaskGraphPatch(
-            new_nodes=[initial_node],
-            active_node_id=initial_node.node_id,
+        return StepResult(
+            patch=TaskGraphPatch(
+                new_nodes=[initial_node],
+                active_node_id=initial_node.node_id,
+            )
         )
 
     def advance_node_minimally(

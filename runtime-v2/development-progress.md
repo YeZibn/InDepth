@@ -239,13 +239,40 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
+- 任务 02：已完成
 - 任务 03：未开始
 - 任务 04：未开始
 
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 036：完成模块 12 的任务 02 空图初始化返回口统一到 StepResult
+
+- 状态：已完成
+- 范围：完成模块 12 的任务 02，将 `initialize_minimal_graph(...)` 从直接返回 `TaskGraphPatch` 统一改为返回 `StepResult`，并同步相关文档表述
+- 结果：
+  - 已在 `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py` 中将：
+    - `initialize_minimal_graph(...) -> TaskGraphPatch | None`
+    - 统一改为：
+    - `initialize_minimal_graph(...) -> StepResult | None`
+  - 已在 `run_execute_phase(...)` 中取消空图分支对初始化 patch 的手动包装
+  - 已正式实现：
+    - execute 当前两个输出口都统一返回 `StepResult`
+    - `initialize_minimal_graph(...) -> StepResult`
+    - `advance_node_minimally(...) -> StepResult`
+  - 已同步更新：
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/design/s13/stepresult-runtime-memory-t6-to-t7-design-v1.md`
+- 验证结果：
+  - 本任务的代码验证与回归将在模块 12 任务 04 一并收口
+- 遗留问题：
+  - orchestrator 对 `StepResult` 的完整消费仍未落地
+  - `result_refs / status_signal / reason` 当前仍未进入 execute 控制逻辑
+- 下一步：
+  - 进入模块 12 的任务 03，收口 orchestrator 内部对 `StepResult` 的最小消费入口
 
 ### 2026-04-28
 
