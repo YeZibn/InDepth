@@ -19,7 +19,7 @@
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，`S13` 正在补充
 - 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05、模块 06
-- 当前重点：推进 ReAct step 向 execute 主链的继续收口，并为后续 solver / memory / tool 接线继续铺路
+- 当前重点：推进 sqlite 化的短期上下文 runtime memory，实现执行轨迹到 prompt 上下文的正式闭环
 
 ---
 
@@ -283,11 +283,137 @@
 - 任务 04：已完成
 - 任务 05：已完成
 
+### 模块 15：短期上下文 Runtime Memory 正式落地
+
+- 模块目标：
+  - 在当前 runtime-v2 中正式落地短期上下文 `runtime memory`
+  - 以 unified entry 流 + sqlite 持久化的方式承接运行期轨迹
+  - 打通 `entry store -> runtime memory processor -> prompt_context_text -> step_prompt` 最小闭环
+- 已定子任务：
+  - 任务 01：对齐设计稿与旧版 sqlite memory，确定模块 15 的正式范围、边界与第一版不做项
+  - 任务 02：确定 runtime memory 的 sqlite schema 与正式模型
+  - 任务 03：实现 runtime memory 模型与 sqlite store 接口
+  - 任务 04：实现 sqlite store 的最小追加、按 run 读取与按条件过滤读取
+  - 任务 05：实现 runtime memory processor，输出 `prompt_context_text`
+  - 任务 06：把 step / tool / observation 正式写入 runtime memory，并让 step prompt 接入 processor
+  - 任务 07：补测试、实现文档、开发进度，完成模块收尾
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：未开始
+- 任务 04：未开始
+- 任务 05：未开始
+- 任务 06：未开始
+- 任务 07：未开始
+
 ---
 
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 049：完成模块 15 的任务 02 Runtime Memory sqlite schema 与正式模型定稿
+
+- 状态：已完成
+- 范围：完成模块 15 的任务 02，确定短期上下文 runtime memory 的 sqlite schema、正式字段与第一版查询索引，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 第一版采用单表：
+      - `runtime_memory_entries`
+  - 已正式确定主字段：
+    - `seq`
+    - `entry_id`
+    - `task_id`
+    - `run_id`
+    - `step_id`
+    - `node_id`
+    - `entry_type`
+    - `role`
+    - `content`
+    - `tool_name`
+    - `tool_call_id`
+    - `related_result_refs_json`
+    - `reflexion_trigger`
+    - `reflexion_reason`
+    - `next_try_hint`
+    - `replan_signal`
+    - `created_at`
+  - 已正式确定：
+    - `seq` 作为内部稳定排序键
+    - `entry_id` 保留业务语义唯一标识
+  - 已正式确定：
+    - `step_id` 第一版使用 `TEXT`
+    - `node_id` 在无 node 场景允许空字符串
+    - `related_result_refs` 第一版以 JSON 文本存储
+    - `reflexion` 的结构化字段直接单独落列
+  - 已正式确定第一版最小枚举语义：
+    - `entry_type`：
+      - `context`
+      - `reflexion`
+    - `role`：
+      - `user`
+      - `assistant`
+      - `tool`
+      - `system`
+  - 已正式确定第一版最小索引：
+    - `(task_id, run_id)`
+    - `(run_id, step_id)`
+    - `(run_id, node_id)`
+    - `(entry_type)`
+    - `(tool_name)`
+- 下一步：
+  - 进入模块 15 的任务 03，落地 runtime memory 模型与 sqlite store 接口
+
+#### 记录 048：完成模块 15 的任务 01 短期上下文 Runtime Memory 范围与边界对齐
+
+- 状态：已完成
+- 范围：完成模块 15 的任务 01，对齐 `S8 / S13` 设计稿与旧版 sqlite runtime memory，确定短期上下文 runtime memory 的正式范围、边界与第一版不做项，不进入代码实现
+- 结果：
+  - 已正式确定：
+    - 模块 15 当前只做短期上下文 `runtime memory`
+    - 不进入长期记忆层与用户偏好层
+  - 已正式确定：
+    - `runtime memory` 不是 `RunContext` 的一级状态块
+    - 继续以处理器 + 外部存储的方式存在
+  - 已正式确定：
+    - `runtime memory` 的正式数据形态以 `S13` 为准：
+      - unified entry 流
+      - 第一版 `entry_type` 只保留：
+        - `context`
+        - `reflexion`
+  - 已正式确定：
+    - `runtime memory` 的正式职责分为：
+      - sqlite store
+      - runtime memory processor
+  - 已正式确定：
+    - processor 第一版继续输出：
+      - `prompt_context_text`
+    - 不升级成结构化 context blocks
+  - 已正式确定：
+    - 当前所有 phase 第一版都读取全量 runtime memory
+    - 不引入 phase view 与裁剪策略
+  - 已正式确定：
+    - 第一版最主要写入材料包括：
+      - user input
+      - thought
+      - action
+      - observation
+      - tool call
+      - tool result
+      - 后续 reflexion
+  - 已正式确定：
+    - 旧版 sqlite memory 只作为实现参考
+    - 不再沿用 message-only 协议
+  - 已正式确定第一版不做：
+    - compaction
+    - summarize
+    - compression 对接
+    - 长期记忆 recall / write
+    - 用户偏好 recall / write
+- 下一步：
+  - 进入模块 15 的任务 02，确定 runtime memory 的 sqlite schema 与正式模型
 
 #### 记录 047：完成模块 14 的任务 05 runtime 主链接入最小 Tool 能力
 
