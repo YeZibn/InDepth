@@ -83,8 +83,8 @@
    - 推进到 `EXECUTE`
 2. `run_execute_phase(...)`
    - 要求输入 phase 为 `EXECUTE`
-   - 先产出最小 `TaskGraphPatch | None`
-   - 若 patch 非空，则通过 `TaskGraphStore.apply_patch(...)` 正式回写 graph
+   - 先产出最小 `StepResult | None`
+   - 若 `step_result.patch` 非空，则通过 `TaskGraphStore.apply_patch(...)` 正式回写 graph
    - 用返回的新 graph 覆盖 `context.domain_state.task_graph_state`
    - 若 patch 带 `active_node_id`，则同步 `runtime_state.active_node_id`
    - 推进到 `FINALIZE`
@@ -156,7 +156,8 @@
 
 ## `advance_node_minimally(...)` 的作用
 
-`advance_node_minimally(...)` 用于在不接 LLM、不接 tool 的前提下，给当前被选中的 node 产出最小状态推进 patch。
+`advance_node_minimally(...)` 用于在不接 LLM、不接 tool 的前提下，给当前被选中的 node 产出最小状态推进结果。
+当前正式返回 `StepResult | None`，而不是直接返回 `TaskGraphPatch`。
 
 当前最小规则如下：
 
@@ -164,6 +165,7 @@
    - 前提：所有依赖节点都已经 `completed`
 2. `ready -> running`
 3. `running -> completed`
+   - 当前通过 `StepResult(status_signal=ready_for_completion)` 表达最小完成准备信号
 4. 其他状态当前返回 `None`
 
 当前这一步明确：
@@ -183,11 +185,12 @@
 
 1. 空图时：
    - 调用 `initialize_minimal_graph(...)`
-   - 拿到初始化 patch
+   - 初始化 patch 会被包装为最小 `StepResult`
    - 通过 `graph_store.apply_patch(...)` 写回 graph
 2. 已有选中 node 时：
    - 调用 `advance_node_minimally(...)`
-   - 拿到最小推进 patch
+   - 拿到最小推进 `StepResult`
+   - 从 `step_result.patch` 提取 graph patch
    - 通过 `graph_store.apply_patch(...)` 写回 graph
 3. patch 写回完成后：
    - `context.domain_state.task_graph_state` 被替换为最新 graph
@@ -197,7 +200,7 @@
 
 1. orchestrator 现在正式依赖 `TaskGraphStore`
 2. 当前只打通最小 write-back 闭环
-3. 当前不引入 `StepResult`
+3. 当前已引入最小 `StepResult`
 4. 当前不引入更完整的 patch 合并/强校验策略
 
 ## 下一步

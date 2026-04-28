@@ -10,6 +10,7 @@ if str(SRC) not in sys.path:
 
 from rtv2.host.interfaces import StartRunIdentity
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
+from rtv2.solver.models import StepStatusSignal
 from rtv2.state.models import RunPhase
 from rtv2.task_graph.models import NodeStatus, TaskGraphNode, TaskGraphStatus
 from rtv2.task_graph.store import InMemoryTaskGraphStore
@@ -356,11 +357,13 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         )
         context.domain_state.task_graph_state.nodes = [dependency, pending_node]
 
-        patch = orchestrator.advance_node_minimally(context, pending_node)
+        step_result = orchestrator.advance_node_minimally(context, pending_node)
 
-        self.assertIsNotNone(patch)
-        self.assertEqual(patch.node_updates[0].node_id, "node-2")
-        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.READY)
+        self.assertIsNotNone(step_result)
+        self.assertEqual(step_result.status_signal, StepStatusSignal.PROGRESSED)
+        self.assertIsNotNone(step_result.patch)
+        self.assertEqual(step_result.patch.node_updates[0].node_id, "node-2")
+        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.READY)
 
     def test_advance_node_minimally_keeps_pending_node_when_dependencies_not_completed(self):
         orchestrator = create_orchestrator()
@@ -432,10 +435,12 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             node_status=NodeStatus.READY,
         )
 
-        patch = orchestrator.advance_node_minimally(context, ready_node)
+        step_result = orchestrator.advance_node_minimally(context, ready_node)
 
-        self.assertIsNotNone(patch)
-        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.RUNNING)
+        self.assertIsNotNone(step_result)
+        self.assertEqual(step_result.status_signal, StepStatusSignal.PROGRESSED)
+        self.assertIsNotNone(step_result.patch)
+        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.RUNNING)
 
     def test_advance_node_minimally_promotes_running_to_completed(self):
         orchestrator = create_orchestrator()
@@ -455,10 +460,13 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             node_status=NodeStatus.RUNNING,
         )
 
-        patch = orchestrator.advance_node_minimally(context, running_node)
+        step_result = orchestrator.advance_node_minimally(context, running_node)
 
-        self.assertIsNotNone(patch)
-        self.assertEqual(patch.node_updates[0].node_status, NodeStatus.COMPLETED)
+        self.assertIsNotNone(step_result)
+        self.assertEqual(step_result.status_signal, StepStatusSignal.READY_FOR_COMPLETION)
+        self.assertEqual(step_result.reason, "node reached minimal completion threshold")
+        self.assertIsNotNone(step_result.patch)
+        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.COMPLETED)
 
     def test_advance_node_minimally_returns_none_for_non_progressing_statuses(self):
         orchestrator = create_orchestrator()

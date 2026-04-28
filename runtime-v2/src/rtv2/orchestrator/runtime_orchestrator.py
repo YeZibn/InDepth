@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
+from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
 from rtv2.task_graph.store import TaskGraphStore
 from rtv2.task_graph.models import (
@@ -74,13 +75,16 @@ class RuntimeOrchestrator:
             raise ValueError("Execute phase requires current_phase=EXECUTE")
 
         selected_node = self.select_active_node(context)
-        patch: TaskGraphPatch | None = None
+        step_result: StepResult | None = None
         if selected_node is None:
             patch = self.initialize_minimal_graph(context)
+            if patch is not None:
+                step_result = StepResult(patch=patch)
         else:
             context.runtime_state.active_node_id = selected_node.node_id
-            patch = self.advance_node_minimally(context, selected_node)
+            step_result = self.advance_node_minimally(context, selected_node)
 
+        patch = step_result.patch if step_result is not None else None
         if patch is not None:
             self.graph_store.save_graph(context.domain_state.task_graph_state)
             updated_graph = self.graph_store.apply_patch(
@@ -171,24 +175,30 @@ class RuntimeOrchestrator:
         self,
         context: RunContext,
         node: TaskGraphNode,
-    ) -> TaskGraphPatch | None:
-        """Return the minimal node status transition patch for the selected node."""
+    ) -> StepResult | None:
+        """Return the minimal node status transition step result for the selected node."""
 
         if node.node_status is NodeStatus.PENDING:
             return self._advance_pending_node(context, node)
         if node.node_status is NodeStatus.READY:
-            return TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.RUNNING,
-                )]
+            return StepResult(
+                patch=TaskGraphPatch(
+                    node_updates=[NodePatch(
+                        node_id=node.node_id,
+                        node_status=NodeStatus.RUNNING,
+                    )]
+                )
             )
         if node.node_status is NodeStatus.RUNNING:
-            return TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.COMPLETED,
-                )]
+            return StepResult(
+                status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                reason="node reached minimal completion threshold",
+                patch=TaskGraphPatch(
+                    node_updates=[NodePatch(
+                        node_id=node.node_id,
+                        node_status=NodeStatus.COMPLETED,
+                    )]
+                ),
             )
         return None
 
@@ -196,7 +206,7 @@ class RuntimeOrchestrator:
         self,
         context: RunContext,
         node: TaskGraphNode,
-    ) -> TaskGraphPatch | None:
+    ) -> StepResult | None:
         graph_state = context.domain_state.task_graph_state
 
         for dependency_id in node.dependencies:
@@ -206,11 +216,13 @@ class RuntimeOrchestrator:
             if dependency_node.node_status is not NodeStatus.COMPLETED:
                 return None
 
-        return TaskGraphPatch(
-            node_updates=[NodePatch(
-                node_id=node.node_id,
-                node_status=NodeStatus.READY,
-            )]
+        return StepResult(
+            patch=TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=node.node_id,
+                    node_status=NodeStatus.READY,
+                )]
+            )
         )
 
     @staticmethod

@@ -220,13 +220,103 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
-- 任务 03：未开始
-- 任务 04：未开始
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
+
+### 2026-04-28
+
+#### 记录 034：完成模块 11 的任务 04 测试、实现说明与开发进度同步
+
+- 状态：已完成
+- 范围：完成模块 11 的任务 04，补齐最小回归测试、更新实现说明并同步开发进度，不进入更大范围的 solver/memory 改造
+- 结果：
+  - 已更新 orchestrator 实现说明：
+    - `advance_node_minimally(...)` 当前正式返回 `StepResult | None`
+    - `run_execute_phase(...)` 当前从 `step_result.patch` 提取 graph patch 并继续走现有提交链
+  - 已更新 orchestrator 测试断言：
+    - `pending -> ready`
+    - `ready -> running`
+    - `running -> completed`
+    - 当前都改为校验 `StepResult` 与 `StepResult.patch`
+  - 已同步更新模块 11 的当前进度与开发记录
+- 验证结果：
+  - 已执行语法检查：
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_in_memory_task_graph_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_task_graph_store_interface.py`
+  - 结果：
+    - `Ran 45 tests ... OK`
+- 遗留问题：
+  - 当前仍未引入真正的 `Solver` 类
+  - 当前 `initialize_minimal_graph(...)` 仍直接返回 `TaskGraphPatch`
+  - `StepResult.result_refs` 当前还没有真实生产链路
+- 下一步：
+  - 进入下一个开发模块讨论，或继续推进 `Solver` / unified runtime memory 的代码骨架
+
+### 2026-04-28
+
+#### 记录 033：完成模块 11 的任务 03 Execute 最小推进链接入 StepResult
+
+- 状态：已完成
+- 范围：完成模块 11 的任务 03，在不引入完整 `Solver` 类的前提下，将当前 execute 最小推进链改为先产出 `StepResult`，再由 orchestrator 消费
+- 结果：
+  - 已在 `RuntimeOrchestrator.run_execute_phase(...)` 内引入最小 `step_result` 变量
+  - 已保持当前 graph write-back 闭环不变：
+    - 仍由 orchestrator 统一调用 `TaskGraphStore.apply_patch(...)`
+  - 已将 `advance_node_minimally(...)` 的返回类型从：
+    - `TaskGraphPatch | None`
+    - 改为：
+    - `StepResult | None`
+  - 已将当前最小状态推进改为：
+    - `pending -> ready` 返回带 patch 的 `StepResult`
+    - `ready -> running` 返回带 patch 的 `StepResult`
+    - `running -> completed` 返回 `status_signal=ready_for_completion` 且带 patch 的 `StepResult`
+- 验证结果：
+  - 已纳入模块 11 任务 04 的回归验证
+- 遗留问题：
+  - `initialize_minimal_graph(...)` 当前尚未统一改成直接返回 `StepResult`
+  - execute 当前仍未真正围绕 solver loop 工作
+- 下一步：
+  - 进入任务 04，补测试、实现说明与开发进度同步
+
+### 2026-04-28
+
+#### 记录 032：完成模块 11 的任务 01-02 StepResult 代码落点对齐与正式结构落地
+
+- 状态：已完成
+- 范围：完成模块 11 的任务 01 与任务 02，确定 `StepResult` 的代码落点、命名与最小接线边界，并将其正式落成代码模型
+- 结果：
+  - 已正式确定：
+    - `StepResult` 代码落点放在 `src/rtv2/solver/`
+    - 而不是放入 `orchestrator/`
+  - 已正式确定：
+    - 模块 11 第一版只做最小结构与 execute 接线
+    - 当前不引入真正的 `Solver` 类
+  - 已新增：
+    - `src/rtv2/solver/models.py`
+    - `src/rtv2/solver/__init__.py`
+  - 已正式落地：
+    - `StepStatusSignal`
+    - `StepResult`
+  - 已在 `StepResult` 中固化最小字段：
+    - `result_refs`
+    - `status_signal`
+    - `reason`
+    - `patch`
+  - 已在 `StepResult.__post_init__(...)` 中固化最小约束：
+    - 当 `status_signal != progressed` 时，`reason` 必须非空
+- 验证结果：
+  - 已纳入模块 11 任务 04 的语法检查与回归验证
+- 遗留问题：
+  - `StepResult` 还未接入真实 execute 推进链
+  - `result_refs` 当前还没有真实生产逻辑
+- 下一步：
+  - 进入任务 03，将当前 execute 最小推进链改成先产出 `StepResult`，再由 orchestrator 消费
 
 ### 2026-04-28
 
