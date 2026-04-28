@@ -308,11 +308,112 @@
 - 任务 06：已完成
 - 任务 07：已完成
 
+### 模块 16：Prompt 模块正式骨架与装配入口
+
+- 模块目标：
+  - 在当前 runtime-v2 中正式落地 prompt 模块骨架
+  - 收口主执行 prompt 的装配边界，并为 evaluator / reflexion / replan 预留辅助 prompt 接口
+  - 让 runtime-v2 后续不再直接在 orchestrator / step runner 中手工拼 prompt 字符串
+- 已定子任务：
+  - 任务 01：对齐现有设计稿里 prompt 相关内容，明确 prompt 模块的正式位置、职责边界与第一版范围
+  - 任务 02：确定 prompt 模块的核心接口与输入输出模型
+  - 任务 03：实现最小 prompt 模型与 assembler 骨架
+  - 任务 04：把 runtime memory、current node、run identity 正式接入 assembler
+  - 任务 05：让 orchestrator / `ReActStepRunner` 改为消费 prompt 模块
+  - 任务 06：补测试、实现文档与开发进度
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：未开始
+- 任务 04：未开始
+- 任务 05：未开始
+- 任务 06：未开始
+
 ---
 
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 056：完成模块 16 的任务 02 Prompt 模块核心接口与输入输出模型定稿
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 02，正式收口 prompt 模块第一版的主执行输入输出模型与 assembler 核心接口，不进入代码实现
+- 结果：
+  - 已确认主执行 prompt 的正式输出对象为：
+    - `ExecutionPrompt`
+  - 已确认 `ExecutionPrompt` 第一版只保留三段字段：
+    - `base_prompt`
+    - `phase_prompt`
+    - `dynamic_injection`
+  - 已确认主执行 prompt 的正式输入对象为：
+    - `ExecutionPromptInput`
+  - 已确认 `ExecutionPromptInput` 第一版只保留五项：
+    - `phase`
+    - `node_context`
+    - `runtime_memory_text`
+    - `tool_capability_text`
+    - `finalize_return_input`
+  - 已确认当前 node / task 动态上下文不再平铺为大量字段，而是收口为：
+    - `ExecutionNodePromptContext`
+  - 已确认 `ExecutionNodePromptContext` 第一版承载：
+    - `user_input`
+    - `goal`
+    - `active_node_id`
+    - `active_node_name`
+    - `active_node_description`
+    - `active_node_status`
+    - `dependency_summaries`
+    - `artifacts`
+    - `evidence`
+    - `notes`
+  - 已确认第一版主执行 assembler 的正式入口为：
+    - `build_execution_prompt(prompt_input: ExecutionPromptInput) -> ExecutionPrompt`
+  - 已确认 prompt 模块第一版仍保持边界收缩：
+    - 不直接消费整个 `RunContext`
+    - 不负责 recall
+    - 不负责 tool 执行
+    - 不负责 graph 推进
+  - 已确认 evaluator / reflexion / replan 当前只预留 assembler 接口名，不展开正式 schema
+- 遗留问题：
+  - `ExecutionNodePromptContext` 的字段类型与渲染细节仍待任务 03 代码落地时最终收口
+  - evaluator / reflexion / replan 的 prompt 输入输出协议待后续模块继续展开
+- 下一步：
+  - 进入模块 16 的任务 03，开始实现最小 prompt 模型与 assembler 骨架
+
+#### 记录 055：完成模块 16 的任务 01 Prompt 模块位置、边界与第一版组成对齐
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 01，重新对齐现有 prompt 设计稿与当前 runtime-v2 落地方向，收口 prompt 模块的正式位置、职责边界与第一版 prompt 组成，不进入代码实现
+- 结果：
+  - 已确认模块 16 第一版继续沿用 `S1` 既有正式分层，不另起新的 prompt 顶层分类
+  - 已确认主执行 prompt 第一版顶层组成固定为：
+    - `base prompt`
+    - `phase prompt`
+    - `dynamic injection`
+  - 已明确 prompt 模块职责：
+    - 只负责装配
+    - 不负责 recall/query
+    - 不负责 graph 推进
+    - 不负责 tool 执行
+  - 已确认第一版输出形态：
+    - 不收口为 `system_prompt + user_prompt` 两段
+    - 保持三段 prompt block 的正式结构输出
+  - 已确认当前主执行链中：
+    - `tool capability` 摘要归入 `dynamic injection`
+    - `runtime memory` 注入归入 `dynamic injection` 且作为固定组成项
+    - `current node / task` 信息归入 `dynamic injection`
+    - 不再单独新增“最近观察结果块”或“其他本轮临时事实”兜底块
+  - 已同步修订设计稿：
+    - `runtime-v2/design/s1/prompt-assembly-mechanism-t5-design-v1.md`
+    - `runtime-v2/design/s1/prompt-state-boundary-rules-t4-design-v1.md`
+- 遗留问题：
+  - `prepare / finalize` 的 prompt block 细化内容仍待后续任务展开
+  - evaluator / reflexion / replan 的辅助 prompt 接口只做预留，尚未进入正式实现
+- 下一步：
+  - 进入模块 16 的任务 02，确定 prompt 模块的核心接口与输入输出模型
 
 #### 记录 054：完成模块 15 的任务 07 文档、测试与模块结项收尾
 

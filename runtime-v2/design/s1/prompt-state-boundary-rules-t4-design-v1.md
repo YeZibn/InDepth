@@ -1,6 +1,6 @@
 # S1-T4 Prompt 与状态边界规则（V1）
 
-更新时间：2026-04-22  
+更新时间：2026-04-28  
 状态：Draft  
 对应任务：`S1-T4`
 
@@ -23,6 +23,9 @@
 3. `execute` 只读取当前 `active_node` 的局部图视图
 4. graph 全图如有需要，只允许通过工具查看
 5. recall 属于 `dynamic injection`，memory write 不进入 prompt 主链路
+6. 当前 node / task 信息归 `dynamic injection`，不归 `phase prompt`
+7. `runtime memory` 是第一版固定 `dynamic injection` 项
+8. prompt 中的 tool 信息只保留 capability 摘要，不直接平铺 schema 正文
 
 ## 3. 不允许的做法
 
@@ -32,6 +35,7 @@
 2. 把完整 `TaskGraphState` 平铺注入 prompt
 3. 把完整 message history 作为正式状态替代品
 4. 把 `handoff` 当 execute 常驻输入
+5. 用“其他本轮临时事实”这类无边界兜底块继续扩 prompt
 
 ## 4. Execute Prompt 允许消费的最小状态
 
@@ -42,12 +46,15 @@
 3. `run_lifecycle.current_phase`
 4. `runtime_state.active_node_id`
 5. 当前 `active_node` 的局部视图
-6. 必要时的 `finalize_return_input`
+6. `runtime memory` 注入文本
+7. tool capability 摘要
+8. 必要时的 `finalize_return_input`
 
 其中：
 
 1. `finalize_return_input` 只在 verification fail 回退后出现
 2. 当前 node 局部视图优先于 graph 全图摘要
+3. `runtime memory` 和 tool capability 都通过 `dynamic injection` 进入，而不是直接写入 `phase prompt`
 
 ## 5. 当前 Node 局部视图
 
@@ -95,17 +102,25 @@
 2. preference recall
 3. skill metadata
 4. 必要的 prepare 产物注入
+5. 当前 `active_node` / task 信息
+6. 当前 node 相关的局部图上下文
+7. `runtime memory` 注入文本
+8. tool capability 摘要
 
 本任务明确规定：
 
 1. recall 结果可以进入 `dynamic injection`
 2. memory write 不进入主 prompt
 3. preference write 不进入主 prompt
+4. 当前 node / task 信息不进入 `phase prompt`
+5. `runtime memory` 作为第一版固定注入项挂在 `dynamic injection`
+6. tool schema 不作为大段 prompt 正文直接注入，prompt 内只保留能力摘要
 
 也就是说：
 
-1. prompt 层只消费 recall
+1. prompt 层只消费 recall 与必要的运行时动态事实
 2. save/write 属于 finalize 后置挂点
+3. 运行时任务事实与上下文注入统一归 `dynamic injection`
 
 ## 9. Finalize Prompt 的状态消费
 
@@ -146,10 +161,11 @@
 
 ## 12. 本任务结论摘要
 
-可以压缩成 5 句话：
+可以压缩成 6 句话：
 
 1. prompt 不直接吃整个 `RunContext`
 2. execute 只消费当前 node 的局部图视图
 3. graph 全图如有需要，只允许通过工具查看
 4. `handoff` 不进入普通 execute prompt
-5. recall 进入 `dynamic injection`，write 不进入 prompt 主链路
+5. `runtime memory`、当前 node、tool capability 都通过 `dynamic injection` 进入
+6. write/save 不进入 prompt 主链路

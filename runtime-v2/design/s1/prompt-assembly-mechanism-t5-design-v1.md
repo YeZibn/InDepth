@@ -1,6 +1,6 @@
 # S1-T5 Prompt Assembly 机制（V1）
 
-更新时间：2026-04-23  
+更新时间：2026-04-28  
 状态：Draft  
 对应任务：`S1-T5`
 
@@ -22,25 +22,23 @@
 
 ## 2. 正式结论
 
-第一版 prompt assembly 采用固定六层结构：
+第一版 prompt assembly 顶层固定为三层：
 
-1. `base layer`
-2. `phase layer`
-3. `task layer`
-4. `capability layer`
-5. `memory layer`
-6. `context layer`
+1. `base prompt`
+2. `phase prompt`
+3. `dynamic injection`
 
 并明确规定：
 
-1. `PromptAssembler` 内部可以保留分层结构
-2. 最终交付给 agent / model call 的产物是文本
+1. `PromptAssembler` 内部按这三层装配
+2. 第一版正式输出保持三段 prompt block 结构
+3. 不强制在 prompt 模块内先收口成 `system_prompt + user_prompt`
 
-## 3. 六层结构
+## 3. 三层结构
 
-## 3.1 `base layer`
+## 3.1 `base prompt`
 
-`base layer` 是稳定底座。
+`base prompt` 是稳定底座。
 
 允许放：
 
@@ -55,11 +53,11 @@
 1. 当前 phase
 2. 当前 task
 3. 当前 recall 结果
-4. 当前 messages
+4. 当前 node 的运行时事实
 
-## 3.2 `phase layer`
+## 3.2 `phase prompt`
 
-`phase layer` 是当前阶段专属规则层。
+`phase prompt` 是当前阶段专属规则层。
 
 允许放：
 
@@ -71,86 +69,45 @@
 本任务明确规定：
 
 1. output contract 不单独拉一层
-2. phase 输出约束直接归入 `phase layer`
+2. phase 输出约束直接归入 `phase prompt`
+3. 模块 16 第一版先重点服务 `execute`
+4. `prepare / finalize` 先保留接口，不要求同轮落完
 
-## 3.3 `task layer`
+## 3.3 `dynamic injection`
 
-`task layer` 用于表达当前这次 run 正在推进什么。
+`dynamic injection` 用于承载当前这次运行时才确定的动态上下文。
 
 允许放：
 
 1. 当前 `user_input`
 2. 当前 `goal`
-3. task graph 摘要
-4. active node 摘要
-5. `finalize_return_input`
-6. 当前必须面对的显式任务约束
+3. 当前 `active_node` / task 信息
+4. 当前 node 相关的局部图上下文
+5. `runtime memory` 注入文本
+6. 当前 agent 可用的 tool capability 摘要
+7. `finalize_return_input`
+8. 当前必须面对的显式任务约束
 
 不放：
 
-1. 长期 preference
-2. 历史 messages 轨迹
-3. 原始 tool result 大块正文
+1. 稳定长期协议
+2. 当前 phase 规则正文
+3. 没有边界的“其他本轮临时事实”兜底块
 
-## 3.4 `capability layer`
+补充规定：
 
-`capability layer` 用于表达当前这个 agent 已开启的能力面。
-
-允许放：
-
-1. 当前 agent 开启的 skills
-2. 当前 agent 可用的 tools
-3. 当前 agent 的能力边界说明
-
-不放：
-
-1. 当前 task 目标
-2. 当前 messages 历史
-3. recall 结果正文
-
-## 3.5 `memory layer`
-
-`memory layer` 用于放启动期召回进来的长期背景。
-
-允许放：
-
-1. system memory recall 摘要
-2. user preference
-3. 必要的长期经验/策略提醒
-
-不放：
-
-1. 执行期临时 fetch 的正文结果
-2. 当前消息历史
-3. 当前 step 的临时 tool result
-
-## 3.6 `context layer`
-
-`context layer` 用于放当前模型调用前已经积累出的上下文材料。
-
-允许放：
-
-1. messages
-2. compression 之后的上下文内容
-3. 必要的近期执行摘要
-4. 执行期 fetch 到的记忆正文
-5. 少量必要的近程材料整合结果
-
-本任务明确规定：
-
-1. `messages` 进入 prompt 定义
-2. compression 内容属于 `context layer`
+1. `runtime memory` 注入是第一版固定组成项，不作为可有可无的挂件
+2. `tool capability` 采用轻量摘要文本进入 prompt
+3. 原始 tool schema 继续走模型/tool calling 通道，不在这里展开为大段 prompt 文本
+4. 已有上下文中的最近观察或 `reflexion hint` 如需进入 prompt，应作为 `runtime memory` 或 node 局部上下文的一部分被提取，而不是再单独扩一层
 
 ## 4. 层与层的关系
 
 第一版采用固定顺序叠加：
 
-1. `base`
-2. `phase`
-3. `task`
-4. `capability`
-5. `memory`
-6. `context`
+1. `base prompt`
+2. `phase prompt`
+3. `dynamic injection`
 
 这表示：
 
@@ -160,83 +117,84 @@
 
 例如：
 
-1. `context layer` 不能推翻 `phase layer`
-2. `memory layer` 不能推翻 `task layer`
-3. `capability layer` 不能推翻 `phase layer`
-4. `task layer` 不能推翻 `base layer`
+1. `dynamic injection` 不能推翻 `phase prompt`
+2. `dynamic injection` 不能推翻 `base prompt`
+3. `phase prompt` 不能推翻 `base prompt`
 
 ## 5. 必选层与可空层
 
 第一版建议如下：
 
-1. `base layer`：必选
-2. `phase layer`：必选
-3. `task layer`：必选
-4. `capability layer`：必选
-5. `memory layer`：可空
-6. `context layer`：可空
+1. `base prompt`：必选
+2. `phase prompt`：必选
+3. `dynamic injection`：必选
 
 补充说明：
 
-1. `memory layer` 在没有 recall 结果时可以为空
-2. `context layer` 在没有历史上下文时可以为空
-3. execute / finalize 阶段通常会有 `context layer`
+1. `dynamic injection` 是必选，但其内部某些子项可空
+2. 第一版中 `runtime memory` 注入作为正式输入项保留，即使为空也应有稳定装配位
+3. execute 阶段通常会完整使用三层
+4. `prepare / finalize` 后续按各自需要细化其注入项
 
 ## 6. `PromptAssembler` 的定位
 
-`PromptAssembler` 的职责不是自由拼 prompt，而是按固定六层顺序组装当前模型可见输入。
+`PromptAssembler` 的职责不是自由拼 prompt，而是按固定三层顺序组装当前模型可见输入。
 
 因此它负责：
 
 1. 读取各层输入
 2. 组装层级结构
-3. 按固定顺序渲染为文本
+3. 产出稳定的 prompt block 结构
 
 它不负责：
 
 1. 决定 recall 是否触发
 2. 决定 graph 如何推进
 3. 决定 tool 如何执行
+4. 决定 memory 如何检索
+5. 决定 node 如何调度
 
 ## 7. 输出形态
 
 第一版明确规定：
 
 1. `PromptAssembler` 内部可使用分层结构对象
-2. 对 agent / model call 的最终输出必须是文本
+2. 对外先输出正式三段 prompt block 结构
+3. 是否进一步渲染为某个具体模型调用所需的 message 形态，由上层调用方决定
 
 也就是说：
 
-1. 内部先形成可检查的 layer sections
-2. 最后再渲染成一份已排序 prompt 文本
+1. 内部先形成可检查的 prompt blocks
+2. 三段 block 是当前模块的正式边界
+3. 具体模型适配层后续可以再把它们渲染成文本或消息
 
 ## 8. 为什么这样设计
 
 采用这套机制的原因如下：
 
 1. 所有真正进入模型输入的内容都被纳入 prompt 定义
-2. `messages` 与 compression 不再被割裂到 prompt 外
-3. `skill / tool` 描述被正式收敛到独立 `capability layer`
-4. output contract 不再悬空，而是跟 phase 绑定
+2. 顶层组成与 `S1-T2` 的正式分层保持一致
+3. `current node`、`runtime memory`、`tool capability` 都被收敛进 `dynamic injection`
+4. output contract 不再悬空，而是跟 `phase prompt` 绑定
 5. 中间态仍然可检查、可调试
-6. 对外接口仍然保持简单
+6. 避免 prompt 模块内部又膨胀出第二套自定义层体系
 
 ## 9. 对后续任务的直接输入
 
 `S1-T5` 直接服务：
 
 1. `S1-T6` prompt 迁移方案
-2. `S3-T6` runtime skeleton
-3. `S8` recall / preference 注入挂点
+2. 模块 16 的接口定义与 assembler 骨架实现
+3. `S8` recall / preference / runtime memory 注入挂点
 4. `S11` finalize prompt 与 handoff 输出约束
 
 ## 10. 本任务结论摘要
 
 可以压缩成 6 句话：
 
-1. 第一版 prompt assembly 采用固定六层
-2. 六层分别是 `base / phase / task / capability / memory / context`
-3. `messages` 进入 prompt 定义
-4. compression 内容属于 `context layer`
-5. 当前 agent 开启的 `skills / tools` 进入 `capability layer`
-6. assembler 内部分层，但最终输出文本
+1. 第一版 prompt assembly 顶层固定为三层
+2. 三层分别是 `base prompt / phase prompt / dynamic injection`
+3. `current node`、`runtime memory`、`tool capability` 都归 `dynamic injection`
+4. output contract 跟随 `phase prompt`
+5. assembler 只负责装配，不负责 recall、tool 执行和 graph 推进
+6. 第一版先输出三段 prompt block 结构
