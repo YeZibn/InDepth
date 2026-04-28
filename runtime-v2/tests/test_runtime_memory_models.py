@@ -27,6 +27,9 @@ class RuntimeMemoryStoreStub(RuntimeMemoryStore):
     def list_entries_for_run(self, *, task_id: str, run_id: str) -> list[RuntimeMemoryEntry]:
         return []
 
+    def list_entries_for_task(self, *, task_id: str) -> list[RuntimeMemoryEntry]:
+        return []
+
     def list_entries(self, query: RuntimeMemoryQuery) -> list[RuntimeMemoryEntry]:
         return []
 

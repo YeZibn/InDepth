@@ -102,6 +102,9 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
     def list_entries_for_run(self, *, task_id: str, run_id: str) -> list[RuntimeMemoryEntry]:
         return self.list_entries(RuntimeMemoryQuery(task_id=task_id, run_id=run_id))
 
+    def list_entries_for_task(self, *, task_id: str) -> list[RuntimeMemoryEntry]:
+        return self.list_entries(RuntimeMemoryQuery(task_id=task_id))
+
     def list_entries(self, query: RuntimeMemoryQuery) -> list[RuntimeMemoryEntry]:
         sql = """
             SELECT

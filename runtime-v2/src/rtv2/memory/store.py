@@ -19,6 +19,10 @@ class RuntimeMemoryStore(ABC):
         """List all runtime memory entries for one run in stable order."""
 
     @abstractmethod
+    def list_entries_for_task(self, *, task_id: str) -> list[RuntimeMemoryEntry]:
+        """List all runtime memory entries for one task in stable order."""
+
+    @abstractmethod
     def list_entries(self, query: RuntimeMemoryQuery) -> list[RuntimeMemoryEntry]:
         """List runtime memory entries filtered by the provided query."""
 
