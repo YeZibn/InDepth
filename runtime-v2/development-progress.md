@@ -279,7 +279,7 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
+- 任务 03：已完成
 - 任务 04：未开始
 - 任务 05：未开始
 
@@ -288,6 +288,58 @@
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 045：完成模块 14 的任务 03 最小 ToolRegistry 与本地 Executor 落地
+
+- 状态：已完成
+- 范围：完成模块 14 的任务 03，正式落地 runtime-v2 最小工具协议、`decorator + hook`、`ToolRegistry` 与本地 `LocalToolExecutor`，不接入 ReAct 主链
+- 结果：
+  - 已新增最小工具模型：
+    - `runtime-v2/src/rtv2/tools/models.py`
+  - 已新增最小工具声明器：
+    - `runtime-v2/src/rtv2/tools/decorator.py`
+  - 已新增最小注册中心：
+    - `runtime-v2/src/rtv2/tools/registry.py`
+  - 已新增最小本地执行器：
+    - `runtime-v2/src/rtv2/tools/executor.py`
+  - 已更新导出入口：
+    - `runtime-v2/src/rtv2/tools/__init__.py`
+  - 已正式落地：
+    - `ToolSpec`
+    - `ToolCall`
+    - `ToolResult`
+    - `tool(...) decorator`
+    - `ToolRegistry`
+    - `LocalToolExecutor`
+  - 当前实现特征：
+    - `tool(...)` 返回可直接注册对象
+    - hook 采用同步 wrapper chain
+    - hook 可修改参数与结果
+    - executor 当前只做最小参数校验：
+      - tool 是否存在
+      - arguments 是否为 `dict`
+      - 必填字段是否缺失
+    - 非字符串 tool 返回值会统一序列化为 `ToolResult.output_text`
+  - 已新增单测：
+    - `runtime-v2/tests/test_tools.py`
+    - 已覆盖：
+      - registry schema 暴露
+      - 正常工具执行
+      - 未知工具报错
+      - 必填参数缺失报错
+      - hook 修改参数与结果
+      - 非字符串结果序列化
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 32 tests ... OK`
+- 遗留问题：
+  - 当前工具层还未接入 `ReActStepRunner`
+  - 当前还未把 tool schema 暴露给模型侧
+  - 当前 tool 结果还未进入 `observation` 回填链
+- 下一步：
+  - 进入模块 14 的任务 04，让 `ReActStepRunner` 支持单轮最多一次 tool call 与结果回填
 
 #### 记录 043：完成模块 14 的任务 01 Tool 模块目标与边界对齐
 
