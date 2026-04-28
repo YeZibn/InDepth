@@ -19,7 +19,7 @@
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，`S13` 正在补充
 - 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05、模块 06
-- 当前重点：推进 execute 到 `StepResult` 的统一收口，并为后续 solver / memory 接线继续铺路
+- 当前重点：推进 ReAct step 向 execute 主链的继续收口，并为后续 solver / memory / tool 接线继续铺路
 
 ---
 
@@ -260,13 +260,49 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-28
+
+#### 记录 042：完成模块 13 的任务 04 execute 主链接入最小 ReAct Step
+
+- 状态：已完成
+- 范围：完成模块 13 的任务 04，让 execute 链在最小范围内通过单轮 ReAct step 骨架产出并消费 `StepResult`，同时补测试、实现说明与开发进度
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+  - 已实现：
+    - `RuntimeOrchestrator` 支持注入 `react_step_runner`
+    - execute 选中 `RUNNING` node 时，改为调用 `ReActStepRunner.run_step(...)`
+    - 已新增最小 `build_react_step_prompt(...)`
+    - 当前 `step_prompt` 只组装：
+      - `user_input`
+      - 当前 node 的 `node_id / name / kind / status / description`
+      - 单轮最小执行要求
+    - orchestrator 当前只消费：
+      - `react_output.step_result`
+  - 当前明确：
+    - 这一步只打通“真实 step -> StepResult -> orchestrator 消费”
+    - 不在这一版中接入 tool calling / memory / reflexion
+    - `step_result.patch` 仍允许为空
+  - 已更新测试：
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - 已将原本 `RUNNING -> COMPLETED` 的本地最小推进测试，改为 fake runner 驱动的 ReAct step 消费测试
+  - 已更新实现说明：
+    - `runtime-v2/implementation/react-step.md`
+- 验证结果：
+  - 已执行回归测试：
+    - `/opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+- 遗留问题：
+  - 当前 `thought / action / observation` 还未进入正式 memory 记录流
+  - 当前 `step_prompt` 还未接入 graph 全量上下文
+  - 当前模型侧还未正式生成 `TaskGraphPatch`
+- 下一步：
+  - 进入后续模块，继续收口 solver / memory / tool 等能力与 ReAct 主链的关系
 
 #### 记录 041：完成模块 13 的任务 03 最小 ReAct Step 骨架与真实 LLM 接入
 

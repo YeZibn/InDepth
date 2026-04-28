@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
-from rtv2.solver.models import StepResult, StepStatusSignal
+from rtv2.solver import ReActStepInput, ReActStepRunner
+from rtv2.solver.models import StepResult
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
 from rtv2.task_graph.store import TaskGraphStore
 from rtv2.task_graph.models import (
@@ -19,8 +20,14 @@ from rtv2.task_graph.models import (
 class RuntimeOrchestrator:
     """Minimal runtime control skeleton for the main execution chain."""
 
-    def __init__(self, *, graph_store: TaskGraphStore) -> None:
+    def __init__(
+        self,
+        *,
+        graph_store: TaskGraphStore,
+        react_step_runner: ReActStepRunner | None = None,
+    ) -> None:
         self.graph_store = graph_store
+        self.react_step_runner = react_step_runner or ReActStepRunner()
         self._graph_counter = 0
         self._node_counter = 0
 
@@ -180,16 +187,12 @@ class RuntimeOrchestrator:
                 )
             )
         if node.node_status is NodeStatus.RUNNING:
-            return StepResult(
-                status_signal=StepStatusSignal.READY_FOR_COMPLETION,
-                reason="node reached minimal completion threshold",
-                patch=TaskGraphPatch(
-                    node_updates=[NodePatch(
-                        node_id=node.node_id,
-                        node_status=NodeStatus.COMPLETED,
-                    )]
-                ),
+            react_output = self.react_step_runner.run_step(
+                ReActStepInput(
+                    step_prompt=self.build_react_step_prompt(context, node),
+                )
             )
+            return react_output.step_result
         return None
 
     def _advance_pending_node(
@@ -230,6 +233,29 @@ class RuntimeOrchestrator:
         context.domain_state.task_graph_state = updated_graph
         if patch.active_node_id is not None:
             context.runtime_state.active_node_id = patch.active_node_id
+
+    @staticmethod
+    def build_react_step_prompt(context: RunContext, node: TaskGraphNode) -> str:
+        """Assemble the minimal agent-facing prompt for a running node."""
+
+        return "\n".join([
+            "You are executing one minimal ReAct step for the current runtime node.",
+            "",
+            f"User request: {context.run_identity.user_input}",
+            "",
+            "Current node:",
+            f"- node_id: {node.node_id}",
+            f"- name: {node.name}",
+            f"- kind: {node.kind}",
+            f"- status: {node.node_status.value}",
+            f"- description: {node.description}",
+            "",
+            "Your task:",
+            "- Think briefly about the next useful move.",
+            "- Describe the action you would take in this single step.",
+            "- Report the resulting observation for this single step.",
+            "- Return a minimal step status signal for runtime consumption.",
+        ])
 
     @staticmethod
     def _find_node(graph_state: TaskGraphState, node_id: str) -> TaskGraphNode | None:

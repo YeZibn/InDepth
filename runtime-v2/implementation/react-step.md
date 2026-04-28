@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前 `runtime-v2` 已正式落地最小单轮 ReAct step 骨架，但还没有接入 execute 主链。
+当前 `runtime-v2` 已正式落地最小单轮 ReAct step 骨架，并已接入 execute 主链中的最小 `RUNNING` 节点分支。
 
 当前已实现：
 
@@ -17,7 +17,9 @@
 1. [src/rtv2/model/base.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/model/base.py)
 2. [src/rtv2/model/http_chat_provider.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/model/http_chat_provider.py)
 3. [src/rtv2/solver/react_step.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/react_step.py)
-4. [tests/test_react_step.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py)
+4. [src/rtv2/orchestrator/runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
+5. [tests/test_react_step.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py)
+6. [tests/test_runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py)
 
 ## 当前设计结论
 
@@ -73,6 +75,26 @@
    - `StepResult`
 6. 返回正式 `ReActStepOutput`
 
+## 当前 execute 接线方式
+
+当前 orchestrator 只在非常小的范围内接入 ReAct step：
+
+1. 当 execute 选中的 node 为 `RUNNING` 时：
+   - 不再直接本地构造 `RUNNING -> COMPLETED` 的最小推进结果
+   - 改为调用一次 `ReActStepRunner`
+2. orchestrator 会先组装最小 `step_prompt`
+3. `step_prompt` 当前只包含：
+   - `user_input`
+   - 当前 node 的 `node_id / name / kind / status / description`
+   - 当前单轮 step 的最小执行要求
+4. orchestrator 当前只正式消费：
+   - `react_output.step_result`
+5. 若 `step_result.patch` 非空：
+   - 仍由现有 `TaskGraphStore.apply_patch(...)` 回写 graph
+6. 若 `step_result.patch` 为空：
+   - 当前不额外生成补丁
+   - 只表示 execute 已经通过真实 ReAct step 获得了一次正式 `StepResult`
+
 ## 当前输出约束
 
 当前要求模型返回以下 JSON 字段：
@@ -100,6 +122,8 @@
 2. unified runtime memory
 3. `Reflexion`
 4. `Completion Evaluator`
-5. execute 主链接入
+5. 多轮 solver 循环
+6. graph 全量上下文注入
+7. 模型侧正式生成 `TaskGraphPatch`
 
 这些内容会在后续模块继续落地。

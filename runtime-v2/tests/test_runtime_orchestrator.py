@@ -10,14 +10,33 @@ if str(SRC) not in sys.path:
 
 from rtv2.host.interfaces import StartRunIdentity
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
-from rtv2.solver.models import StepStatusSignal
+from rtv2.solver.react_step import ReActStepOutput
+from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import RunPhase
-from rtv2.task_graph.models import NodeStatus, TaskGraphNode, TaskGraphStatus
+from rtv2.task_graph.models import NodePatch, NodeStatus, TaskGraphNode, TaskGraphPatch, TaskGraphStatus
 from rtv2.task_graph.store import InMemoryTaskGraphStore
 
 
-def create_orchestrator() -> RuntimeOrchestrator:
-    return RuntimeOrchestrator(graph_store=InMemoryTaskGraphStore())
+class FakeReActStepRunner:
+    def __init__(self, output: ReActStepOutput | None = None) -> None:
+        self.output = output or ReActStepOutput(
+            thought="",
+            action="",
+            observation="",
+            step_result=StepResult(),
+        )
+        self.inputs = []
+
+    def run_step(self, step_input):
+        self.inputs.append(step_input)
+        return self.output
+
+
+def create_orchestrator(react_step_runner=None) -> RuntimeOrchestrator:
+    return RuntimeOrchestrator(
+        graph_store=InMemoryTaskGraphStore(),
+        react_step_runner=react_step_runner,
+    )
 
 
 class RuntimeOrchestratorTests(unittest.TestCase):
@@ -443,8 +462,25 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(step_result.patch)
         self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.RUNNING)
 
-    def test_advance_node_minimally_promotes_running_to_completed(self):
-        orchestrator = create_orchestrator()
+    def test_advance_node_minimally_runs_react_step_for_running_node(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="inspect current progress",
+                action="continue execution",
+                observation="work is complete",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="node reached completion",
+                    patch=TaskGraphPatch(
+                        node_updates=[NodePatch(
+                            node_id="node-1",
+                            node_status=NodeStatus.COMPLETED,
+                        )]
+                    ),
+                ),
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
                 session_id="sess-1",
@@ -465,9 +501,13 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         self.assertIsNotNone(step_result)
         self.assertEqual(step_result.status_signal, StepStatusSignal.READY_FOR_COMPLETION)
-        self.assertEqual(step_result.reason, "node reached minimal completion threshold")
+        self.assertEqual(step_result.reason, "node reached completion")
         self.assertIsNotNone(step_result.patch)
         self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.COMPLETED)
+        self.assertEqual(len(react_runner.inputs), 1)
+        self.assertIn("User request: Running node.", react_runner.inputs[0].step_prompt)
+        self.assertIn("- node_id: node-1", react_runner.inputs[0].step_prompt)
+        self.assertIn("- status: running", react_runner.inputs[0].step_prompt)
 
     def test_advance_node_minimally_returns_none_for_non_progressing_statuses(self):
         orchestrator = create_orchestrator()
@@ -571,6 +611,56 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             executed.domain_state.task_graph_state.nodes[0].node_status,
             NodeStatus.RUNNING,
+        )
+        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
+        self.assertEqual(executed.domain_state.task_graph_state.version, 2)
+
+    def test_run_execute_phase_consumes_step_result_from_react_runner(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="finish the node",
+                action="return completion patch",
+                observation="node can be completed",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="react step finished current node",
+                    patch=TaskGraphPatch(
+                        node_updates=[NodePatch(
+                            node_id="node-1",
+                            node_status=NodeStatus.COMPLETED,
+                        )]
+                    ),
+                ),
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Run one react step.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Running",
+                kind="execution",
+                description="Process the current user request.",
+                node_status=NodeStatus.RUNNING,
+            )
+        ]
+
+        executed = orchestrator.run_execute_phase(context)
+
+        self.assertEqual(len(react_runner.inputs), 1)
+        self.assertEqual(executed.run_lifecycle.current_phase, RunPhase.FINALIZE)
+        self.assertEqual(
+            executed.domain_state.task_graph_state.nodes[0].node_status,
+            NodeStatus.COMPLETED,
         )
         self.assertEqual(executed.runtime_state.active_node_id, "node-1")
         self.assertEqual(executed.domain_state.task_graph_state.version, 2)
