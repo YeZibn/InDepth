@@ -273,3 +273,50 @@
    - `order`
 11. 第一版新增节点状态只允许 `pending / ready`
 12. 第一版 `owner` 默认使用 `main`
+
+## 15. ExecutePhase / Solver 第一版 contract 补充
+
+当前补充结论如下：
+
+1. `Solver` 与 `ExecutePhase` 的边界需要切开：
+   - `Solver` 只负责当前 node 的一次 solve 收口
+   - `ExecutePhase` 负责 graph 级循环、下一 node 选择与 phase 退出
+2. `Solver` 第一版正式输入收口为：
+   - `RunContext`
+   - 当前 `TaskGraphNode`
+3. 第一版不单独引入更重的 `SolverContext`
+4. 第一版需要新增单独的 `SolverResult`，不再让 execute 直接消费裸 `StepResult`
+5. `SolverResult` 第一版最小正式结构收口为：
+   - `final_step_result`
+   - `final_node_status`
+   - `step_count`
+6. 第一版 `SolverResult` 不保留：
+   - `active_node_id`
+7. `active_node_id` 不属于 node solve 结果，而属于 graph 级调度结果，应由 `ExecutePhase` 在应用 solve 结果后重新决定
+8. `final_step_result` 第一版保留，作为后续 memory / debug / solver 扩展的稳定消费口
+
+## 16. ExecutePhase 第一版主循环与退出条件补充
+
+当前补充结论如下：
+
+1. `ExecutePhase` 第一版采用两层循环：
+   - 外层为 graph 级循环
+   - 内层为 `Solver` 管理的当前 node 多轮 step
+2. `ExecutePhase` 每轮负责：
+   - 选择当前可执行 node
+   - 若存在 node，则调用一次 `Solver`
+   - 应用 `SolverResult`
+   - 回到 graph 层重新选择
+   - 若不存在可执行 node，则判断 execute 是否退出
+3. `Solver` 内部 node 收口规则第一版保持为：
+   - `progressed` -> 继续当前 node 下一轮 step
+   - `ready_for_completion` -> 当前 node 进入 `completed`
+   - `blocked` -> 当前 node 进入 `blocked`
+   - `failed` -> 当前 node 进入 `failed`
+4. 当前 node 在 `completed / blocked / failed` 后，第一版都先回到 graph 层继续寻找其他可执行 node
+5. 第一版 execute 的退出条件收口为：
+   - graph 中已经没有任何可继续推进的 node
+6. 第一版 graph 级退出收口规则：
+   - 若所有 node 都已 `completed`，则 `graph_status = completed`
+   - 若 graph 已无可继续主线但未完成，则统一先收口为 `graph_status = blocked`
+7. 第一版当前不展开 `abandoned` 与 `replan` 的共存语义，该问题留待后续重点讨论

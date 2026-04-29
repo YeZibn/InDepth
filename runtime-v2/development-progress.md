@@ -397,12 +397,80 @@
 当前进度：
 
 - 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 076：完成模块 19 的任务 03 ExecutePhase 主循环边界与退出条件定稿
+
+- 状态：已完成
+- 范围：完成模块 19 的任务 03，正式收口 `ExecutePhase` 的 graph 级主循环边界、`Solver` 的 node 收口后续行为，以及 execute 第一版退出条件，不进入代码实现
+- 结果：
+  - 已确认 `ExecutePhase` 第一版采用两层循环：
+    - 外层为 graph 级循环
+    - 内层为 `Solver` 管理的当前 node 多轮 step
+  - 已确认 `ExecutePhase` 每轮负责：
+    - 选择当前可执行 node
+    - 若存在 node，则调用一次 `Solver`
+    - 应用 `SolverResult`
+    - 回到 graph 层重新选择
+    - 若不存在可执行 node，则判断 execute 是否退出
+  - 已确认 `Solver` 内部 node 收口规则第一版保持为：
+    - `progressed` -> 继续当前 node 下一轮 step
+    - `ready_for_completion` -> 当前 node 进入 `completed`
+    - `blocked` -> 当前 node 进入 `blocked`
+    - `failed` -> 当前 node 进入 `failed`
+  - 已确认当前 node 在 `blocked / failed / completed` 后，第一版都先回到 graph 层继续寻找其他可执行 node
+  - 已确认第一版 execute 的退出条件收口为：
+    - graph 中已经没有任何可继续推进的 node
+  - 已确认第一版 graph 级退出收口规则：
+    - 若所有 node 都已 `completed`，则 `graph_status = completed`
+    - 若 graph 已无可继续主线但未完成，则统一先收口为 `graph_status = blocked`
+  - 已确认第一版当前不展开 `abandoned` 与 `replan` 的共存语义，该问题留待后续重点讨论
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/s3/runtime-skeleton-t6-design-v1.md`
+- 遗留问题：
+  - `abandoned` 与 `replan` 的边界关系后续需要单独重点收口
+  - graph “可继续推进” 的正式判定细则仍待模块 19 实现时具体化
+- 下一步：
+  - 进入模块 19 的任务 04，实现 `Solver` 的 node 选择与单 node 多轮 step 推进
+
+#### 记录 075：完成模块 19 的任务 02 Solver 最小输入输出 contract 定稿
+
+- 状态：已完成
+- 范围：完成模块 19 的任务 02，正式收口 `Solver` 与 `ExecutePhase` 的职责边界，以及 `Solver` 第一版最小输入输出 contract，不进入代码实现
+- 结果：
+  - 已确认 `Solver` 与 `ExecutePhase` 的边界必须切开：
+    - `Solver` 只负责当前 node 的一次 solve 收口
+    - `ExecutePhase` 负责 graph 级循环、下一 node 选择与 phase 退出
+  - 已确认 `Solver` 第一版正式输入为：
+    - `RunContext`
+    - 当前 `TaskGraphNode`
+  - 已确认第一版不单独引入更重的 `SolverContext`
+  - 已确认需要新增单独的 `SolverResult`，不再让 execute 直接消费裸 `StepResult`
+  - 已确认 `SolverResult` 第一版最小正式结构收口为：
+    - `final_step_result`
+    - `final_node_status`
+    - `step_count`
+  - 已确认 `SolverResult` 第一版不保留：
+    - `active_node_id`
+  - 已确认 `active_node_id` 不属于 node solve 结果，而属于 graph 级调度结果，应由 `ExecutePhase` 在应用 solve 结果后重新决定
+  - 已确认 `final_step_result` 第一版保留，作为后续 memory / debug / solver 后续扩展的稳定消费口
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+- 遗留问题：
+  - execute 主循环的退出条件与 graph 终态关系仍待模块 19 任务 03 收口
+  - `SolverResult` 的代码落点与命名仍待后续实现时确定
+- 下一步：
+  - 进入模块 19 的任务 03，确定 `ExecutePhase` 的主循环边界与退出条件
 
 #### 记录 074：完成模块 19 的任务 01 ExecutePhase / Solver 第一版范围定稿与设计对齐
 

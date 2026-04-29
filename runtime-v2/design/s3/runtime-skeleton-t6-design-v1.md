@@ -136,50 +136,27 @@ RuntimeHost
 
 ## 9. Phase 切换规则
 
-第一版正式采用 `S3-T5` 的结论：
-
-1. phase 切换由 `step` 决定
-2. `StepResult.runtime_control.next_phase` 是正式切换输入
-3. orchestrator 不补 phase 判断
-
-因此：
+当前开发阶段对该处骨架语义补充如下：
 
 1. `PreparePhase` 返回可执行上下文
-2. `ExecutePhase` 每轮 step 明确决定是否继续 `execute` 或切入 `finalize`
-3. `FinalizePhase` 作为 closeout 入口被调用
+2. `ExecutePhase` 不再理解为“单轮 step 自动决定是否切 phase”
+3. `ExecutePhase` 当前由 graph 级循环驱动
+4. `Solver` 负责当前 node 的 solve 收口
+5. `ExecutePhase` 在 graph 已无可继续主线时才退出到 `FinalizePhase`
 
 ## 10. Execute Loop 的退出条件
 
-第一版 execute loop 退出可归为 3 类：
+当前开发阶段第一版 execute loop 退出条件补充如下：
 
-### 10.1 Step 主动切入 `finalize`
-
-即：
-
-1. `StepResult.runtime_control.next_phase = "finalize"`
-
-这是最正常的主链路收口方式。
-
-### 10.2 Graph 已进入整图终态
-
-例如：
-
-1. `graph_status = completed`
-2. `graph_status = abandoned`
-
-并且 `step` 已给出进入 `finalize` 的结果。
-
-### 10.3 Execute 前提不再成立
-
-例如：
-
-1. 当前 phase 已不再是 `execute`
-2. 当前 graph 已进入终态
-3. 当前已没有可执行主线
-
-这里的含义不是 orchestrator 自主做业务判断，而是：
-
-1. orchestrator 执行主循环的骨架退出条件
+1. `ExecutePhase` 采用两层循环：
+   - 外层为 graph 级循环
+   - 内层为 `Solver` 管理的当前 node 多轮 step
+2. 只要 graph 中仍存在可继续推进的 node，`ExecutePhase` 就继续
+3. 当 graph 中已经没有任何可继续推进的 node 时，`ExecutePhase` 才退出
+4. graph 级退出时：
+   - 若所有 node 都已 `completed`，则 `graph_status = completed`
+   - 若 graph 已无可继续主线但未完成，则当前第一版统一收口为 `graph_status = blocked`
+5. `abandoned` 与 `replan` 的共存语义当前不在本轮展开，留待后续重点讨论
 
 ## 11. `run_finalize_phase`
 
