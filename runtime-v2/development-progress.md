@@ -329,13 +329,52 @@
 - 任务 03：已完成
 - 任务 04：已完成
 - 任务 05：已完成
-- 任务 06：未开始
+- 任务 06：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 061：完成模块 16 的任务 06 测试、实现说明与模块结项收尾
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 06，补齐 prompt 模块的独立测试、实现说明、开发进度同步，并完成模块 16 收尾
+- 结果：
+  - 已新增：
+    - `runtime-v2/tests/test_prompting.py`
+    - `runtime-v2/implementation/prompting.md`
+  - 已更新：
+    - `runtime-v2/implementation/README.md`
+    - 模块 16 的当前进度
+    - 模块 16 的开发记录
+  - 已补独立测试覆盖：
+    - `ExecutionPromptAssembler` 的三段输出
+    - 空动态字段渲染
+    - `PREPARE / FINALIZE` stub phase prompt
+  - 已补实现说明：
+    - 当前 prompt 模块代码入口
+    - 当前三层正式结构
+    - orchestrator / assembler / runner 的责任链
+    - 已完成项与未完成项
+  - 已确认模块 16 当前正式落地范围包括：
+    - `prompting` 包的正式模型
+    - `ExecutionPromptAssembler`
+    - runtime memory / node / tool capability 主链接入
+    - orchestrator 对 prompt 模块的正式消费
+    - `ReActStepRunner` 对渲染后 `step_prompt` 的正式消费口径
+- 验证结果：
+  - 已执行当前相关回归：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_processor.py`
+  - 结果：
+    - `Ran 43 tests ... OK`
+- 遗留问题：
+  - 当前 `step_prompt` 仍是单字符串形态，尚未升级为 message 级 prompt 输入
+  - `PREPARE / FINALIZE` prompt 仍为最小 stub
+  - evaluator / reflexion / replan 的 prompt 模块尚未展开
+- 下一步：
+  - 模块 16 已结项，可继续进入下一模块讨论
 
 #### 记录 060：完成模块 16 的任务 05 Prompt 模块消费链与 Runner 口径收口
 

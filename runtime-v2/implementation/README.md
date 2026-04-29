@@ -21,12 +21,13 @@
    [orchestrator.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/orchestrator.md)
 5. Runtime Memory：
    [memory.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/memory.md)
+6. Prompting：
+   [prompting.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/prompting.md)
 
 ## 预留实现块
 
 后续预计逐步补以下说明文档：
 
 1. `tools.md`
-2. `prompting.md`
-3. `finalize.md`
-4. `subagent.md`
+2. `finalize.md`
+3. `subagent.md`
