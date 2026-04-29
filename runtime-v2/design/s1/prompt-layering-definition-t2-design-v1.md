@@ -86,6 +86,11 @@
 3. user preference recall injection
 4. skill metadata injection
 
+其中 `prepare result injection` 在当前第一版开发口径下，不再预设为长段 planning summary，而是以 `PreparePhase` 的正式产物为准，主要围绕：
+
+1. 当前 `goal`
+2. 必要的 graph planning 结果摘要
+
 本层职责：
 
 1. 把当前 run 的动态上下文补充给主 Agent

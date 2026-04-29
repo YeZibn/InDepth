@@ -211,14 +211,38 @@
 3. 在空图场景下，`PreparePhase` 允许直接产出首批节点
 4. 第一版需要保留一个轻量正式 `prepare_result`，作为后续 `execute / replan / finalize` 的稳定消费口
 5. `PreparePhase` 第一版输入面包括：
-   - `RunContext`
-   - `runtime memory`
-   - 当前 `user_input`
+   - `run_identity.user_input`
+   - `run_identity.goal` 作为可选旧值参考
    - 当前 graph 状态
-   - 轻量 skill capability
+   - task 级 `runtime memory`
+   - capability 文本
+   - `runtime_state.finalize_return_input` 作为预留输入
 6. `PreparePhase` 第一版当前不展开：
    - `replan` 回流实现
    - prepare 内多轮循环
    - prepare 阶段主动大量调 tool
    - skill resource 直读
    - finalize / evaluator / reflexion 联动深化
+
+## 13. PreparePhase 第一版最小输入输出 contract 补充
+
+当前补充结论如下：
+
+1. 这里的“输入”指的是 `PreparePhase` 合法依赖的正式信息源，而不是直接传给 LLM 的裸字段列表
+2. 这些输入共同限定后续 prepare prompt 的合法素材来源
+3. `goal` 不再依赖 host 预先提供，而由 `PreparePhase` 作为正式输出产出并回写
+4. `PrepareResult` 第一版最小正式结构收口为：
+   - `goal`
+   - `patch`
+5. 第一版不再保留：
+   - `summary`
+   - 独立 `active_node_id`
+6. `active_node_id` 统一由 `TaskGraphPatch.active_node_id` 承载
+7. 正式回写规则如下：
+   - `prepare_result.goal -> run_identity.goal`
+   - `prepare_result -> runtime_state.prepare_result`
+   - `prepare_result.patch` 应用后写回 `domain_state.task_graph_state`
+   - `runtime_state.active_node_id` 由 orchestrator 在 patch 应用后同步
+8. 第一版追加一条轻量 prepare memory entry，只记录：
+   - `goal`
+   - `graph_change_summary`

@@ -67,6 +67,7 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
+- 任务 02：已完成
 - 任务 03：已完成
 
 ### 模块 04：Task Graph Patch 与最小 Store 骨架
@@ -378,6 +379,46 @@
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 071：完成模块 18 的任务 02 PreparePhase 最小输入输出 contract 定稿
+
+- 状态：已完成
+- 范围：完成模块 18 的任务 02，正式收口 `PreparePhase` 第一版的最小信息输入面、最小输出结构、正式回写位置与 prepare memory entry 粒度，不进入代码实现
+- 结果：
+  - 已确认这里的“输入”指的是 `PreparePhase` 合法依赖的正式信息源，而不是直接传给 LLM 的裸字段列表
+  - 已确认这些正式输入用于约束后续 prepare prompt 的合法素材来源
+  - 已确认 `PreparePhase` 第一版正式输入面包括：
+    - `run_identity.user_input`
+    - `run_identity.goal` 作为可选旧值参考
+    - `domain_state.task_graph_state`
+    - task 级 `runtime memory`
+    - capability 文本
+    - `runtime_state.finalize_return_input` 作为预留输入
+  - 已确认 `goal` 不再依赖 host 预先提供，而是由 `PreparePhase` 作为正式输出产出并回写
+  - 已确认 `PrepareResult` 第一版最小正式结构收口为：
+    - `goal`
+    - `patch`
+  - 已确认第一版不再保留：
+    - `summary`
+    - 独立 `active_node_id`
+  - 已确认 `active_node_id` 统一由 `TaskGraphPatch.active_node_id` 承载
+  - 已确认正式回写规则：
+    - `prepare_result.goal -> run_identity.goal`
+    - `prepare_result -> runtime_state.prepare_result`
+    - `prepare_result.patch` 应用后写回 `domain_state.task_graph_state`
+    - `runtime_state.active_node_id` 由 orchestrator 在 patch 应用后同步
+  - 已确认第一版追加一条轻量 prepare memory entry，只记录：
+    - `goal`
+    - `graph_change_summary`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/s1/prompt-layering-definition-t2-design-v1.md`
+- 遗留问题：
+  - `PrepareResult` 的代码落点与命名仍待模块 18 任务 03/04 结合实现继续确定
+  - `graph_change_summary` 的具体生成方式仍待后续实现时收口
+- 下一步：
+  - 进入模块 18 的任务 03，实现 `prepare` 的 prompt 装配与 planner 调用链
 
 #### 记录 070：完成模块 18 的任务 01 PreparePhase / Planner 第一版范围定稿与设计对齐
 
