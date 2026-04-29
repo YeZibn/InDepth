@@ -348,8 +348,8 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：未开始
-- 任务 03：未开始
+- 任务 02：已完成
+- 任务 03：已完成
 - 任务 04：未开始
 - 任务 05：未开始
 - 任务 06：未开始
@@ -360,6 +360,85 @@
 
 ### 2026-04-29
 
+#### 记录 064：完成模块 17 的任务 03 本地 Skill Loader 与最小 Skill Registry 落地
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 03，在 `src/rtv2/skills` 下正式落地最小 skill 模型、目录型 loader 与运行态 registry，不接 prompt、不接 tools
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/skills/models.py`
+    - `runtime-v2/src/rtv2/skills/loader.py`
+    - `runtime-v2/src/rtv2/skills/registry.py`
+    - `runtime-v2/src/rtv2/skills/__init__.py`
+    - `runtime-v2/tests/test_skills.py`
+  - 已正式落地模型：
+    - `SkillManifest`
+    - `RuntimeSkill`
+    - `SkillStatus`
+  - 已正式落地本地 loader：
+    - `LocalSkillLoader.load(path) -> list[RuntimeSkill]`
+    - 支持单个 skill 目录
+    - 支持包含多个 skill 子目录的父目录
+  - 已按定稿内容实现：
+    - frontmatter 必填 `name + description`
+    - `frontmatter.name == folder_name` 强校验
+    - `references / scripts / assets` 收集为相对路径列表
+    - `source_path` 保留 skill 根目录绝对路径
+    - 缺少 `references/`、`scripts/`、`assets/` 时允许为空
+  - 已正式落地最小 registry：
+    - `register(...)`
+    - `get(...)`
+    - `list_all()`
+    - `list_enabled()`
+    - `enable(...)`
+    - `disable(...)`
+- 验证结果：
+  - 已执行相关测试：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py`
+  - 结果：
+    - `Ran 6 tests ... OK`
+- 遗留问题：
+  - 当前还未将 enabled skill 注入 prompt 能力面
+  - 当前还未暴露 `get_skill_*` 资源访问 tools
+  - 当前还未引入 host / orchestrator 侧的 skill paths 接线
+- 下一步：
+  - 进入模块 17 的任务 04，实现 skill capability 摘要注入到当前 prompt 主链
+
+#### 记录 063：完成模块 17 的任务 02 Skill Manifest 与 Runtime Skill 最小模型定稿
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 02，正式收口 skill 第一版的静态 manifest、运行态 skill 与最小状态模型，不进入代码实现
+- 结果：
+  - 已确认第一版 skill 模型分成两层：
+    - 静态消费对象：`SkillManifest`
+    - 运行态对象：`RuntimeSkill`
+  - 已确认 `SkillManifest` 第一版只保留：
+    - `name`
+    - `description`
+    - `references`
+    - `scripts`
+    - `assets`
+  - 已确认 `SkillManifest` 保持纯静态描述，不放：
+    - `source_path`
+    - `status`
+    - `instructions`
+  - 已确认 `RuntimeSkill` 第一版保留：
+    - `manifest`
+    - `source_path`
+    - `instructions`
+    - `status`
+  - 已确认 `RuntimeSkill.instructions` 指向 `SKILL.md` 去掉 frontmatter 后的正文文本
+  - 已确认 `RuntimeSkill.source_path` 作为 skill 资源根目录定位入口保留在运行态对象中
+  - 已确认第一版最小状态枚举为：
+    - `loaded`
+    - `enabled`
+    - `disabled`
+  - 已确认第一版不额外公开 `ParsedSkillAsset` 之类的中间解析对象，loader 内部可自行完成转换
+- 遗留问题：
+  - `references / scripts / assets` 在模型中使用相对路径还是绝对路径，待任务 03 结合 loader 再最终收口
+  - registry 是否直接持有 `RuntimeSkill`，待任务 03 结合生命周期最小实现再确认
+- 下一步：
+  - 进入模块 17 的任务 03，实现本地 skill loader 与最小 skill registry
 #### 记录 062：完成模块 17 的任务 01 Skill 模块范围、边界与第一版不做项对齐
 
 - 状态：已完成
