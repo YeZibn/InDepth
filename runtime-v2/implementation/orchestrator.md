@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前 orchestrator 层已正式落地初始上下文构建和最小 `prepare -> execute -> finalize` 主链骨架，但还没有进入真实 prompt/tool/verification 驱动的执行链。
+当前 orchestrator 层已正式落地初始上下文构建、真实 `PreparePhase` 最小 planner 链、最小 `execute` 推进链以及 `finalize` 收口骨架。
 
 当前已实现：
 
@@ -12,6 +12,7 @@
 4. `run_prepare_phase(...)`
 5. `run_execute_phase(...)`
 6. `run_finalize_phase(...)`
+7. `prepare` planner payload -> `PrepareResult.patch` 规范化与回写
 
 对应代码：
 
@@ -72,7 +73,8 @@
 这表示：
 
 1. 宿主入口和 orchestrator 主链骨架都已打通
-2. 但 phase 内部仍然只是最小状态推进
+2. `prepare` 已不再是空壳
+3. `execute / finalize` 仍保持最小推进与最小收口
 
 ## 当前 phase 规则
 
@@ -80,6 +82,14 @@
 
 1. `run_prepare_phase(...)`
    - 要求输入 phase 为 `PREPARE`
+   - 追加 `run-start` memory entry
+   - 构造 prepare prompt
+   - 发起单次 planner model 调用
+   - 将 planner payload 规范化成 `PrepareResult`
+   - 将 `PrepareResult.patch` 回写到正式 graph
+   - 回写 `run_identity.goal`
+   - 回写 `runtime_state.prepare_result`
+   - 追加轻量 prepare memory entry
    - 推进到 `EXECUTE`
 2. `run_execute_phase(...)`
    - 要求输入 phase 为 `EXECUTE`
@@ -100,13 +110,13 @@
 
 当前 orchestrator 层明确不负责：
 
-1. 真实 `prepare` 逻辑
-2. 真实 `execute` 逻辑
-3. 真实 `finalize` 逻辑
-4. prompt / tool / verification 接线
-5. phase 间状态推进闭环
+1. prepare 内多轮循环
+2. 非空图增量 planning
+3. 真实 finalize 守门链
+4. 完整 replan 回流
+5. phase 间复杂闭环
 
-这些内容会在模块 06 后续子任务中继续落地。
+这些内容会在后续模块继续落地。
 
 ## `select_active_node(...)` 的作用
 
@@ -154,6 +164,13 @@
 2. 当前不直接改 graph
 3. 当前不写 store
 4. 当前不改 `graph_status`
+
+当前它还承担一个额外工程角色：
+
+1. 当 prepare 的 planner model 调用本身失败时
+2. orchestrator 会临时退回到该最小初始化逻辑
+
+这个 fallback 只用于工程可运行性保护，不是 prepare 的正式主语义。
 
 ## `advance_node_minimally(...)` 的作用
 
@@ -212,4 +229,6 @@
 
 orchestrator 层下一步预计进入：
 
-1. `TaskGraphStore.apply_patch(...)` 的执行推进合并与校验增强
+1. prepare payload 到 patch 的校验细化与错误分类增强
+2. 非空图 / replan 场景下的 prepare 扩展
+3. finalize / verification 正式链路

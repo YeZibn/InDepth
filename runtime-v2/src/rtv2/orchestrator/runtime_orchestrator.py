@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -16,16 +17,26 @@ from rtv2.memory import (
     RuntimeMemoryStore,
     SQLiteRuntimeMemoryStore,
 )
+from rtv2.model import GenerationConfig, HttpChatModelProvider, ModelOutput, ModelProvider
 from rtv2.prompting import (
     ExecutionNodePromptContext,
     ExecutionPrompt,
     ExecutionPromptAssembler,
     ExecutionPromptInput,
+    PreparePromptInput,
 )
 from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
 from rtv2.solver import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepResult, StepStatusSignal
-from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
+from rtv2.state.models import (
+    DomainState,
+    PrepareResult,
+    RunContext,
+    RunIdentity,
+    RunLifecycle,
+    RunPhase,
+    RuntimeState,
+)
 from rtv2.task_graph.store import TaskGraphStore
 from rtv2.tools import ToolRegistry
 from rtv2.task_graph.models import (
@@ -53,6 +64,8 @@ class RuntimeOrchestrator:
         memory_store: RuntimeMemoryStore | None = None,
         memory_processor: RuntimeMemoryProcessor | None = None,
         prompt_assembler: ExecutionPromptAssembler | None = None,
+        planner_model_provider: ModelProvider | None = None,
+        planner_generation_config: GenerationConfig | None = None,
     ) -> None:
         self.graph_store = graph_store
         self.skill_loader = skill_loader or LocalSkillLoader()
@@ -62,6 +75,13 @@ class RuntimeOrchestrator:
         self.memory_store = memory_store or SQLiteRuntimeMemoryStore()
         self.memory_processor = memory_processor or RuntimeMemoryProcessor(memory_store=self.memory_store)
         self.prompt_assembler = prompt_assembler or ExecutionPromptAssembler()
+        self.planner_model_provider = planner_model_provider or HttpChatModelProvider(
+            default_config=GenerationConfig(temperature=0.1, max_tokens=1200)
+        )
+        self.planner_generation_config = planner_generation_config or GenerationConfig(
+            temperature=0.1,
+            max_tokens=1200,
+        )
         self.react_step_runner = react_step_runner or ReActStepRunner(
             tool_registry=tool_registry,
             memory_store=self.memory_store,
@@ -123,11 +143,27 @@ class RuntimeOrchestrator:
         return self.run_finalize_phase(context)
 
     def run_prepare_phase(self, context: RunContext) -> RunContext:
-        """Advance the context from prepare into execute."""
+        """Run the prepare-phase planner and advance into execute."""
 
         if context.run_lifecycle.current_phase is not RunPhase.PREPARE:
             raise ValueError("Prepare phase requires current_phase=PREPARE")
 
+        if context.domain_state.task_graph_state.nodes:
+            raise ValueError("Prepare phase currently only supports empty-graph initialization")
+
+        self._append_run_user_input_entry(context)
+        try:
+            planner_output = self._run_prepare_planner(context)
+            prepare_result = self._normalize_prepare_payload(context, planner_output)
+            if prepare_result.patch is None:
+                raise ValueError("Prepare planner did not produce a graph patch")
+        except RuntimeError:
+            prepare_result = self._build_prepare_fallback_result(context)
+
+        context.run_identity.goal = prepare_result.goal
+        context.runtime_state.prepare_result = prepare_result
+        self._apply_graph_patch(context, prepare_result.patch)
+        self._append_prepare_result_entry(context, prepare_result)
         context.run_lifecycle.current_phase = RunPhase.EXECUTE
         return context
 
@@ -292,6 +328,11 @@ class RuntimeOrchestrator:
         if patch is None:
             return
 
+        self._apply_graph_patch(context, patch)
+
+    def _apply_graph_patch(self, context: RunContext, patch: TaskGraphPatch) -> None:
+        """Apply a graph patch and synchronize runtime active-node mirrors."""
+
         self.graph_store.save_graph(context.domain_state.task_graph_state)
         updated_graph = self.graph_store.apply_patch(
             context.domain_state.task_graph_state.graph_id,
@@ -385,6 +426,30 @@ class RuntimeOrchestrator:
             ]
         )
 
+    def build_prepare_prompt(self, context: RunContext) -> ExecutionPrompt:
+        """Build the three-block prepare prompt for planner-side execution."""
+
+        prompt_context = self.memory_processor.build_prompt_context_text(
+            RuntimeMemoryProcessorInput(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                current_phase=context.run_lifecycle.current_phase.value,
+                active_node_id=context.runtime_state.active_node_id,
+                user_input=context.run_identity.user_input,
+                compression_state=context.runtime_state.compression_state,
+            )
+        )
+        return self.prompt_assembler.build_prepare_prompt(
+            PreparePromptInput(
+                user_input=context.run_identity.user_input,
+                current_goal=context.run_identity.goal,
+                graph_snapshot_text=self._build_graph_snapshot_text(context.domain_state.task_graph_state),
+                runtime_memory_text=prompt_context.prompt_context_text,
+                capability_text=self._build_tool_capability_text(),
+                finalize_return_input=self._build_finalize_return_input_text(context),
+            )
+        )
+
     def _build_execution_node_prompt_context(
         self,
         context: RunContext,
@@ -442,6 +507,25 @@ class RuntimeOrchestrator:
         return "\n".join(lines)
 
     @staticmethod
+    def _build_graph_snapshot_text(graph_state: TaskGraphState) -> str:
+        if not graph_state.nodes:
+            return "(empty graph)"
+
+        lines = [
+            f"Graph id: {graph_state.graph_id}",
+            f"Graph status: {graph_state.graph_status.value}",
+            f"Active node id: {graph_state.active_node_id or '(empty)'}",
+            "Nodes:",
+        ]
+        for node in graph_state.nodes:
+            dependency_text = ", ".join(node.dependencies) if node.dependencies else "(none)"
+            lines.append(
+                f"- {node.node_id} | {node.name or '(empty)'} | {node.kind or '(empty)'} | "
+                f"{node.node_status.value} | deps={dependency_text}"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
     def _build_finalize_return_input_text(context: RunContext) -> str:
         finalize_return_input = context.runtime_state.finalize_return_input
         if finalize_return_input is None:
@@ -474,6 +558,214 @@ class RuntimeOrchestrator:
                 node_id="",
             )
         )
+        if existing_entries:
+            return
+
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=f"entry-{uuid4()}",
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                step_id="run-start",
+                node_id="",
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.USER,
+                content=context.run_identity.user_input,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+
+    def _append_prepare_result_entry(self, context: RunContext, prepare_result: PrepareResult) -> None:
+        patch = prepare_result.patch
+        if patch is None:
+            return
+
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=f"entry-{uuid4()}",
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                step_id="prepare",
+                node_id="",
+                entry_type=RuntimeMemoryEntryType.CONTEXT,
+                role=RuntimeMemoryRole.SYSTEM,
+                content="\n".join(
+                    [
+                        f"goal: {prepare_result.goal}",
+                        f"graph_change_summary: added {len(patch.new_nodes)} nodes; active node = {patch.active_node_id or '(empty)'}",
+                    ]
+                ),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+
+    def _run_prepare_planner(self, context: RunContext) -> ModelOutput:
+        prepare_prompt = self.build_prepare_prompt(context)
+        rendered_prompt = self.render_execution_prompt(prepare_prompt)
+        return self.planner_model_provider.generate(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the runtime-v2 prepare planner. "
+                        "Return valid JSON only and do not call tools."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": rendered_prompt,
+                },
+            ],
+            tools=[],
+            config=self.planner_generation_config,
+        )
+
+    def _build_prepare_fallback_result(self, context: RunContext) -> PrepareResult:
+        step_result = self.initialize_minimal_graph(context)
+        patch = step_result.patch if step_result is not None else None
+        if patch is None:
+            raise RuntimeError("Prepare fallback could not build an initial graph patch")
+        return PrepareResult(
+            goal=context.run_identity.goal.strip() or context.run_identity.user_input.strip(),
+            patch=patch,
+        )
+
+    def _normalize_prepare_payload(self, context: RunContext, planner_output: ModelOutput) -> PrepareResult:
+        payload = self._load_prepare_payload(planner_output.content)
+        if context.domain_state.task_graph_state.nodes:
+            raise ValueError("Prepare payload normalization currently supports empty graphs only")
+
+        goal = str(payload.get("goal", "") or "").strip()
+        if not goal:
+            raise ValueError("Prepare payload must contain a non-empty goal")
+
+        raw_nodes = payload.get("nodes")
+        if not isinstance(raw_nodes, list) or not raw_nodes:
+            raise ValueError("Prepare payload must contain a non-empty nodes list")
+
+        active_node_ref = str(payload.get("active_node_ref", "") or "").strip()
+        if not active_node_ref:
+            raise ValueError("Prepare payload must contain active_node_ref")
+
+        normalized_nodes: list[tuple[str, TaskGraphNode]] = []
+        ref_to_node_id: dict[str, str] = {}
+        seen_refs: set[str] = set()
+
+        for raw_node in raw_nodes:
+            if not isinstance(raw_node, dict):
+                raise ValueError("Each prepare node must be an object")
+
+            ref = str(raw_node.get("ref", "") or "").strip()
+            if not ref:
+                raise ValueError("Prepare node ref is required")
+            if ref in seen_refs:
+                raise ValueError(f"Duplicate prepare node ref: {ref}")
+            seen_refs.add(ref)
+
+            name = str(raw_node.get("name", "") or "").strip()
+            kind = str(raw_node.get("kind", "") or "").strip()
+            description = str(raw_node.get("description", "") or "").strip()
+            if not name:
+                raise ValueError(f"Prepare node name is required for ref: {ref}")
+            if not kind:
+                raise ValueError(f"Prepare node kind is required for ref: {ref}")
+            if not description:
+                raise ValueError(f"Prepare node description is required for ref: {ref}")
+
+            raw_status = str(raw_node.get("node_status", "") or "").strip().lower()
+            if raw_status not in {NodeStatus.PENDING.value, NodeStatus.READY.value}:
+                raise ValueError(
+                    f"Prepare node_status must be pending or ready for ref: {ref}"
+                )
+            node_status = NodeStatus(raw_status)
+
+            owner = str(raw_node.get("owner", "") or "").strip() or "main"
+            raw_order = raw_node.get("order", 0)
+            if not isinstance(raw_order, int) or raw_order <= 0:
+                raise ValueError(f"Prepare node order must be a positive integer for ref: {ref}")
+
+            raw_dependencies = raw_node.get("dependencies", [])
+            if not isinstance(raw_dependencies, list):
+                raise ValueError(f"Prepare node dependencies must be a list for ref: {ref}")
+            dependencies = []
+            for dependency in raw_dependencies:
+                dependency_ref = str(dependency or "").strip()
+                if not dependency_ref:
+                    raise ValueError(f"Prepare node dependency ref is required for ref: {ref}")
+                dependencies.append(dependency_ref)
+
+            node_id = self._create_node_id()
+            ref_to_node_id[ref] = node_id
+            normalized_nodes.append(
+                (
+                    ref,
+                    TaskGraphNode(
+                        node_id=node_id,
+                        graph_id=context.domain_state.task_graph_state.graph_id,
+                        name=name,
+                        kind=kind,
+                        description=description,
+                        node_status=node_status,
+                        owner=owner,
+                        dependencies=dependencies,
+                        order=raw_order,
+                    ),
+                )
+            )
+
+        if active_node_ref not in ref_to_node_id:
+            raise ValueError("active_node_ref must point to one of the planned nodes")
+
+        final_nodes: list[TaskGraphNode] = []
+        for ref, node in normalized_nodes:
+            mapped_dependencies: list[str] = []
+            for dependency_ref in node.dependencies:
+                dependency_node_id = ref_to_node_id.get(dependency_ref)
+                if dependency_node_id is None:
+                    raise ValueError(
+                        f"Prepare node dependency ref not found: {dependency_ref} for ref: {ref}"
+                    )
+                mapped_dependencies.append(dependency_node_id)
+            node.dependencies = mapped_dependencies
+            final_nodes.append(node)
+
+        active_node_id = ref_to_node_id[active_node_ref]
+        active_node = self._find_node(
+            TaskGraphState(
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                nodes=final_nodes,
+                active_node_id=active_node_id,
+            ),
+            active_node_id,
+        )
+        if active_node is None or active_node.node_status is not NodeStatus.READY:
+            raise ValueError("active_node_ref must point to a ready node")
+
+        return PrepareResult(
+            goal=goal,
+            patch=TaskGraphPatch(
+                new_nodes=final_nodes,
+                active_node_id=active_node_id,
+            ),
+        )
+
+    @staticmethod
+    def _load_prepare_payload(raw_text: str) -> dict[str, object]:
+        text = raw_text.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Prepare planner output was not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Prepare planner output must be a JSON object")
+        return payload
         if existing_entries:
             return
         self.memory_store.append_entry(

@@ -8,7 +8,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from rtv2.prompting import ExecutionNodePromptContext, ExecutionPromptAssembler, ExecutionPromptInput
+from rtv2.prompting import (
+    ExecutionNodePromptContext,
+    ExecutionPromptAssembler,
+    ExecutionPromptInput,
+    PreparePromptInput,
+)
 from rtv2.state.models import RunPhase
 
 
@@ -67,16 +72,31 @@ class ExecutionPromptAssemblerTests(unittest.TestCase):
         self.assertIn("## Tool Capability Summary\n(empty)", prompt.dynamic_injection)
         self.assertNotIn("## Finalize Return Input", prompt.dynamic_injection)
 
-    def test_prepare_and_finalize_phases_keep_reserved_stub_prompts(self):
+    def test_build_prepare_prompt_returns_prepare_specific_contract(self):
+        assembler = ExecutionPromptAssembler()
+
+        prepare_prompt = assembler.build_prepare_prompt(
+            PreparePromptInput(
+                user_input="Plan the runtime work.",
+                current_goal="",
+                graph_snapshot_text="(empty graph)",
+                runtime_memory_text="## Task task-1\n[user] previous context",
+                capability_text="- echo_text: Echo text.",
+                finalize_return_input="Verification summary: none",
+            )
+        )
+        self.assertIn("Current phase: prepare.", prepare_prompt.phase_prompt)
+        self.assertIn("Return JSON only.", prepare_prompt.phase_prompt)
+        self.assertIn("User input: Plan the runtime work.", prepare_prompt.dynamic_injection)
+        self.assertIn("## Current Graph Snapshot", prepare_prompt.dynamic_injection)
+        self.assertIn("## Runtime Memory", prepare_prompt.dynamic_injection)
+        self.assertIn("## Capability Summary", prepare_prompt.dynamic_injection)
+        self.assertIn("## Finalize Return Input", prepare_prompt.dynamic_injection)
+
+    def test_finalize_phase_prompt_keeps_reserved_stub(self):
         assembler = ExecutionPromptAssembler()
         base_input = ExecutionNodePromptContext(user_input="x")
 
-        prepare_prompt = assembler.build_execution_prompt(
-            ExecutionPromptInput(
-                phase=RunPhase.PREPARE,
-                node_context=base_input,
-            )
-        )
         finalize_prompt = assembler.build_execution_prompt(
             ExecutionPromptInput(
                 phase=RunPhase.FINALIZE,
@@ -84,7 +104,6 @@ class ExecutionPromptAssemblerTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("reserved for later implementation", prepare_prompt.phase_prompt)
         self.assertIn("reserved for later implementation", finalize_prompt.phase_prompt)
 
 

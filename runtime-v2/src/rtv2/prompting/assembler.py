@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from rtv2.prompting.models import ExecutionPrompt, ExecutionPromptInput
+from rtv2.prompting.models import ExecutionPrompt, ExecutionPromptInput, PreparePromptInput
 from rtv2.state.models import RunPhase
 
 
 class ExecutionPromptAssembler:
     """Assemble the three formal execution prompt blocks."""
+
+    def build_prepare_prompt(self, prompt_input: PreparePromptInput) -> ExecutionPrompt:
+        """Build the formal prompt blocks for prepare-phase planning."""
+
+        return ExecutionPrompt(
+            base_prompt=self._build_base_prompt(),
+            phase_prompt=self._build_prepare_phase_prompt(),
+            dynamic_injection=self._build_prepare_dynamic_injection(prompt_input),
+        )
 
     def build_execution_prompt(self, prompt_input: ExecutionPromptInput) -> ExecutionPrompt:
         """Build the formal prompt blocks for the current execution context."""
@@ -55,7 +64,14 @@ class ExecutionPromptAssembler:
         return "\n".join(
             [
                 "Current phase: prepare.",
-                "Prepare-phase prompt assembly is reserved for later implementation.",
+                "You are acting as the runtime-v2 planner for the current run.",
+                "Your job is to refine the run goal and produce the first executable task-graph plan.",
+                "Do not execute any node and do not simulate tool results.",
+                "Return JSON only.",
+                "Required top-level keys: goal, active_node_ref, nodes.",
+                "Each node must contain: ref, name, kind, description, node_status, owner, dependencies, order.",
+                "Allowed node_status values for new nodes: pending, ready.",
+                "active_node_ref must point to one ready node.",
             ]
         )
 
@@ -91,6 +107,27 @@ class ExecutionPromptAssembler:
             prompt_input.runtime_memory_text or "(empty)",
             "## Tool Capability Summary",
             prompt_input.tool_capability_text or "(empty)",
+        ]
+        if prompt_input.finalize_return_input.strip():
+            lines.extend(
+                [
+                    "## Finalize Return Input",
+                    prompt_input.finalize_return_input,
+                ]
+            )
+        return "\n".join(lines)
+
+    def _build_prepare_dynamic_injection(self, prompt_input: PreparePromptInput) -> str:
+        lines = [
+            "## Current Task Context",
+            f"User input: {prompt_input.user_input or '(empty)'}",
+            f"Current goal: {prompt_input.current_goal or '(empty)'}",
+            "## Current Graph Snapshot",
+            prompt_input.graph_snapshot_text or "(empty)",
+            "## Runtime Memory",
+            prompt_input.runtime_memory_text or "(empty)",
+            "## Capability Summary",
+            prompt_input.capability_text or "(empty)",
         ]
         if prompt_input.finalize_return_input.strip():
             lines.extend(

@@ -43,11 +43,12 @@ class FakeReActStepRunner:
         return self.output
 
 
-def create_orchestrator(react_step_runner=None) -> RuntimeOrchestrator:
+def create_orchestrator(react_step_runner=None, planner_model_provider=None) -> RuntimeOrchestrator:
     db_dir = tempfile.mkdtemp()
     return RuntimeOrchestrator(
         graph_store=InMemoryTaskGraphStore(),
         react_step_runner=react_step_runner,
+        planner_model_provider=planner_model_provider,
         memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
     )
 
@@ -180,7 +181,20 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(second_context.domain_state.task_graph_state.graph_id, "graph-2")
 
     def test_run_advances_through_minimal_phase_chain_and_returns_host_result(self):
-        orchestrator = create_orchestrator()
+        orchestrator = create_orchestrator(
+            planner_model_provider=SequenceModelProvider(
+                [
+                    ModelOutput(
+                        content=(
+                            '{"goal":"Run orchestrator chain.","active_node_ref":"plan_node_1","nodes":'
+                            '[{"ref":"plan_node_1","name":"Handle request","kind":"execution",'
+                            '"description":"Run orchestrator chain.","node_status":"ready",'
+                            '"owner":"main","dependencies":[],"order":1}]}'
+                        )
+                    )
+                ]
+            )
+        )
 
         run_result = orchestrator.run(
             StartRunIdentity(
@@ -197,7 +211,19 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(run_result.output_text, "")
 
     def test_prepare_execute_finalize_methods_advance_minimal_state(self):
-        orchestrator = create_orchestrator()
+        planner = SequenceModelProvider(
+            [
+                ModelOutput(
+                    content=(
+                        '{"goal":"Phase transition test.","active_node_ref":"plan_node_1","nodes":'
+                        '[{"ref":"plan_node_1","name":"Handle request","kind":"execution",'
+                        '"description":"Phase transition test.","node_status":"ready",'
+                        '"owner":"main","dependencies":[],"order":1}]}'
+                    )
+                )
+            ]
+        )
+        orchestrator = create_orchestrator(planner_model_provider=planner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
                 session_id="sess-1",
@@ -209,6 +235,11 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         prepared = orchestrator.run_prepare_phase(context)
         self.assertEqual(prepared.run_lifecycle.current_phase, RunPhase.EXECUTE)
+        self.assertEqual(prepared.run_identity.goal, "Phase transition test.")
+        self.assertEqual(len(prepared.domain_state.task_graph_state.nodes), 1)
+        self.assertTrue(prepared.runtime_state.active_node_id)
+        self.assertEqual(len(planner.calls), 1)
+        self.assertEqual(planner.calls[0]["tools"], [])
 
         executed = orchestrator.run_execute_phase(prepared)
         self.assertEqual(executed.run_lifecycle.current_phase, RunPhase.FINALIZE)
@@ -218,6 +249,101 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         finalized = orchestrator.run_finalize_phase(executed)
         self.assertEqual(finalized.runtime_state, "completed")
         self.assertEqual(finalized.output_text, "")
+
+    def test_prepare_phase_runs_planner_and_writes_goal_graph_and_memory(self):
+        planner = SequenceModelProvider(
+            [
+                ModelOutput(
+                    content=(
+                        '{"goal":"Plan runtime implementation.","active_node_ref":"plan_node_2","nodes":'
+                        '[{"ref":"plan_node_1","name":"Review context","kind":"analysis",'
+                        '"description":"Review the current runtime state.","node_status":"pending",'
+                        '"owner":"","dependencies":[],"order":1},'
+                        '{"ref":"plan_node_2","name":"Implement prepare phase","kind":"execution",'
+                        '"description":"Implement the initial prepare planner.","node_status":"ready",'
+                        '"owner":"main","dependencies":["plan_node_1"],"order":2}]}'
+                    )
+                )
+            ]
+        )
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Implement prepare phase.",
+            )
+        )
+
+        prepared = orchestrator.run_prepare_phase(context)
+
+        self.assertEqual(prepared.run_identity.goal, "Plan runtime implementation.")
+        self.assertIsNotNone(prepared.runtime_state.prepare_result)
+        self.assertEqual(prepared.run_lifecycle.current_phase, RunPhase.EXECUTE)
+        self.assertEqual(len(prepared.domain_state.task_graph_state.nodes), 2)
+        first_node, second_node = prepared.domain_state.task_graph_state.nodes
+        self.assertEqual(first_node.owner, "main")
+        self.assertEqual(second_node.dependencies, [first_node.node_id])
+        self.assertEqual(prepared.domain_state.task_graph_state.active_node_id, second_node.node_id)
+        self.assertEqual(prepared.runtime_state.active_node_id, second_node.node_id)
+
+        entries = orchestrator.memory_store.list_entries_for_run(task_id="task-1", run_id="run-1")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0].content, "Implement prepare phase.")
+        self.assertIn("goal: Plan runtime implementation.", entries[1].content)
+        self.assertIn("graph_change_summary: added 2 nodes", entries[1].content)
+
+    def test_prepare_phase_rejects_invalid_planner_payload(self):
+        planner = SequenceModelProvider([ModelOutput(content='{"goal":"","nodes":[]}')])
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Implement prepare phase.",
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            orchestrator.run_prepare_phase(context)
+
+    def test_prepare_phase_rejects_non_empty_graph_for_first_version(self):
+        planner = SequenceModelProvider(
+            [
+                ModelOutput(
+                    content=(
+                        '{"goal":"Plan runtime implementation.","active_node_ref":"plan_node_1","nodes":'
+                        '[{"ref":"plan_node_1","name":"Implement prepare phase","kind":"execution",'
+                        '"description":"Implement the initial prepare planner.","node_status":"ready",'
+                        '"owner":"main","dependencies":[],"order":1}]}'
+                    )
+                )
+            ]
+        )
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Implement prepare phase.",
+            )
+        )
+        context.domain_state.task_graph_state.nodes.append(
+            TaskGraphNode(
+                node_id="node-existing",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Existing",
+                kind="execution",
+                description="Existing node.",
+                node_status=NodeStatus.READY,
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            orchestrator.run_prepare_phase(context)
 
     def test_phase_methods_raise_when_called_out_of_order(self):
         orchestrator = create_orchestrator()
@@ -583,6 +709,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             kind="execution",
             node_status=NodeStatus.RUNNING,
         )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
 
         step_result = orchestrator.advance_node_minimally(context, running_node)
 
@@ -841,6 +968,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             description="Process the current request.",
             node_status=NodeStatus.RUNNING,
         )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
 
         prompt = orchestrator.build_react_step_prompt(context, node)
 

@@ -42,3 +42,14 @@ class ExecutionPrompt:
     phase_prompt: str
     dynamic_injection: str
 
+
+@dataclass(slots=True)
+class PreparePromptInput:
+    """Formal input consumed by prepare-phase prompt assembly."""
+
+    user_input: str
+    current_goal: str = ""
+    graph_snapshot_text: str = ""
+    runtime_memory_text: str = ""
+    capability_text: str = ""
+    finalize_return_input: str = ""

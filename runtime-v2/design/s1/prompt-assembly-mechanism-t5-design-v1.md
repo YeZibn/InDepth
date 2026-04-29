@@ -136,6 +136,19 @@
 3. execute 阶段通常会完整使用三层
 4. `prepare / finalize` 后续按各自需要细化其注入项
 
+补充到当前开发口径：
+
+1. `prepare` 继续沿用统一三层 prompt 架构，不单独再拆 planner prompt 层
+2. `prepare` 不复用 execute 的 `active node` 视角输入，而采用 `task / graph planning` 视角输入
+3. `prepare` 的输出 contract 仍归属于 `phase prompt`
+4. `prepare` 的动态注入主要围绕：
+   - `user_input`
+   - 旧 `goal`
+   - graph 摘要
+   - runtime memory
+   - capability 文本
+   - `finalize_return_input` 预留输入
+
 ## 6. `PromptAssembler` 的定位
 
 `PromptAssembler` 的职责不是自由拼 prompt，而是按固定三层顺序组装当前模型可见输入。

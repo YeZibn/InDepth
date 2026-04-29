@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from rtv2.task_graph.models import TaskGraphPatch
+
 
 class RunPhase(StrEnum):
     PREPARE = "prepare"
@@ -93,10 +95,19 @@ class FinalizeReturnInput:
 
 
 @dataclass(slots=True)
+class PrepareResult:
+    """Minimal formal prepare-phase result retained after planner normalization."""
+
+    goal: str
+    patch: TaskGraphPatch | None = None
+
+
+@dataclass(slots=True)
 class RuntimeState:
     """Runtime control state shared across the main execution chain."""
 
     active_node_id: str = ""
+    prepare_result: PrepareResult | None = None
     compression_state: CompressionState | None = None
     external_signal_state: ExternalSignalState | None = None
     finalize_return_input: FinalizeReturnInput | None = None

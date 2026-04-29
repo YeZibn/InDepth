@@ -35,6 +35,7 @@
 
 1. `ExecutionPromptInput`
 2. `ExecutionNodePromptContext`
+3. `PreparePromptInput`
 
 ## 当前责任链
 
@@ -79,7 +80,7 @@
 现状如下：
 
 1. `EXECUTE` 已有正式最小文本
-2. `PREPARE` 仍为占位 stub
+2. `PREPARE` 已有正式最小 planner contract
 3. `FINALIZE` 仍为占位 stub
 
 ### `dynamic_injection`
@@ -105,6 +106,15 @@
 2. `tool_capability_text` 由 orchestrator 基于 `ToolRegistry` 生成最小摘要
 3. 依赖节点当前只生成轻量摘要，不引入详细正文
 
+当前 `prepare` 阶段单独采用 `PreparePromptInput`，其动态注入视角收口为：
+
+1. `user_input`
+2. 旧 `goal`
+3. graph 摘要
+4. task 级 `runtime_memory_text`
+5. capability 文本
+6. `finalize_return_input`
+
 ## 当前实现边界
 
 当前 prompt 模块已经正式落地，但仍保持轻量。
@@ -116,10 +126,11 @@
 3. runtime memory / node / tool capability 的主链接入
 4. orchestrator 对 prompt 模块的正式消费
 5. `ReActStepRunner` 对渲染后 `step_prompt` 的正式消费口径
+6. `PreparePhase` 的正式 prompt 装配入口
 
 尚未完成：
 
-1. `PREPARE / FINALIZE` 的正式 prompt 文本
+1. `FINALIZE` 的正式 prompt 文本
 2. evaluator / reflexion / replan 的 prompt 模块
 3. message 级 prompt 输入
 4. context budget / compression 感知下的 prompt 裁剪
@@ -136,6 +147,6 @@
 
 1. 三段 prompt block 生成
 2. 空字段渲染
-3. `PREPARE / FINALIZE` stub 行为
+3. `PREPARE` planner contract 与 `FINALIZE` stub 行为
 4. orchestrator 主链接入
 5. runner 消费渲染后 `step_prompt`

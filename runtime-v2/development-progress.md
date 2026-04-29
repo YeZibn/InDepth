@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，`S13` 正在补充
-- 开发状态：已完成模块 01、模块 02、模块 03、模块 04、模块 05、模块 06
-- 当前重点：在已完成短期上下文 runtime memory 闭环的基础上，继续推进下一阶段的 solver / reflexion / memory 深化落地
+- 开发状态：已完成模块 01 ~ 模块 18
+- 当前重点：模块 18 已结项，准备进入下一模块讨论
 
 ---
 
@@ -66,7 +66,6 @@
 当前进度：
 
 - 任务 01：已完成
-- 任务 02：已完成
 - 任务 02：已完成
 - 任务 03：已完成
 
@@ -373,12 +372,123 @@
 当前进度：
 
 - 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 073：完成模块 18 的任务 04 / 05 / 06 PreparePhase 正式实现、回归与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 18 的任务 04、任务 05、任务 06，正式落地 `PreparePhase / Planner` 第一版代码，实现 planner payload 到正式 graph patch 的转换回写、主链接线、测试回归与实现文档收尾
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/state/models.py`
+    - `runtime-v2/src/rtv2/prompting/models.py`
+    - `runtime-v2/src/rtv2/prompting/assembler.py`
+    - `runtime-v2/src/rtv2/prompting/__init__.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_prompting.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/implementation/README.md`
+    - `runtime-v2/implementation/prompting.md`
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/development-progress.md`
+  - 已新增：
+    - `runtime-v2/implementation/prepare.md`
+  - 已正式落地：
+    - `PrepareResult`
+    - `runtime_state.prepare_result`
+    - `PreparePromptInput`
+    - `ExecutionPromptAssembler.build_prepare_prompt(...)`
+    - `RuntimeOrchestrator.run_prepare_phase(...)` 的真实 planner 链
+  - 已实现 prepare 主链：
+    - 追加 `run-start` memory entry
+    - 构造 prepare prompt
+    - 发起单次 planner model 调用
+    - 解析与校验 planner JSON payload
+    - 将 planner 草案节点规范化为正式 `TaskGraphPatch`
+    - 回写 `goal / prepare_result / task_graph_state / active_node_id`
+    - 追加轻量 prepare memory entry
+  - 已实现 planner payload 规范化规则：
+    - `goal` 非空
+    - `active_node_ref` 必须存在
+    - `nodes` 非空
+    - `ref` 不可重复
+    - `name / kind / description` 非空
+    - `node_status` 只允许 `pending / ready`
+    - `order` 必须为正整数
+    - `dependencies` 通过草案 `ref` 映射到正式 `node_id`
+    - `active_node_ref` 必须落到 `ready` 节点
+  - 已确认第一版范围：
+    - 只支持空图初始化 planning
+    - 非空图当前直接报错
+  - 已保留工程 fallback：
+    - 仅当 planner model 调用本身失败时
+    - 临时退回 `initialize_minimal_graph(...)`
+    - 不改变 payload 非法时必须直接失败的正式语义
+- 验证结果：
+  - 已执行：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 39 tests ... OK`
+    - `Ran 56 tests ... OK`
+- 遗留问题：
+  - 当前还未支持非空图增量 planning
+  - 当前还未进入 replan 回流场景
+  - 当前 planner payload 的错误分类仍可继续细化
+- 下一步：
+  - 模块 18 已结项，可进入下一模块讨论
+
+#### 记录 072：完成模块 18 的任务 03 Prepare Prompt 装配与 Planner 调用链方案定稿
+
+- 状态：已完成
+- 范围：完成模块 18 的任务 03，正式收口 `prepare` 的 prompt 装配方式、planner 调用链、planner payload 输出格式以及 orchestrator 的结构化转换责任，不进入代码实现
+- 结果：
+  - 已确认 `prepare` 继续沿用统一 prompt 架构：
+    - `base prompt`
+    - `phase prompt`
+    - `dynamic injection`
+  - 已确认 `prepare` 不复用 execute 视角的 `ExecutionPromptInput`，而采用 prepare 专用输入视角
+  - 已确认 `prepare` 的动态注入视角以 `task / graph planning` 为主，而不是 `active node` 执行为主
+  - 已确认 `prepare` 第一版不复用 `ReActStepRunner`
+  - 已确认 `prepare` 第一版采用单次 planner model 调用，不带 tool call loop
+  - 已确认 `prepare` 第一版 planner 输出不直接生成正式 `TaskGraphNode`
+  - 已确认 planner 输出先采用 planning payload，再由 orchestrator 转换为正式 `PrepareResult.patch`
+  - 已确认 planner payload 至少包括：
+    - `goal`
+    - `nodes`
+    - `active_node_ref`
+  - 已确认 planner 输出中的 node 为草案节点，而不是最终正式节点
+  - 已确认 `node_id / graph_id` 不由 LLM 直接生成，而由 orchestrator 在解析后补齐
+  - 已确认 `dependencies` 第一版允许先按草案引用表达，再由 orchestrator 规范化映射
+  - 已确认第一版新节点最小字段粒度保持为：
+    - `name`
+    - `kind`
+    - `description`
+    - `node_status`
+    - `owner`
+    - `dependencies`
+    - `order`
+  - 已确认第一版新增节点的状态只允许 `pending / ready`
+  - 已确认第一版 `owner` 默认使用 `main`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/s1/prompt-assembly-mechanism-t5-design-v1.md`
+- 遗留问题：
+  - prepare 专用 prompt input / payload / runner 的正式代码命名仍待实现时确定
+  - planner payload 到 `TaskGraphPatch` 的精确校验规则仍待模块 18 任务 04 明确
+- 下一步：
+  - 进入模块 18 的任务 04，确定 `prepare` 产物回写与 patch 转换细节
 
 #### 记录 071：完成模块 18 的任务 02 PreparePhase 最小输入输出 contract 定稿
 

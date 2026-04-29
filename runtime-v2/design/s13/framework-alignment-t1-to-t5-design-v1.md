@@ -246,3 +246,30 @@
 8. 第一版追加一条轻量 prepare memory entry，只记录：
    - `goal`
    - `graph_change_summary`
+
+## 14. PreparePhase Prompt 与 Planner 调用链补充
+
+当前补充结论如下：
+
+1. `PreparePhase` 继续沿用统一 prompt 架构：
+   - `base prompt`
+   - `phase prompt`
+   - `dynamic injection`
+2. `prepare` 不复用 execute 视角的 prompt input，而采用 prepare 专用输入视角
+3. `prepare` 的动态注入以 `task / graph planning` 视角为主，而不是 `active node` 执行视角
+4. `PreparePhase` 第一版不复用 `ReActStepRunner`
+5. `PreparePhase` 第一版采用单次 planner model 调用，不带 tool call loop
+6. planner 输出先采用 planning payload，而不是直接生成正式 `TaskGraphNode`
+7. orchestrator 负责将 planner payload 转换为正式 `PrepareResult.patch`
+8. `node_id / graph_id` 不由 LLM 直接生成，而由 orchestrator 在解析后补齐
+9. `dependencies` 第一版允许先按草案引用表达，再由 orchestrator 做规范化映射
+10. planner payload 中的节点草案第一版最小字段粒度为：
+   - `name`
+   - `kind`
+   - `description`
+   - `node_status`
+   - `owner`
+   - `dependencies`
+   - `order`
+11. 第一版新增节点状态只允许 `pending / ready`
+12. 第一版 `owner` 默认使用 `main`
