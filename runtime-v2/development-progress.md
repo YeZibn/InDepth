@@ -378,11 +378,68 @@
 - 任务 05：已完成
 - 任务 06：已完成
 
+### 模块 19：ExecutePhase / Solver 正式成型
+
+- 模块目标：
+  - 把当前最小 `execute` 推进链补成真实 `Solver`
+  - 让 `ExecutePhase` 不再只推进一次 node，而是能围绕当前 graph 做正式求解循环
+  - 收口 `active node` 选择、node 内 step 循环、node 状态收口、phase 退出条件
+  - 暂时不把 `Reflexion / Re-plan / Finalize Verification` 一次性并进来，只先把 solver 主体站稳
+- 已定子任务：
+  - 任务 01：对齐现有设计稿与当前代码状态，确定 `ExecutePhase / Solver` 第一版正式范围，并修订旧表述
+  - 任务 02：确定 `Solver` 的最小输入输出 contract
+  - 任务 03：确定 `ExecutePhase` 的主循环边界与退出条件
+  - 任务 04：实现 `Solver` 的 node 选择与单 node 多轮 step 推进
+  - 任务 05：实现 `Solver` 的 node 状态收口与 graph 回写
+  - 任务 06：把 `ExecutePhase / Solver` 正式接入 orchestrator 主链并补测试
+  - 任务 07：补实现文档与开发进度，完成模块收尾
+
+当前进度：
+
+- 任务 01：已完成
+
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 074：完成模块 19 的任务 01 ExecutePhase / Solver 第一版范围定稿与设计对齐
+
+- 状态：已完成
+- 范围：完成模块 19 的任务 01，对齐当前代码中的最小 `execute` 推进链与既有 `Solver = ExecutePhase` 设计口径，收口模块 19 第一版正式范围与不做项，不进入代码实现
+- 结果：
+  - 已确认当前代码中的 `run_execute_phase(...)` 还不是正式 `Solver`，而只是最小 phase 壳
+  - 已确认模块 19 第一版目标是把 `ExecutePhase` 正式提升为 `Solver`
+  - 已确认第一版要做：
+    - `ExecutePhase = Solver`
+    - 一次 `run_execute_phase(...)` 不再只跑一步，而是进入 execute 主循环
+    - 主循环每次只服务一个 `active node`
+    - 单个 `active node` 内允许多轮 step
+    - `Solver` 负责解释 `StepResult.status_signal`
+    - `Solver` 负责决定 node 的 `continue / completed / blocked / failed`
+    - node 收口后重新选择下一个可执行 node
+    - 只有在 graph 已无可继续主线时才退出到 `FINALIZE`
+  - 已确认第一版先不进入：
+    - `Completion Evaluator`
+    - `Reflexion`
+    - `Re-plan`
+    - 多 node 并行
+    - subagent 参与 solve
+    - execute 内新增 graph 拓扑
+    - finalize / verification 逻辑
+  - 已确认第一版 node 收口规则先简化为：
+    - `progressed` -> 当前 node 继续下一轮 step
+    - `ready_for_completion` -> 当前 node 直接进入 `completed`
+    - `blocked` -> 当前 node 进入 `blocked`
+    - `failed` -> 当前 node 进入 `failed`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+- 遗留问题：
+  - `Solver` 的最小输入输出 contract 仍待模块 19 任务 02 收口
+  - execute 主循环的退出条件与 graph 终态关系仍待模块 19 任务 03 收口
+- 下一步：
+  - 进入模块 19 的任务 02，确定 `Solver` 的最小输入输出 contract
 
 #### 记录 073：完成模块 18 的任务 04 / 05 / 06 PreparePhase 正式实现、回归与文档收尾
 
