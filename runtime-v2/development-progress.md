@@ -331,11 +331,79 @@
 - 任务 05：已完成
 - 任务 06：已完成
 
+### 模块 17：Skill 能力包最小正式落地
+
+- 模块目标：
+  - 在 `runtime-v2` 中正式落地 skill 能力包最小骨架
+  - 让 skill 成为正式可加载、可启用、可注入、可按需读取的能力单元
+  - 打通 `skill asset -> manifest -> registry/manager -> prompt injection -> resource access` 最小闭环
+- 已定子任务：
+  - 任务 01：对齐旧版 skill 链路与 v2 设计稿，确定第一版落地范围、边界与不做项
+  - 任务 02：实现最小 skill manifest / runtime skill 模型
+  - 任务 03：实现本地 skill loader 与最小 skill registry
+  - 任务 04：实现 skill capability 摘要注入到当前 prompt 主链
+  - 任务 05：实现 skill resource access 的最小 tools
+  - 任务 06：补测试、实现文档与开发进度，完成模块收尾
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：未开始
+- 任务 03：未开始
+- 任务 04：未开始
+- 任务 05：未开始
+- 任务 06：未开始
+
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 062：完成模块 17 的任务 01 Skill 模块范围、边界与第一版不做项对齐
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 01，对齐旧版 skill 链路与 v2 `S9` 设计稿，收口第一版 skill 模块的正式范围、边界与不做项，不进入代码实现
+- 结果：
+  - 已确认模块 17 第一版继续采用本地目录型 skill 资产：
+    - `SKILL.md`
+    - `references/`
+    - `scripts/`
+  - 已确认第一版 skill 路径来源由 host / orchestrator 显式传入，不做自动全目录扫描
+  - 已确认第一版 skill manifest 保持极简：
+    - `name`
+    - `description`
+    - `references`
+    - `scripts`
+  - 已确认 `SKILL.md` frontmatter 第一版严格要求至少包含：
+    - `name`
+    - `description`
+  - 已确认第一版 skill prompt 只做轻量 capability 摘要注入，不默认注入：
+    - `SKILL.md` 正文
+    - reference 正文
+    - script 正文
+  - 已确认第一版 skill resource access 只保留最小读取语义：
+    - `get_skill_instructions`
+    - `get_skill_reference`
+    - `get_skill_script`
+  - 已确认 `get_skill_script` 第一版只允许读取脚本内容，不允许执行脚本
+  - 已确认 skill capability 摘要进入当前 prompt 主链时，挂到现有 `dynamic_injection`，不新增 skill 专属 prompt 层
+  - 已确认第一版 skill 参与当前 agent 能力面，但：
+    - 不拥有独立 planning 权
+    - 不成为独立执行系统
+  - 已确认第一版明确不做：
+    - skill dependency
+    - version / reload
+    - 远程下载或安装
+    - marketplace
+    - skill planner
+    - script 自动执行
+    - subagent 深度联动
+- 遗留问题：
+  - 生命周期状态在第一版代码中收口到什么粒度，待任务 02 与任务 03 结合模型和 registry 再最终确定
+  - skill capability 摘要的最终文本格式，待任务 04 接 prompt 主链时再收口
+- 下一步：
+  - 进入模块 17 的任务 02，确定最小 skill manifest / runtime skill 模型
 
 #### 记录 061：完成模块 16 的任务 06 测试、实现说明与模块结项收尾
 
