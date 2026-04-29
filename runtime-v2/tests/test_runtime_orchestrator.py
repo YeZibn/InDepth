@@ -18,6 +18,7 @@ from rtv2.memory import (
     SQLiteRuntimeMemoryStore,
 )
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
+from rtv2.skills import RuntimeSkill, SkillManifest, SkillRegistry, SkillStatus
 from rtv2.model.base import ModelOutput
 from rtv2.solver.react_step import ReActStepOutput
 from rtv2.solver.models import StepResult, StepStatusSignal
@@ -866,6 +867,89 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertIn("- echo_text: Echo text.", prompt.dynamic_injection)
         self.assertIn("node-1 | Dependency | completed", prompt.dynamic_injection)
         self.assertIn("Active node id: node-2", prompt.dynamic_injection)
+
+    def test_build_execution_prompt_includes_enabled_skill_summaries_in_capability_text(self):
+        skill_registry = SkillRegistry()
+        skill_registry.register(
+            RuntimeSkill(
+                manifest=SkillManifest(
+                    name="ppt-skill",
+                    description="Use this skill when creating or editing presentation materials.",
+                ),
+                source_path="/tmp/ppt-skill",
+                instructions="presentation details",
+                status=SkillStatus.ENABLED,
+            )
+        )
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            skill_registry=skill_registry,
+            memory_store=self.create_memory_store(),
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Use a skill.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            description="Do the current task.",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        prompt = orchestrator.build_execution_prompt(context, node)
+
+        self.assertIn(
+            "- ppt-skill: Use this skill when creating or editing presentation materials.",
+            prompt.dynamic_injection,
+        )
+
+    def test_build_execution_prompt_ignores_disabled_skills(self):
+        skill_registry = SkillRegistry()
+        skill_registry.register(
+            RuntimeSkill(
+                manifest=SkillManifest(
+                    name="ppt-skill",
+                    description="Use this skill when creating or editing presentation materials.",
+                ),
+                source_path="/tmp/ppt-skill",
+                instructions="presentation details",
+                status=SkillStatus.DISABLED,
+            )
+        )
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            skill_registry=skill_registry,
+            memory_store=self.create_memory_store(),
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Use a skill.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            description="Do the current task.",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        prompt = orchestrator.build_execution_prompt(context, node)
+
+        self.assertNotIn("ppt-skill", prompt.dynamic_injection)
 
     def test_advance_node_minimally_materializes_failed_signal_without_patch(self):
         react_runner = FakeReActStepRunner(

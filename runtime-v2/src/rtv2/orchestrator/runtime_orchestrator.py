@@ -22,6 +22,7 @@ from rtv2.prompting import (
     ExecutionPromptAssembler,
     ExecutionPromptInput,
 )
+from rtv2.skills import SkillRegistry, SkillStatus
 from rtv2.solver import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
@@ -46,12 +47,14 @@ class RuntimeOrchestrator:
         graph_store: TaskGraphStore,
         react_step_runner: ReActStepRunner | None = None,
         tool_registry: ToolRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
         memory_store: RuntimeMemoryStore | None = None,
         memory_processor: RuntimeMemoryProcessor | None = None,
         prompt_assembler: ExecutionPromptAssembler | None = None,
     ) -> None:
         self.graph_store = graph_store
         self.tool_registry = tool_registry
+        self.skill_registry = skill_registry
         self.memory_store = memory_store or SQLiteRuntimeMemoryStore()
         self.memory_processor = memory_processor or RuntimeMemoryProcessor(memory_store=self.memory_store)
         self.prompt_assembler = prompt_assembler or ExecutionPromptAssembler()
@@ -399,18 +402,22 @@ class RuntimeOrchestrator:
         return summaries
 
     def _build_tool_capability_text(self) -> str:
-        if self.tool_registry is None:
-            return "(no tools available)"
+        lines: list[str] = []
 
-        tool_schemas = self.tool_registry.list_tool_schemas()
-        if not tool_schemas:
-            return "(no tools available)"
+        if self.tool_registry is not None:
+            for schema in self.tool_registry.list_tool_schemas():
+                name = str(schema.get("name", "") or "").strip() or "(unnamed)"
+                description = str(schema.get("description", "") or "").strip() or "(no description)"
+                lines.append(f"- {name}: {description}")
 
-        lines = []
-        for schema in tool_schemas:
-            name = str(schema.get("name", "") or "").strip() or "(unnamed)"
-            description = str(schema.get("description", "") or "").strip() or "(no description)"
-            lines.append(f"- {name}: {description}")
+        if self.skill_registry is not None:
+            for skill in self.skill_registry.list_enabled():
+                if skill.status is not SkillStatus.ENABLED:
+                    continue
+                lines.append(f"- {skill.manifest.name}: {skill.manifest.description}")
+
+        if not lines:
+            return "(no tools available)"
         return "\n".join(lines)
 
     @staticmethod

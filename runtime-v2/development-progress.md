@@ -350,7 +350,7 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：未开始
+- 任务 04：已完成
 - 任务 05：未开始
 - 任务 06：未开始
 
@@ -359,6 +359,62 @@
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 065：完成模块 17 的任务 04 Skill Capability 摘要注入方案定稿
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 04 设计对齐，明确 enabled skill 如何以轻量 capability 摘要形式进入当前 prompt 主链，不进入代码实现
+- 结果：
+  - 已确认只有 `enabled` 的 skill 才进入 prompt 主链
+  - 已确认 skill 进入 prompt 时只保留轻量 capability 摘要，不默认注入：
+    - `SKILL.md` 正文
+    - `references`
+    - `scripts`
+    - `assets`
+  - 已确认 skill 摘要挂到当前 prompt 的 `dynamic_injection`，不新增 skill 专属 prompt 层
+  - 已确认 skill 摘要采用最小一行格式：
+    - `- <name>: <description>`
+  - 已确认当前阶段不改 `ExecutionPromptInput` 结构，不新增 `skill_capability_text` 字段
+  - 已确认 skill 摘要直接并入现有 capability 文本
+  - 已确认当没有 enabled skill 时，不额外输出 skill 段落
+- 遗留问题：
+  - capability 文本后续是否统一改名为更广义的 `capability_text`，待后续重构时再讨论
+  - skill 摘要在 `prepare / finalize` 的最终 prompt 文本中如何呈现，待后续这些 phase 的正式 prompt 落地再确认
+- 下一步：
+  - 进入模块 17 的任务 05，实现 skill resource access 的最小 tools
+
+#### 记录 066：完成模块 17 的任务 04 Enabled Skill Capability 摘要接入 Prompt 主链
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 04，把 enabled skill 的轻量 capability 摘要接入当前 prompt 主链，不改 prompt 输入结构、不接 resource access tools
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已正式接入：
+    - `RuntimeOrchestrator` 支持注入 `SkillRegistry`
+    - capability 文本当前统一由：
+      - tool 摘要
+      - enabled skill 摘要
+      共同组成
+  - 已按定稿内容实现：
+    - 只有 `enabled` skill 进入 prompt
+    - skill 摘要采用最小一行格式：
+      - `- <name>: <description>`
+    - skill 摘要直接并入现有 capability 文本
+    - 不新增 `skill_capability_text` 字段
+    - 当没有 enabled skill 时，不额外输出 skill 段落
+- 验证结果：
+  - 已执行相关回归：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 36 tests ... OK`
+- 遗留问题：
+  - 当前 capability 文本仍沿用 `tool_capability_text` 字段名，语义已扩展到 tool + skill
+  - 当前还未开放 `get_skill_*` 资源访问 tools
+  - 当前 host / orchestrator 侧还未正式接入 skill path 装载链
+- 下一步：
+  - 进入模块 17 的任务 05，实现 skill resource access 的最小 tools
 
 #### 记录 064：完成模块 17 的任务 03 本地 Skill Loader 与最小 Skill Registry 落地
 
