@@ -9,7 +9,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus
+import json
+
+from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
+from rtv2.tools import LocalToolExecutor, ToolCall, ToolRegistry
 
 
 class LocalSkillLoaderTests(unittest.TestCase):
@@ -142,6 +145,105 @@ class SkillRegistryTests(unittest.TestCase):
             registry.disable("demo-skill")
             self.assertEqual(registry.get("demo-skill").status, SkillStatus.DISABLED)
             self.assertEqual(registry.list_enabled(), [])
+
+
+class SkillToolsTests(unittest.TestCase):
+    def build_registry_with_skill(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        root = Path(tmpdir.name)
+        skill_dir = LocalSkillLoaderTests().create_skill_dir(root, folder_name="demo-skill")
+        skill = LocalSkillLoader().load(str(skill_dir))[0]
+        registry = SkillRegistry()
+        registry.register(skill)
+        registry.enable("demo-skill")
+        return registry
+
+    def build_executor(self, registry: SkillRegistry) -> LocalToolExecutor:
+        tool_registry = ToolRegistry()
+        for spec in build_skill_tools(registry):
+            tool_registry.register(spec)
+        return LocalToolExecutor(tool_registry=tool_registry)
+
+    def test_get_skill_instructions_returns_json_payload(self):
+        registry = self.build_registry_with_skill()
+        executor = self.build_executor(registry)
+
+        result = executor.execute(ToolCall(tool_name="get_skill_instructions", arguments={"skill_name": "demo-skill"}))
+
+        payload = json.loads(result.output_text)
+        self.assertTrue(result.success)
+        self.assertEqual(payload["skill_name"], "demo-skill")
+        self.assertIn("Detailed instructions here.", payload["instructions"])
+
+    def test_get_skill_reference_reads_registered_reference(self):
+        registry = self.build_registry_with_skill()
+        executor = self.build_executor(registry)
+
+        result = executor.execute(
+            ToolCall(
+                tool_name="get_skill_reference",
+                arguments={"skill_name": "demo-skill", "reference_path": "guide.md"},
+            )
+        )
+
+        payload = json.loads(result.output_text)
+        self.assertTrue(result.success)
+        self.assertEqual(payload["reference_path"], "guide.md")
+        self.assertEqual(payload["content"], "guide")
+
+    def test_get_skill_script_reads_registered_script_without_execution(self):
+        registry = self.build_registry_with_skill()
+        executor = self.build_executor(registry)
+
+        result = executor.execute(
+            ToolCall(
+                tool_name="get_skill_script",
+                arguments={"skill_name": "demo-skill", "script_path": "run.py"},
+            )
+        )
+
+        payload = json.loads(result.output_text)
+        self.assertTrue(result.success)
+        self.assertEqual(payload["script_path"], "run.py")
+        self.assertIn("print('ok')", payload["content"])
+
+    def test_get_skill_asset_reads_registered_asset(self):
+        registry = self.build_registry_with_skill()
+        executor = self.build_executor(registry)
+
+        result = executor.execute(
+            ToolCall(
+                tool_name="get_skill_asset",
+                arguments={"skill_name": "demo-skill", "asset_path": "logo.txt"},
+            )
+        )
+
+        payload = json.loads(result.output_text)
+        self.assertTrue(result.success)
+        self.assertEqual(payload["asset_path"], "logo.txt")
+        self.assertEqual(payload["content"], "asset")
+
+    def test_skill_tools_return_json_error_for_unknown_skill_or_path(self):
+        registry = self.build_registry_with_skill()
+        executor = self.build_executor(registry)
+
+        missing_skill = executor.execute(
+            ToolCall(tool_name="get_skill_instructions", arguments={"skill_name": "missing"})
+        )
+        missing_path = executor.execute(
+            ToolCall(
+                tool_name="get_skill_reference",
+                arguments={"skill_name": "demo-skill", "reference_path": "missing.md"},
+            )
+        )
+
+        missing_skill_payload = json.loads(missing_skill.output_text)
+        missing_path_payload = json.loads(missing_path.output_text)
+        self.assertTrue(missing_skill.success)
+        self.assertEqual(missing_skill_payload["error"], "skill_not_found")
+        self.assertTrue(missing_path.success)
+        self.assertEqual(missing_path_payload["error"], "resource_not_found")
 
 
 if __name__ == "__main__":

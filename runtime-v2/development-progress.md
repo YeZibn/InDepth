@@ -351,7 +351,7 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
-- 任务 05：未开始
+- 任务 05：已完成
 - 任务 06：未开始
 
 ---
@@ -359,6 +359,72 @@
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 068：完成模块 17 的任务 05 Skill Resource Access Tools 落地
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 05，正式落地 skill resource access 的四个最小只读 tools，并补独立测试，不接 host / orchestrator 自动注册链
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/skills/tools.py`
+  - 已更新：
+    - `runtime-v2/src/rtv2/skills/__init__.py`
+    - `runtime-v2/tests/test_skills.py`
+  - 已正式落地四个只读 tools：
+    - `get_skill_instructions`
+    - `get_skill_reference`
+    - `get_skill_script`
+    - `get_skill_asset`
+  - 已按定稿内容实现：
+    - tools 继续走统一 `ToolRegistry`
+    - tools 通过 `SkillRegistry` 读取 `RuntimeSkill`
+    - 所有返回值保持 JSON 字符串
+    - `get_skill_script` 不执行脚本，只返回脚本内容
+    - `get_skill_asset` 第一版按文本读取
+    - 路径校验同时检查：
+      - 资源路径是否在 manifest 允许列表中
+      - 实际文件路径是否仍位于 skill 根目录内
+    - 错误统一返回 JSON 错误对象
+  - 已补独立测试覆盖：
+    - 四类资源正常读取
+    - skill 不存在错误
+    - 资源路径不存在错误
+    - 通过统一 `ToolRegistry + LocalToolExecutor` 执行
+- 验证结果：
+  - 已执行相关测试：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py`
+  - 结果：
+    - `Ran 11 tests ... OK`
+- 遗留问题：
+  - 当前 skill tools 还未由 host / orchestrator 自动注册进主 runtime
+  - 当前 asset 仍只支持文本读取，不支持二进制内容
+  - 当前还未补 skill 实现说明文档
+- 下一步：
+  - 进入模块 17 的任务 06，补实现文档、开发进度并完成模块收尾
+
+#### 记录 067：完成模块 17 的任务 05 Skill Resource Access Tools 方案定稿
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 05 设计对齐，明确 skill resource access 的最小 tool 形态、挂载位置、输入输出与错误策略，不进入代码实现
+- 结果：
+  - 已确认第一版只做四个只读 skill resource access tools：
+    - `get_skill_instructions`
+    - `get_skill_reference`
+    - `get_skill_script`
+    - `get_skill_asset`
+  - 已确认这四个 tools 全部走统一 `ToolRegistry`
+  - 已确认 `SkillRegistry` 负责持有 `RuntimeSkill`，skill tools 通过 `SkillRegistry` 取 skill 与资源索引
+  - 已确认第一版所有 tool 返回值保持 JSON 字符串
+  - 已确认 `get_skill_asset` 第一版也按文本读取，不做二进制支持
+  - 已确认错误时统一返回 JSON 错误对象，不把异常直接抛给 LLM/tool 结果层
+  - 已确认路径校验采用两层约束：
+    - 参数路径必须在 manifest 已登记资源列表中
+    - 实际文件路径必须仍然位于 skill 根目录内
+- 遗留问题：
+  - 大文件裁剪、mime type 与二进制支持待后续扩展
+  - skill tools 何时由 host / orchestrator 自动注册，待模块后续收尾时再统一接线
+- 下一步：
+  - 进入模块 17 的任务 06，补实现、测试、文档与模块收尾
 
 #### 记录 065：完成模块 17 的任务 04 Skill Capability 摘要注入方案定稿
 
