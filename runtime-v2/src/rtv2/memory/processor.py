@@ -63,7 +63,8 @@ class RuntimeMemoryProcessor:
                 f"{prefix}[reflexion]"
                 f"[trigger={entry.reflexion_trigger.value if entry.reflexion_trigger else ''}] "
                 f"{entry.content} | reason={entry.reflexion_reason} | "
-                f"next_try_hint={entry.next_try_hint} | replan_signal={entry.replan_signal.value}"
+                f"next_attempt_hint={entry.next_attempt_hint} | "
+                f"action={entry.reflexion_action.value if entry.reflexion_action else ''}"
             )
 
         if entry.tool_name:

@@ -12,9 +12,10 @@ if str(SRC) not in sys.path:
 from rtv2.memory import SQLiteRuntimeMemoryStore
 from rtv2.host.runtime_host import RuntimeHost
 from rtv2.finalize import VerificationResult, VerificationResultStatus
+from rtv2.judge import JudgeResultStatus
 from rtv2.model.base import ModelOutput
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
-from rtv2.solver.models import StepResult, StepStatusSignal
+from rtv2.solver.models import CompletionCheckResult, ReflexionAction, ReflexionResult, StepResult, StepStatusSignal
 from rtv2.solver.react_step import ReActStepOutput
 from rtv2.task_graph.store import InMemoryTaskGraphStore
 
@@ -76,6 +77,24 @@ class StubRuntimeVerifier:
         )
 
 
+class StubCompletionEvaluator:
+    def evaluate(self, input):
+        return CompletionCheckResult(
+            result_status=JudgeResultStatus.PASS,
+            summary="complete",
+            issues=[],
+        )
+
+
+class StubRuntimeReflexion:
+    def reflect(self, input):
+        return ReflexionResult(
+            summary="retry current node",
+            next_attempt_hint="continue",
+            action=ReflexionAction.RETRY_CURRENT_NODE,
+        )
+
+
 def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> RuntimeHost:
     graph_store = InMemoryTaskGraphStore()
     db_dir = tempfile.mkdtemp()
@@ -105,6 +124,8 @@ def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> Runt
                 * 8
             ),
             runtime_verifier=StubRuntimeVerifier(),
+            completion_evaluator=StubCompletionEvaluator(),
+            runtime_reflexion=StubRuntimeReflexion(),
             react_step_runner=FakeReActStepRunner(),
             memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
         ),

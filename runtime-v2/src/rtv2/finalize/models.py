@@ -3,14 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 
-
-class VerificationResultStatus(StrEnum):
-    """Minimal final verification verdict."""
-
-    PASS = "pass"
-    FAIL = "fail"
+from rtv2.judge import JudgeResultStatus
 
 
 @dataclass(slots=True)
@@ -35,6 +29,6 @@ class Handoff:
 class VerificationResult:
     """Minimal final verification output."""
 
-    result_status: VerificationResultStatus
+    result_status: JudgeResultStatus
     summary: str
     issues: list[str]

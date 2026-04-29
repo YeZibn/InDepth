@@ -17,9 +17,9 @@
 ## 当前总体状态
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
-- 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，`S13` 正在补充
-- 开发状态：已完成模块 01 ~ 模块 18
-- 当前重点：模块 18 已结项，准备进入下一模块讨论
+- 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，后续增量设计模块正在持续补充
+- 开发状态：已完成模块 01 ~ 模块 21
+- 当前重点：模块 21 已结项，准备进入下一模块讨论
 
 ---
 
@@ -66,6 +66,14 @@
 当前进度：
 
 - 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
@@ -431,11 +439,268 @@
 
 - 任务 01：已完成
 
+### 模块 21：Completion Evaluator / Reflexion 正式成型
+
+- 模块目标：
+  - 给当前 `Solver` 补上 node 级完成判定器
+  - 给当前 `Solver` 补上轻量 `Reflexion`
+  - 明确它们和 `StepResult / RuntimeMemory / Solver` 的关系
+  - 暂时不把 `replan` 判定器一起并入本模块实现
+- 已定子任务：
+  - 任务 01：对齐当前设计稿与代码现状，收口 `Completion Evaluator / Reflexion` 第一版范围，并修订旧表述
+  - 任务 02：确定 `Completion Evaluator` 的最小输入输出 contract
+  - 任务 03：确定 `Reflexion` 的最小输入输出 contract 与 memory 写入语义
+  - 任务 04：确定 evaluator / reflexion 在 `Solver` 内部的调用顺序与触发条件
+  - 任务 05：实现 evaluator / reflexion / solver 接线并补测试
+  - 任务 06：补实现文档与开发进度
+
+当前进度：
+
+- 任务 01：已完成
+
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 088：完成模块 21 的任务 05 / 06 Evaluator / Reflexion / Solver 接线、回归与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 21 的任务 05、任务 06，正式落地 `CompletionEvaluator`、`RuntimeReflexion`、judge 基座复用、`Solver` 接线、runtime memory 回写、相关回归测试以及实现文档收尾，并顺手整理 `runtime-v2` 的 `.env` 模板与环境说明
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/judge/base.py`
+    - `runtime-v2/src/rtv2/solver/completion_evaluator.py`
+    - `runtime-v2/src/rtv2/solver/reflexion.py`
+    - `runtime-v2/.env.example`
+  - 已更新：
+    - `runtime-v2/src/rtv2/judge/__init__.py`
+    - `runtime-v2/src/rtv2/finalize/models.py`
+    - `runtime-v2/src/rtv2/finalize/verifier.py`
+    - `runtime-v2/src/rtv2/solver/models.py`
+    - `runtime-v2/src/rtv2/solver/runtime_solver.py`
+    - `runtime-v2/src/rtv2/solver/__init__.py`
+    - `runtime-v2/src/rtv2/memory/models.py`
+    - `runtime-v2/src/rtv2/memory/processor.py`
+    - `runtime-v2/src/rtv2/memory/sqlite_store.py`
+    - `runtime-v2/src/rtv2/memory/__init__.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_host.py`
+    - `runtime-v2/tests/test_runtime_memory_models.py`
+    - `runtime-v2/tests/test_runtime_memory_processor.py`
+    - `runtime-v2/tests/test_runtime_memory_sqlite_store.py`
+    - `runtime-v2/implementation/solver.md`
+    - `runtime-v2/implementation/memory.md`
+    - `runtime-v2/implementation/react-step.md`
+    - `runtime-v2/README.md`
+    - `runtime-v2/development-progress.md`
+  - 已正式落地：
+    - `CompletionEvaluator` 与 `RuntimeVerifier` 复用统一 judge 基座
+    - `CompletionCheckInput / CompletionCheckResult`
+    - `ReflexionInput / ReflexionResult / ReflexionAction`
+    - `SolverControlSignal`
+    - evaluator fail / blocked / failed 三类 reflexion 入口
+    - reflexion 到 unified runtime memory 的正式写入链
+    - `request_replan` 的显式上抛语义
+  - 已确认当前 `READY_FOR_COMPLETION` 分支行为为：
+    - actor step 先返回完成信号
+    - 再额外生成一次 completion package
+    - 再交给 evaluator 判定
+    - 因此 tool-aware step 的 LLM 调用次数从 `2` 次变为 `3` 次
+  - 已补 `runtime-v2/.env.example`
+  - 已在 `README.md` 和实现说明中补齐当前真实 LLM 环境变量入口：
+    - `LLM_MODEL_ID`
+    - `LLM_API_KEY`
+    - `LLM_BASE_URL`
+- 验证结果：
+  - 已执行：
+    - `pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_models.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_processor.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_sqlite_store.py -q`
+    - `pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py -q`
+  - 结果：
+    - `57 passed`
+    - `29 passed`
+- 遗留问题：
+  - 当前 `request_replan` 还只是显式控制信号，外层正式 `replan` 判定器尚未接入
+  - completion package 目前仍由 orchestrator 侧补一次额外生成，后续如需更清晰边界可再单独抽成专门组件
+- 下一步：
+  - 模块 21 可视为当前阶段结项，可进入下一模块讨论
+
+### 2026-04-29
+
+#### 记录 084：完成模块 21 的任务 01 Completion Evaluator / Reflexion 第一版范围定稿与方向对齐
+
+- 状态：已完成
+- 范围：完成模块 21 的任务 01，对齐当前 `Solver / Verifier / Re-plan` 设计与代码现状，收口 `Completion Evaluator / Reflexion` 第一版范围、judge-agent 方向以及与后续 `replan` 的边界，不进入代码实现
+- 结果：
+  - 已确认当前优先顺序先做：
+    - `Completion Evaluator`
+    - `Reflexion`
+    再进入 `verification fail / replan` 外层回流模块
+  - 已确认 `Completion Evaluator` 和 `Verifier` 在形式上尽量统一
+  - 已确认两者都作为独立 agent，而不是内联 helper
+  - 已确认两者共用一套 judge-agent 基座
+  - 已确认两者区别主要在于：
+    - 输入对象
+    - prompt
+    - 挂载位置
+    - 判定语义层级
+  - 已确认 `Completion Evaluator` 属于 node 级判定器
+  - 已确认 `Verifier` 属于 run 级判定器
+  - 已确认 `Completion Evaluator` 第一版允许多轮内部循环
+  - 已确认 `Completion Evaluator` 最大轮数上限为：
+    - `10`
+  - 已确认 evaluator 第一版输入边界至少包括：
+    - 当前 node 基本信息
+    - `artifacts / evidence / notes`
+    - 最近 step 结果摘要
+    - 当前为何准备 completed 的说明
+  - 已确认 evaluator 输出与 verifier 同家族，第一版允许带：
+    - `result_status`
+    - `summary`
+    - `issues`
+    - `replan_hint`
+  - 已确认 `replan_hint` 只是建议信号，不直接触发 replan
+  - 已确认 evaluator fail 后，solver 第一版先：
+    - 写 reflexion memory
+    - 不将 node 收为 `completed`
+    - 回到当前 node 继续
+  - 已确认 verifier 未来也允许输出同类 `replan_hint`
+  - 已确认当前模块先只预留 `replan_hint` 字段，不接真正 replan 动作
+- 已更新：
+  - `runtime-v2/development-progress.md`
+- 遗留问题：
+  - `CompletionCheckInput / CompletionCheckResult` 的正式字段仍待模块 21 任务 02 收口
+  - `Reflexion` 的 memory entry 结构与写入时机仍待模块 21 任务 03/04 收口
+  - judge-agent 基座是否从现有 verifier 抽象回收，待实现时决定
+- 下一步：
+  - 进入模块 21 的任务 02，确定 `Completion Evaluator` 的最小输入输出 contract
+
+#### 记录 085：完成模块 21 的任务 02 Completion Evaluator 最小输入输出 contract 定稿
+
+- 状态：已完成
+- 范围：完成模块 21 的任务 02，正式收口 `Completion Evaluator` 的最小输入输出结构、`completion package` 建模方式以及与 actor / solver 的衔接口径，不进入代码实现
+- 结果：
+  - 已确认 `Completion Evaluator` 不直接读取完整 actor 历史
+  - 已确认 evaluator 第一版只消费 actor 侧专门产出的 `completion package`
+  - 已确认该 `completion package` 不是普通 step 默认返回的一部分
+  - 已确认当前方向为：
+    - 当 solver 收到 `READY_FOR_COMPLETION`
+    - 额外触发一次 actor summary 动作
+    - 由该动作生成 evaluator 所需完成材料
+  - 已确认第一版 `CompletionCheckInput` 最小结构收口为：
+    - `node_id`
+    - `node_name`
+    - `node_kind`
+    - `node_description`
+    - `completion_summary`
+    - `completion_evidence`
+    - `completion_notes`
+    - `completion_reason`
+  - 已确认 `completion_evidence` 第一版先使用：
+    - `list[str]`
+  - 已确认第一版 `CompletionCheckResult` 与 verifier 同家族，并收口为：
+    - `result_status`
+    - `summary`
+    - `issues`
+    - `replan_hint`
+  - 已确认第一版 `replan_hint` 默认值为：
+    - `none`
+  - 已确认 `issues` 在 `pass` 时允许为空
+- 已更新：
+  - `runtime-v2/development-progress.md`
+- 遗留问题：
+  - `Reflexion` 的最小输入输出结构与 memory entry 语义仍待模块 21 任务 03 收口
+  - actor summary 动作如何挂入 solver 内循环，仍待模块 21 任务 04 收口
+- 下一步：
+  - 进入模块 21 的任务 03，确定 `Reflexion` 的最小输入输出 contract 与 memory 写入语义
+
+#### 记录 086：完成模块 21 的任务 03 Reflexion 最小输入输出 contract 与 memory 写入语义定稿
+
+- 状态：已完成
+- 范围：完成模块 21 的任务 03，正式收口 `Reflexion` 的最小输入输出结构、动作集合以及统一 runtime memory 写入语义，不进入代码实现
+- 结果：
+  - 已确认 `CompletionCheckResult` 不再携带：
+    - `replan_hint`
+  - 已确认 `VerificationResult` 也不承担 `replan` 提示职责
+  - 已确认后续动作建议职责统一收回到 `Reflexion`
+  - 已确认第一版 `ReflexionInput` 最小结构收口为：
+    - `node_id`
+    - `node_name`
+    - `trigger_type`
+    - `latest_summary`
+    - `issues`
+  - 已确认第一版 `trigger_type` 先直接使用：
+    - `str`
+  - 已确认第一版 `ReflexionResult` 最小结构收口为：
+    - `summary`
+    - `next_attempt_hint`
+    - `action`
+  - 已确认第一版 `next_attempt_hint` 保留
+  - 已确认第一版 `ReflexionAction` 收口为 4 个：
+    - `retry_current_node`
+    - `mark_blocked`
+    - `mark_failed`
+    - `request_replan`
+  - 已确认 `request_replan` 是升级请求，不等于 reflexion 自己执行 replan
+  - 已确认 `Reflexion` 当前只写统一 runtime memory，不单独开新存储
+  - 已确认 `Reflexion` 不直接改 graph，不直接改 phase
+- 已更新：
+  - `runtime-v2/development-progress.md`
+- 遗留问题：
+  - `request_replan` 如何通过 `SolverResult` 向上表达，仍待模块 21 任务 04 收口
+  - reflexion memory entry 的具体 entry content 仍待实现时最终落字
+- 下一步：
+  - 进入模块 21 的任务 04，确定 evaluator / reflexion 在 `Solver` 内部的调用顺序与触发条件
+
+#### 记录 087：完成模块 21 的任务 04 Evaluator / Reflexion 在 Solver 内部的调用顺序与触发条件定稿
+
+- 状态：已完成
+- 范围：完成模块 21 的任务 04，正式收口 actor、completion summary、evaluator、reflexion 与 solver 收口之间的内部顺序、触发条件以及 `request_replan` 的上抛方式，不进入代码实现
+- 结果：
+  - 已确认 actor 正常执行 step 后：
+    - 普通推进继续当前 node
+  - 已确认当 step 准备进入 `completed` 时：
+    - 不直接 completed
+    - 先额外触发一次 actor summary 动作
+    - 生成 `completion package`
+    - 再调用 `Completion Evaluator`
+  - 已确认 evaluator `pass` 时：
+    - 当前 node 正式进入 `completed`
+  - 已确认 evaluator `fail` 时：
+    - 立刻调用 `Reflexion`
+    - 写一条 runtime memory
+    - 再由 solver 根据 `action` 决策
+  - 已确认 `step blocked` 时：
+    - 先过 `Reflexion`
+    - 写一条 runtime memory
+    - 再由 solver 根据 `action` 决策
+  - 已确认 `step failed` 时：
+    - 先过 `Reflexion`
+    - 写一条 runtime memory
+    - 再由 solver 根据 `action` 决策
+  - 已确认三类入口：
+    - `evaluator fail`
+    - `step blocked`
+    - `step failed`
+    当前都消费同一套 `ReflexionAction`
+  - 已确认 solver 对 `ReflexionAction` 的第一版消费规则为：
+    - `retry_current_node` -> 继续当前 node
+    - `mark_blocked` -> 当前 node 收为 `blocked`
+    - `mark_failed` -> 当前 node 收为 `failed`
+    - `request_replan` -> 向上抛 replan 请求信号
+  - 已确认 `evaluator fail` 分支同样允许：
+    - `mark_blocked`
+  - 已确认 `request_replan` 第一版不伪装成普通 `blocked`
+  - 已确认应当通过 `SolverResult` 新增显式 control signal 向上表达该升级请求
+- 已更新：
+  - `runtime-v2/development-progress.md`
+- 遗留问题：
+  - `CompletionEvaluatorAgent`、judge-agent 基座与现有 `RuntimeVerifier` 的代码抽象关系仍待模块 21 任务 05 实现时决定
+  - `SolverControlSignal` 的具体代码命名和最终字段落点仍待实现时最终收口
+- 下一步：
+  - 进入模块 21 的任务 05，开始正式落地 evaluator / reflexion / solver 接线与测试
 
 #### 记录 083：完成模块 20 的任务 05 / 06 Finalize / Verifier 主链接线、回归与文档收尾
 

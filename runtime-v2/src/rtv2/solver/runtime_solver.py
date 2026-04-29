@@ -2,7 +2,30 @@
 
 from __future__ import annotations
 
-from rtv2.solver.models import SolverResult, StepResult, StepStatusSignal
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from rtv2.judge import JudgeResultStatus
+from rtv2.memory import (
+    ReflexionAction as MemoryReflexionAction,
+    ReflexionTrigger,
+    RuntimeMemoryEntry,
+    RuntimeMemoryEntryType,
+    RuntimeMemoryRole,
+    RuntimeMemoryStore,
+)
+from rtv2.solver.completion_evaluator import CompletionEvaluator
+from rtv2.solver.models import (
+    CompletionCheckInput,
+    ReflexionAction,
+    ReflexionInput,
+    ReflexionResult,
+    SolverControlSignal,
+    SolverResult,
+    StepResult,
+    StepStatusSignal,
+)
+from rtv2.solver.reflexion import RuntimeReflexion
 from rtv2.solver.react_step import ReActStepInput, ReActStepRunner
 from rtv2.state.models import RunContext
 from rtv2.task_graph.models import NodePatch, NodeStatus, TaskGraphNode, TaskGraphPatch, TaskGraphState
@@ -15,11 +38,17 @@ class RuntimeSolver:
         self,
         *,
         react_step_runner: ReActStepRunner,
+        completion_evaluator: CompletionEvaluator,
+        runtime_reflexion: RuntimeReflexion,
+        memory_store: RuntimeMemoryStore | None = None,
         max_steps_per_node: int = 20,
     ) -> None:
         if max_steps_per_node <= 0:
             raise ValueError("max_steps_per_node must be positive")
         self.react_step_runner = react_step_runner
+        self.completion_evaluator = completion_evaluator
+        self.runtime_reflexion = runtime_reflexion
+        self.memory_store = memory_store
         self.max_steps_per_node = max_steps_per_node
 
     def solve_current_node(
@@ -28,6 +57,7 @@ class RuntimeSolver:
         context: RunContext,
         node: TaskGraphNode,
         build_step_prompt,
+        build_completion_check_input,
         create_step_id,
     ) -> SolverResult:
         """Run the minimal node-scoped solve loop for the selected node."""
@@ -65,12 +95,13 @@ class RuntimeSolver:
 
         while step_count < self.max_steps_per_node:
             step_count += 1
+            current_step_id = create_step_id()
             react_output = self.react_step_runner.run_step(
                 ReActStepInput(
                     step_prompt=build_step_prompt(context, current_node),
                     task_id=context.run_identity.task_id,
                     run_id=context.run_identity.run_id,
-                    step_id=create_step_id(),
+                    step_id=current_step_id,
                     node_id=current_node.node_id,
                 )
             )
@@ -89,35 +120,115 @@ class RuntimeSolver:
             if signal is StepStatusSignal.PROGRESSED:
                 continue
             if signal is StepStatusSignal.READY_FOR_COMPLETION:
-                final_step_result = self._merge_with_running_transition(
-                    running_transition_patch,
+                completion_check_input = build_completion_check_input(
+                    context,
+                    current_node,
                     final_step_result,
                 )
-                return SolverResult(
-                    final_step_result=final_step_result,
-                    final_node_status=NodeStatus.COMPLETED,
+                completion_check_result = self.completion_evaluator.evaluate(completion_check_input)
+                if completion_check_result.result_status is JudgeResultStatus.PASS:
+                    final_step_result.patch = TaskGraphPatch(
+                        node_updates=[NodePatch(
+                            node_id=current_node.node_id,
+                            node_status=NodeStatus.COMPLETED,
+                        )]
+                    )
+                    final_step_result = self._merge_with_running_transition(running_transition_patch, final_step_result)
+                    return SolverResult(
+                        final_step_result=final_step_result,
+                        final_node_status=NodeStatus.COMPLETED,
+                        step_count=step_count,
+                    )
+
+                reflexion_result = self.runtime_reflexion.reflect(
+                    ReflexionInput(
+                        node_id=current_node.node_id,
+                        node_name=current_node.name,
+                        trigger_type="completion_check_failed",
+                        latest_summary=completion_check_result.summary,
+                        issues=completion_check_result.issues,
+                    )
+                )
+                self._append_reflexion_entry(
+                    context=context,
+                    step_id=current_step_id,
+                    node_id=current_node.node_id,
+                    trigger=ReflexionTrigger.COMPLETION_FAILED,
+                    summary=reflexion_result.summary,
+                    issues=completion_check_result.issues,
+                    next_attempt_hint=reflexion_result.next_attempt_hint,
+                    action=reflexion_result.action,
+                )
+                terminal = self._resolve_reflexion_action(
+                    current_node=current_node,
+                    running_transition_patch=running_transition_patch,
+                    step_result=final_step_result,
+                    reflexion_result=reflexion_result,
                     step_count=step_count,
                 )
+                if terminal is not None:
+                    return terminal
+                continue
             if signal is StepStatusSignal.BLOCKED:
-                final_step_result = self._merge_with_running_transition(
-                    running_transition_patch,
-                    final_step_result,
+                reflexion_result = self.runtime_reflexion.reflect(
+                    ReflexionInput(
+                        node_id=current_node.node_id,
+                        node_name=current_node.name,
+                        trigger_type="blocked",
+                        latest_summary=final_step_result.reason,
+                        issues=[final_step_result.reason],
+                    )
                 )
-                return SolverResult(
-                    final_step_result=final_step_result,
-                    final_node_status=NodeStatus.BLOCKED,
+                self._append_reflexion_entry(
+                    context=context,
+                    step_id=current_step_id,
+                    node_id=current_node.node_id,
+                    trigger=ReflexionTrigger.BLOCKED,
+                    summary=reflexion_result.summary,
+                    issues=[final_step_result.reason],
+                    next_attempt_hint=reflexion_result.next_attempt_hint,
+                    action=reflexion_result.action,
+                )
+                terminal = self._resolve_reflexion_action(
+                    current_node=current_node,
+                    running_transition_patch=running_transition_patch,
+                    step_result=final_step_result,
+                    reflexion_result=reflexion_result,
                     step_count=step_count,
                 )
+                if terminal is not None:
+                    return terminal
+                continue
             if signal is StepStatusSignal.FAILED:
-                final_step_result = self._merge_with_running_transition(
-                    running_transition_patch,
-                    final_step_result,
+                reflexion_result = self.runtime_reflexion.reflect(
+                    ReflexionInput(
+                        node_id=current_node.node_id,
+                        node_name=current_node.name,
+                        trigger_type="failed",
+                        latest_summary=final_step_result.reason,
+                        issues=[final_step_result.reason],
+                    )
                 )
-                return SolverResult(
-                    final_step_result=final_step_result,
-                    final_node_status=NodeStatus.FAILED,
+                self._append_reflexion_entry(
+                    context=context,
+                    step_id=current_step_id,
+                    node_id=current_node.node_id,
+                    trigger=ReflexionTrigger.FAILED,
+                    summary=reflexion_result.summary,
+                    issues=[final_step_result.reason],
+                    next_attempt_hint=reflexion_result.next_attempt_hint,
+                    action=reflexion_result.action,
+                )
+                terminal = self._resolve_reflexion_action(
+                    current_node=current_node,
+                    running_transition_patch=running_transition_patch,
+                    step_result=final_step_result,
+                    reflexion_result=reflexion_result,
                     step_count=step_count,
                 )
+                if terminal is not None:
+                    return terminal
+                continue
 
         terminal_step_result = StepResult(
                 status_signal=StepStatusSignal.BLOCKED,
@@ -195,15 +306,6 @@ class RuntimeSolver:
         if step_result is None or step_result.patch is not None:
             return step_result
 
-        if step_result.status_signal is StepStatusSignal.READY_FOR_COMPLETION:
-            step_result.patch = TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.COMPLETED,
-                )]
-            )
-            return step_result
-
         if step_result.status_signal is StepStatusSignal.BLOCKED:
             step_result.patch = TaskGraphPatch(
                 node_updates=[NodePatch(
@@ -251,3 +353,85 @@ class RuntimeSolver:
             if node.node_id == node_id:
                 return node
         return None
+
+    def _resolve_reflexion_action(
+        self,
+        *,
+        current_node: TaskGraphNode,
+        running_transition_patch: TaskGraphPatch | None,
+        step_result: StepResult,
+        reflexion_result: ReflexionResult,
+        step_count: int,
+    ) -> SolverResult | None:
+        action = reflexion_result.action
+        if action is ReflexionAction.RETRY_CURRENT_NODE:
+            return None
+        if action is ReflexionAction.MARK_BLOCKED:
+            step_result.patch = TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=current_node.node_id,
+                    node_status=NodeStatus.BLOCKED,
+                    block_reason=step_result.reason or reflexion_result.summary,
+                )]
+            )
+            step_result = self._merge_with_running_transition(running_transition_patch, step_result)
+            return SolverResult(
+                final_step_result=step_result,
+                final_node_status=NodeStatus.BLOCKED,
+                step_count=step_count,
+            )
+        if action is ReflexionAction.MARK_FAILED:
+            step_result.patch = TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=current_node.node_id,
+                    node_status=NodeStatus.FAILED,
+                    failure_reason=step_result.reason or reflexion_result.summary,
+                )]
+            )
+            step_result = self._merge_with_running_transition(running_transition_patch, step_result)
+            return SolverResult(
+                final_step_result=step_result,
+                final_node_status=NodeStatus.FAILED,
+                step_count=step_count,
+            )
+        if action is ReflexionAction.REQUEST_REPLAN:
+            return SolverResult(
+                final_step_result=None,
+                final_node_status=None,
+                step_count=step_count,
+                control_signal=SolverControlSignal.REQUEST_REPLAN,
+            )
+        raise ValueError(f"Unsupported reflexion action: {action}")
+
+    def _append_reflexion_entry(
+        self,
+        *,
+        context: RunContext,
+        step_id: str,
+        node_id: str,
+        trigger: ReflexionTrigger,
+        summary: str,
+        issues: list[str],
+        next_attempt_hint: str,
+        action: ReflexionAction,
+    ) -> None:
+        if self.memory_store is None:
+            return
+        issue_text = " | ".join(issue for issue in issues if issue.strip()) or "(empty)"
+        self.memory_store.append_entry(
+            RuntimeMemoryEntry(
+                entry_id=f"entry-{uuid4()}",
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                step_id=step_id,
+                node_id=node_id,
+                entry_type=RuntimeMemoryEntryType.REFLEXION,
+                role=RuntimeMemoryRole.SYSTEM,
+                content=summary,
+                reflexion_trigger=trigger,
+                reflexion_reason=issue_text,
+                next_attempt_hint=next_attempt_hint,
+                reflexion_action=MemoryReflexionAction(action.value),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )

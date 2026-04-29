@@ -11,13 +11,19 @@
 3. graph 级 execute 主循环
 4. 单 node 多轮 step solve
 5. node 状态收口后的 graph 回写
+6. `CompletionEvaluator`
+7. `RuntimeReflexion`
+8. judge 基座复用
 
 对应代码：
 
 1. [src/rtv2/solver/runtime_solver.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/runtime_solver.py)
 2. [src/rtv2/solver/models.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/models.py)
-3. [src/rtv2/orchestrator/runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
-4. [tests/test_runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py)
+3. [src/rtv2/solver/completion_evaluator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/completion_evaluator.py)
+4. [src/rtv2/solver/reflexion.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/reflexion.py)
+5. [src/rtv2/judge/base.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/judge/base.py)
+6. [src/rtv2/orchestrator/runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
+7. [tests/test_runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py)
 
 ## 结构分工
 
@@ -36,6 +42,10 @@
    - 负责选择当前可执行 node
    - 负责消费 `SolverResult` 并回写 graph
    - 负责 graph 终态收口
+4. `CompletionEvaluator`
+   - 负责 node 进入 `completed` 前的独立完成判定
+5. `RuntimeReflexion`
+   - 负责失败诊断、下一步建议和 memory 写入输入生成
 
 ## `SolverResult` 的作用
 
@@ -50,6 +60,9 @@
    - 当前 solve 收口后的 node 终态
 3. `step_count`
    - 当前 node 在本次 solve 内实际消耗的 step 数
+4. `control_signal`
+   - 当前 solve 是否向上抛显式控制信号
+   - 第一版只保留 `request_replan`
 
 当前不额外引入：
 
@@ -91,11 +104,46 @@
 1. `progressed`
    - 继续下一轮
 2. `ready_for_completion`
-   - 当前 node 收为 `completed`
+   - 先构造 `CompletionCheckInput`
+   - 再调用 `CompletionEvaluator`
+   - evaluator `pass` 才正式收为 `completed`
+   - evaluator `fail` 时转入 `RuntimeReflexion`
 3. `blocked`
-   - 当前 node 收为 `blocked`
+   - 先转入 `RuntimeReflexion`
 4. `failed`
+   - 先转入 `RuntimeReflexion`
+
+## 完成判定与反思链路
+
+当前 `Solver` 在 node 级的正式顺序如下：
+
+1. actor 正常执行 step
+2. 若 `status_signal = ready_for_completion`
+   - orchestrator 额外生成 `CompletionCheckInput`
+   - `CompletionEvaluator` 做独立判定
+3. evaluator `pass`
+   - 当前 node 收为 `completed`
+4. evaluator `fail`
+   - 生成 `ReflexionInput`
+   - `RuntimeReflexion` 返回：
+     - `summary`
+     - `next_attempt_hint`
+     - `action`
+   - solver 再消费该动作
+5. 若 step 直接 `blocked / failed`
+   - 同样先过 `RuntimeReflexion`
+
+当前 `ReflexionAction` 的 solver 消费规则为：
+
+1. `retry_current_node`
+   - 继续当前 node
+2. `mark_blocked`
+   - 当前 node 收为 `blocked`
+3. `mark_failed`
    - 当前 node 收为 `failed`
+4. `request_replan`
+   - 不伪装成普通 blocked
+   - 显式上抛 `SolverControlSignal.REQUEST_REPLAN`
 
 ## patch 挂载策略
 
@@ -126,6 +174,9 @@
    - graph 收为 `completed`
 2. 仍有未完成 node 但无可继续推进节点：
    - graph 收为 `blocked`
+3. solver 显式请求 `request_replan`：
+   - 当前 graph 先收为 `blocked`
+   - 后续外层 `replan` 模块再正式接入
 
 ## 当前保护与边界
 
@@ -134,14 +185,14 @@
 1. `max_steps_per_node = 20`
 2. 步数超限时当前统一收为 `blocked`
 3. stale `active_node_id` 不再强行复用
+4. `CompletionEvaluator.max_rounds = 10`
+5. `RuntimeReflexion.max_rounds = 10`
 
 当前尚未进入：
 
-1. `Completion Evaluator`
-2. `Reflexion`
-3. `Re-plan`
-4. subagent
-5. parallel node execution
+1. 正式 `replan` 判定器
+2. subagent
+3. parallel node execution
 
 ## 当前测试覆盖
 
@@ -155,3 +206,6 @@
 6. 步数超限收为 `blocked`
 7. execute graph 级循环与 graph 终态
 8. host 测试对 solver 主链的最小集成
+9. evaluator `pass / fail`
+10. reflexion memory 写入
+11. `request_replan` 控制信号上抛

@@ -21,8 +21,13 @@
 当前状态如下：
 
 1. `S1 ~ S12` 第一版子任务设计稿已全部落文档
-2. 开发已进入 Step 02
-3. 当前已落地的最小实现只有状态层第一项：`RunIdentity`
+2. `S13` 及后续增量设计模块已在 `design/` 下持续补充
+3. 开发已完成模块 01 ~ 模块 21 的当前阶段实现
+4. 当前代码已经具备最小可运行主链：
+   - `prepare`
+   - `execute / solver / react step`
+   - `completion evaluator / reflexion`
+   - `finalize / verifier`
 
 相关入口：
 
@@ -72,15 +77,19 @@ runtime-v2/
 
 ## 当前已落实现
 
-当前已经落地的实现块如下：
+当前已经落地并有实现说明的模块如下：
 
-1. 状态层：
-   [implementation/state.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/state.md)
-
-当前实际代码文件：
-
-1. [src/rtv2/state/models.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/state/models.py)
-2. [tests/test_run_identity.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_run_identity.py)
+1. [implementation/state.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/state.md)
+2. [implementation/host.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/host.md)
+3. [implementation/task-graph.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/task-graph.md)
+4. [implementation/orchestrator.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/orchestrator.md)
+5. [implementation/memory.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/memory.md)
+6. [implementation/prompting.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/prompting.md)
+7. [implementation/prepare.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/prepare.md)
+8. [implementation/react-step.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/react-step.md)
+9. [implementation/skills.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/skills.md)
+10. [implementation/solver.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/solver.md)
+11. [implementation/finalize.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/finalize.md)
 
 ## 测试方式
 
@@ -89,6 +98,34 @@ runtime-v2/
 ```bash
 python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_run_identity.py
 ```
+
+## 环境配置
+
+当前 `runtime-v2` 已有真实 LLM 接入，默认读取项目根下 `.env` 或系统环境变量。
+
+建议先基于 [`.env.example`](/Users/yezibin/Project/InDepth/runtime-v2/.env.example) 创建本地 `.env`：
+
+```bash
+cp /Users/yezibin/Project/InDepth/runtime-v2/.env.example /Users/yezibin/Project/InDepth/runtime-v2/.env
+```
+
+当前最小必填项：
+
+1. `LLM_MODEL_ID`
+2. `LLM_API_KEY`
+3. `LLM_BASE_URL`
+
+当前这些组件会直接读取这组环境变量：
+
+1. [src/rtv2/model/http_chat_provider.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/model/http_chat_provider.py)
+2. [src/rtv2/solver/react_step.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/react_step.py)
+3. [src/rtv2/orchestrator/runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
+
+说明：
+
+1. `HttpChatModelProvider` 走 OpenAI-compatible `/chat/completions`
+2. 若未安装 `python-dotenv`，代码仍可直接读取系统环境变量
+3. 若缺少上述变量，provider 初始化会直接报错
 
 ## 开发约束
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -12,6 +13,16 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in minimal
         return False
 
 from rtv2.model.base import GenerationConfig, ModelOutput
+
+
+def _runtime_v2_dotenv_path() -> Path:
+    """Resolve the dedicated runtime-v2 `.env` path.
+
+    This avoids accidentally loading the repository root `.env` when runtime-v2
+    is started from a parent working directory.
+    """
+
+    return Path(__file__).resolve().parents[3] / ".env"
 
 
 class HttpChatModelProvider:
@@ -28,7 +39,7 @@ class HttpChatModelProvider:
         retry_backoff_seconds: float = 1.2,
         default_config: GenerationConfig | None = None,
     ) -> None:
-        load_dotenv()
+        load_dotenv(dotenv_path=_runtime_v2_dotenv_path(), override=False)
 
         resolved_model_id = (model_id or os.getenv("LLM_MODEL_ID") or "").strip()
         resolved_api_key = (api_key or os.getenv("LLM_API_KEY") or "").strip()

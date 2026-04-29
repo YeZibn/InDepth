@@ -1,8 +1,8 @@
 """Memory hooks for runtime-v2."""
 
 from rtv2.memory.models import (
+    ReflexionAction,
     ReflexionTrigger,
-    ReplanSignal,
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
     RuntimeMemoryProcessorInput,
@@ -15,8 +15,8 @@ from rtv2.memory.sqlite_store import SQLiteRuntimeMemoryStore
 from rtv2.memory.store import RuntimeMemoryStore
 
 __all__ = [
+    "ReflexionAction",
     "ReflexionTrigger",
-    "ReplanSignal",
     "RuntimeMemoryProcessor",
     "RuntimeMemoryEntry",
     "RuntimeMemoryEntryType",

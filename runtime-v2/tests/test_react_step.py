@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.memory import RuntimeMemoryQuery, SQLiteRuntimeMemoryStore
+from rtv2.model.http_chat_provider import HttpChatModelProvider
 from rtv2.model.base import ModelOutput
 from rtv2.solver.react_step import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepStatusSignal
@@ -44,6 +46,18 @@ def echo_text(text: str) -> str:
 
 
 class ReActStepRunnerTests(unittest.TestCase):
+    def test_http_chat_model_provider_loads_runtime_v2_dotenv_path_only(self):
+        expected_path = ROOT / ".env"
+
+        with patch("rtv2.model.http_chat_provider.load_dotenv") as mocked_load_dotenv:
+            HttpChatModelProvider(
+                model_id="model-x",
+                api_key="key-x",
+                base_url="https://example.com/v1",
+            )
+
+        mocked_load_dotenv.assert_called_once_with(dotenv_path=expected_path, override=False)
+
     def test_run_step_sends_rendered_step_prompt_as_user_message(self):
         rendered_prompt = "\n".join(
             [

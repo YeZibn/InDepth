@@ -28,8 +28,8 @@ from rtv2.prompting import (
     PreparePromptInput,
 )
 from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
-from rtv2.solver import ReActStepRunner, RuntimeSolver
-from rtv2.solver.models import SolverResult, StepResult, StepStatusSignal
+from rtv2.solver import CompletionCheckInput, CompletionEvaluator, ReActStepRunner, RuntimeReflexion, RuntimeSolver
+from rtv2.solver.models import SolverControlSignal, SolverResult, StepResult, StepStatusSignal
 from rtv2.state.models import (
     DomainState,
     PrepareResult,
@@ -73,6 +73,12 @@ class RuntimeOrchestrator:
         runtime_verifier: RuntimeVerifier | None = None,
         verifier_model_provider: ModelProvider | None = None,
         verifier_generation_config: GenerationConfig | None = None,
+        completion_evaluator: CompletionEvaluator | None = None,
+        completion_evaluator_model_provider: ModelProvider | None = None,
+        completion_evaluator_generation_config: GenerationConfig | None = None,
+        runtime_reflexion: RuntimeReflexion | None = None,
+        reflexion_model_provider: ModelProvider | None = None,
+        reflexion_generation_config: GenerationConfig | None = None,
         runtime_solver: RuntimeSolver | None = None,
     ) -> None:
         self.graph_store = graph_store
@@ -106,8 +112,21 @@ class RuntimeOrchestrator:
             generation_config=verifier_generation_config,
             max_rounds=20,
         )
+        self.completion_evaluator = completion_evaluator or CompletionEvaluator(
+            model_provider=completion_evaluator_model_provider,
+            generation_config=completion_evaluator_generation_config,
+            max_rounds=10,
+        )
+        self.runtime_reflexion = runtime_reflexion or RuntimeReflexion(
+            model_provider=reflexion_model_provider,
+            generation_config=reflexion_generation_config,
+            max_rounds=10,
+        )
         self.runtime_solver = runtime_solver or RuntimeSolver(
             react_step_runner=self.react_step_runner,
+            completion_evaluator=self.completion_evaluator,
+            runtime_reflexion=self.runtime_reflexion,
+            memory_store=self.memory_store,
             max_steps_per_node=20,
         )
         self._graph_counter = 0
@@ -208,9 +227,16 @@ class RuntimeOrchestrator:
                 context=context,
                 node=selected_node,
                 build_step_prompt=self.build_react_step_prompt,
+                build_completion_check_input=self.build_completion_check_input,
                 create_step_id=self._create_step_id,
             )
             self._apply_solver_result(context, solver_result)
+            if solver_result.control_signal is SolverControlSignal.REQUEST_REPLAN:
+                self._apply_graph_patch(
+                    context,
+                    TaskGraphPatch(graph_status=TaskGraphStatus.BLOCKED, active_node_id=""),
+                )
+                break
 
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
@@ -439,6 +465,85 @@ class RuntimeOrchestrator:
                 runtime_memory_text=prompt_context.prompt_context_text,
                 capability_text=self._build_tool_capability_text(),
             )
+        )
+
+    def build_completion_check_input(
+        self,
+        context: RunContext,
+        node: TaskGraphNode,
+        step_result: StepResult,
+    ) -> CompletionCheckInput:
+        if not hasattr(self.react_step_runner, "model_provider") or not hasattr(self.react_step_runner, "generation_config"):
+            return CompletionCheckInput(
+                node_id=node.node_id,
+                node_name=node.name,
+                node_kind=node.kind,
+                node_description=node.description,
+                completion_summary=step_result.reason or "Current node appears ready for completion.",
+                completion_evidence=[],
+                completion_notes=[],
+                completion_reason=step_result.reason or "The latest step signaled ready_for_completion.",
+            )
+
+        rendered_prompt = self.build_react_step_prompt(context, node)
+        try:
+            model_output = self.react_step_runner.model_provider.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the current actor preparing a completion package for node-level evaluation. "
+                            "Do not call tools. Return valid JSON only. "
+                            "Required top-level keys: completion_summary, completion_evidence, completion_notes, completion_reason."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{rendered_prompt}\n\n"
+                            "Latest completion signal summary:\n"
+                            f"{step_result.reason or '(empty)'}"
+                        ),
+                    },
+                ],
+                tools=[],
+                config=self.react_step_runner.generation_config,
+            )
+        except AssertionError:
+            return CompletionCheckInput(
+                node_id=node.node_id,
+                node_name=node.name,
+                node_kind=node.kind,
+                node_description=node.description,
+                completion_summary=step_result.reason or "Current node appears ready for completion.",
+                completion_evidence=[],
+                completion_notes=[],
+                completion_reason=step_result.reason or "The latest step signaled ready_for_completion.",
+            )
+        payload = self._load_prepare_payload(model_output.content)
+        completion_summary = str(payload.get("completion_summary", "") or "").strip()
+        completion_reason = str(payload.get("completion_reason", "") or "").strip()
+        raw_evidence = payload.get("completion_evidence", [])
+        raw_notes = payload.get("completion_notes", [])
+        if not completion_summary:
+            raise ValueError("Completion summary builder must return non-empty completion_summary")
+        if not completion_reason:
+            raise ValueError("Completion summary builder must return non-empty completion_reason")
+        if not isinstance(raw_evidence, list):
+            raise ValueError("Completion summary builder completion_evidence must be a list")
+        if not isinstance(raw_notes, list):
+            raise ValueError("Completion summary builder completion_notes must be a list")
+        completion_evidence = [str(item or "").strip() for item in raw_evidence if str(item or "").strip()]
+        completion_notes = [str(item or "").strip() for item in raw_notes if str(item or "").strip()]
+        return CompletionCheckInput(
+            node_id=node.node_id,
+            node_name=node.name,
+            node_kind=node.kind,
+            node_description=node.description,
+            completion_summary=completion_summary,
+            completion_evidence=completion_evidence,
+            completion_notes=completion_notes,
+            completion_reason=completion_reason,
         )
 
     def _build_execution_node_prompt_context(

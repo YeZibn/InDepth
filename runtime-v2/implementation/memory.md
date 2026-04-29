@@ -11,6 +11,7 @@
 3. runtime memory processor
 4. step / tool 轨迹写入
 5. task 级 `prompt_context_text` 组装
+6. `reflexion` 正式写入链
 
 对应代码：
 
@@ -49,8 +50,8 @@
 3. `reflexion` entry 当前带最小结构化字段：
    - `reflexion_trigger`
    - `reflexion_reason`
-   - `next_try_hint`
-   - `replan_signal`
+   - `next_attempt_hint`
+   - `reflexion_action`
 
 ## 当前 sqlite 设计
 
@@ -74,8 +75,8 @@
 12. `related_result_refs_json`
 13. `reflexion_trigger`
 14. `reflexion_reason`
-15. `next_try_hint`
-16. `replan_signal`
+15. `next_attempt_hint`
+16. `reflexion_action`
 17. `created_at`
 
 其中：
@@ -129,6 +130,7 @@
 2. 每次 tool call 写 1 条 assistant entry
 3. 每次 tool result 写 1 条 tool entry
 4. 每次 step 完成写 1 条 assistant entry
+5. 每次 evaluator fail / blocked / failed 触发的 reflexion 写 1 条 reflexion entry
 
 ## 当前边界
 
@@ -140,6 +142,6 @@
 4. 长期记忆 recall / write
 5. 用户偏好 recall / write
 6. memory view 裁剪
-7. `reflexion` 的正式写入链
+7. 更细粒度的 memory view 裁剪策略
 
 这些内容会在后续模块继续落地。

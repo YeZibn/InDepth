@@ -10,8 +10,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.memory import (
+    ReflexionAction,
     ReflexionTrigger,
-    ReplanSignal,
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
     RuntimeMemoryQuery,
@@ -100,8 +100,8 @@ class SQLiteRuntimeMemoryStoreTests(unittest.TestCase):
                 content="need to re-check dependencies",
                 reflexion_trigger=ReflexionTrigger.BLOCKED,
                 reflexion_reason="dependency unresolved",
-                next_try_hint="inspect dependency chain",
-                replan_signal=ReplanSignal.SUGGESTED,
+                next_attempt_hint="inspect dependency chain",
+                reflexion_action=ReflexionAction.REQUEST_REPLAN,
                 created_at="2026-04-28T21:00:01+08:00",
             )
         )
@@ -139,4 +139,3 @@ class SQLiteRuntimeMemoryStoreTests(unittest.TestCase):
         entries = store.list_entries(RuntimeMemoryQuery(run_id="run-1", limit=2))
 
         self.assertEqual([entry.entry_id for entry in entries], ["entry-1", "entry-2"])
-

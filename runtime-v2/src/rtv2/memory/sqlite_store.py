@@ -8,8 +8,8 @@ import sqlite3
 from contextlib import closing
 
 from rtv2.memory.models import (
+    ReflexionAction,
     ReflexionTrigger,
-    ReplanSignal,
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
     RuntimeMemoryQuery,
@@ -53,8 +53,8 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
                     related_result_refs_json,
                     reflexion_trigger,
                     reflexion_reason,
-                    next_try_hint,
-                    replan_signal,
+                    next_attempt_hint,
+                    reflexion_action,
                     created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -72,8 +72,8 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
                     self._serialize_result_refs(entry.related_result_refs),
                     entry.reflexion_trigger.value if entry.reflexion_trigger is not None else "",
                     entry.reflexion_reason,
-                    entry.next_try_hint,
-                    entry.replan_signal.value,
+                    entry.next_attempt_hint,
+                    entry.reflexion_action.value if entry.reflexion_action is not None else "",
                     entry.created_at,
                 ),
             )
@@ -93,8 +93,8 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
             related_result_refs=list(entry.related_result_refs),
             reflexion_trigger=entry.reflexion_trigger,
             reflexion_reason=entry.reflexion_reason,
-            next_try_hint=entry.next_try_hint,
-            replan_signal=entry.replan_signal,
+            next_attempt_hint=entry.next_attempt_hint,
+            reflexion_action=entry.reflexion_action,
             created_at=entry.created_at,
             seq=stored_seq,
         )
@@ -122,8 +122,8 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
                 related_result_refs_json,
                 reflexion_trigger,
                 reflexion_reason,
-                next_try_hint,
-                replan_signal,
+                next_attempt_hint,
+                reflexion_action,
                 created_at
             FROM runtime_memory_entries
         """
@@ -158,8 +158,8 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
                 related_result_refs_json,
                 reflexion_trigger,
                 reflexion_reason,
-                next_try_hint,
-                replan_signal,
+                next_attempt_hint,
+                reflexion_action,
                 created_at
             FROM runtime_memory_entries
         """
@@ -200,8 +200,8 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
                     related_result_refs_json TEXT NOT NULL DEFAULT '[]',
                     reflexion_trigger TEXT NOT NULL DEFAULT '',
                     reflexion_reason TEXT NOT NULL DEFAULT '',
-                    next_try_hint TEXT NOT NULL DEFAULT '',
-                    replan_signal TEXT NOT NULL DEFAULT '',
+                    next_attempt_hint TEXT NOT NULL DEFAULT '',
+                    reflexion_action TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 )
                 """
@@ -301,7 +301,7 @@ class SQLiteRuntimeMemoryStore(RuntimeMemoryStore):
             related_result_refs=cls._deserialize_result_refs(str(row[11] or "[]")),
             reflexion_trigger=ReflexionTrigger(reflexion_trigger_raw) if reflexion_trigger_raw else None,
             reflexion_reason=str(row[13] or ""),
-            next_try_hint=str(row[14] or ""),
-            replan_signal=ReplanSignal(str(row[15] or ReplanSignal.NONE.value)),
+            next_attempt_hint=str(row[14] or ""),
+            reflexion_action=ReflexionAction(str(row[15])) if str(row[15] or "").strip() else None,
             created_at=str(row[16]),
         )

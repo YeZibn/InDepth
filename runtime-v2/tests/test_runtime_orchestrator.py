@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
 
 from rtv2.host.interfaces import StartRunIdentity
 from rtv2.finalize import RuntimeVerifier, VerificationResult, VerificationResultStatus
+from rtv2.judge import JudgeResultStatus
 from rtv2.memory import (
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
@@ -23,7 +24,14 @@ from rtv2.skills import RuntimeSkill, SkillManifest, SkillRegistry, SkillStatus
 from rtv2.model.base import ModelOutput
 from rtv2.solver import RuntimeSolver
 from rtv2.solver.react_step import ReActStepOutput
-from rtv2.solver.models import StepResult, StepStatusSignal
+from rtv2.solver.models import (
+    CompletionCheckResult,
+    ReflexionAction,
+    ReflexionResult,
+    SolverControlSignal,
+    StepResult,
+    StepStatusSignal,
+)
 from rtv2.state.models import RunPhase
 from rtv2.task_graph.models import NodePatch, NodeStatus, TaskGraphNode, TaskGraphPatch, TaskGraphStatus
 from rtv2.task_graph.store import InMemoryTaskGraphStore
@@ -59,7 +67,42 @@ class StubRuntimeVerifier:
         return self.result
 
 
-def create_orchestrator(react_step_runner=None, planner_model_provider=None, finalize_model_provider=None, runtime_verifier=None) -> RuntimeOrchestrator:
+class StubCompletionEvaluator:
+    def __init__(self, result: CompletionCheckResult | None = None) -> None:
+        self.result = result or CompletionCheckResult(
+            result_status=JudgeResultStatus.PASS,
+            summary="completion verified",
+            issues=[],
+        )
+        self.inputs = []
+
+    def evaluate(self, input):
+        self.inputs.append(input)
+        return self.result
+
+
+class StubRuntimeReflexion:
+    def __init__(self, result: ReflexionResult | None = None) -> None:
+        self.result = result or ReflexionResult(
+            summary="mark current node failed",
+            next_attempt_hint="stop the current node",
+            action=ReflexionAction.MARK_FAILED,
+        )
+        self.inputs = []
+
+    def reflect(self, input):
+        self.inputs.append(input)
+        return self.result
+
+
+def create_orchestrator(
+    react_step_runner=None,
+    planner_model_provider=None,
+    finalize_model_provider=None,
+    runtime_verifier=None,
+    completion_evaluator=None,
+    runtime_reflexion=None,
+) -> RuntimeOrchestrator:
     db_dir = tempfile.mkdtemp()
     return RuntimeOrchestrator(
         graph_store=InMemoryTaskGraphStore(),
@@ -83,6 +126,8 @@ def create_orchestrator(react_step_runner=None, planner_model_provider=None, fin
             ]
         ),
         runtime_verifier=runtime_verifier or StubRuntimeVerifier(),
+        completion_evaluator=completion_evaluator or StubCompletionEvaluator(),
+        runtime_reflexion=runtime_reflexion or StubRuntimeReflexion(),
         memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
     )
 
@@ -642,6 +687,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             context=context,
             node=pending_node,
             build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
             create_step_id=orchestrator._create_step_id,
         )
 
@@ -682,6 +728,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             context=context,
             node=pending_node,
             build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
             create_step_id=orchestrator._create_step_id,
         )
         self.assertIsNone(solver_result.final_step_result)
@@ -713,6 +760,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
                 context=context,
                 node=pending_node,
                 build_step_prompt=orchestrator.build_react_step_prompt,
+                build_completion_check_input=orchestrator.build_completion_check_input,
                 create_step_id=orchestrator._create_step_id,
             )
 
@@ -728,7 +776,14 @@ class RuntimeOrchestratorTests(unittest.TestCase):
                 ),
             )
         )
-        orchestrator = create_orchestrator(react_step_runner=react_runner)
+        evaluator = StubCompletionEvaluator(
+            CompletionCheckResult(
+                result_status=JudgeResultStatus.PASS,
+                summary="good enough",
+                issues=[],
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner, completion_evaluator=evaluator)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
                 session_id="sess-1",
@@ -750,6 +805,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             context=context,
             node=ready_node,
             build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
             create_step_id=orchestrator._create_step_id,
         )
 
@@ -762,6 +818,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(solver_result.final_step_result.patch.node_updates[0].node_status, NodeStatus.RUNNING)
         self.assertEqual(solver_result.final_step_result.patch.node_updates[-1].node_status, NodeStatus.COMPLETED)
         self.assertEqual(len(react_runner.inputs), 1)
+        self.assertEqual(len(evaluator.inputs), 1)
         self.assertIn("## Base Prompt", react_runner.inputs[0].step_prompt)
         self.assertIn("## Phase Prompt", react_runner.inputs[0].step_prompt)
         self.assertIn("## Dynamic Injection", react_runner.inputs[0].step_prompt)
@@ -799,10 +856,122 @@ class RuntimeOrchestratorTests(unittest.TestCase):
                 context=context,
                 node=node,
                 build_step_prompt=orchestrator.build_react_step_prompt,
+                build_completion_check_input=orchestrator.build_completion_check_input,
                 create_step_id=orchestrator._create_step_id,
             )
             self.assertIsNone(solver_result.final_step_result)
             self.assertEqual(solver_result.final_node_status, status)
+
+    def test_runtime_solver_runs_reflexion_when_completion_evaluator_fails(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="work complete",
+                action="finish",
+                observation="candidate complete",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="candidate ready",
+                ),
+            )
+        )
+        evaluator = StubCompletionEvaluator(
+            CompletionCheckResult(
+                result_status=JudgeResultStatus.FAIL,
+                summary="missing validation",
+                issues=["missing validation"],
+            )
+        )
+        reflexion = StubRuntimeReflexion(
+            ReflexionResult(
+                summary="block until validation is available",
+                next_attempt_hint="collect missing validation first",
+                action=ReflexionAction.MARK_BLOCKED,
+            )
+        )
+        orchestrator = create_orchestrator(
+            react_step_runner=react_runner,
+            completion_evaluator=evaluator,
+            runtime_reflexion=reflexion,
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Evaluator fail.",
+            )
+        )
+        ready_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Ready",
+            kind="execution",
+            node_status=NodeStatus.READY,
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+
+        solver_result = orchestrator.runtime_solver.solve_current_node(
+            context=context,
+            node=ready_node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
+            create_step_id=orchestrator._create_step_id,
+        )
+
+        self.assertEqual(solver_result.final_node_status, NodeStatus.BLOCKED)
+        self.assertEqual(len(reflexion.inputs), 1)
+        entries = orchestrator.memory_store.list_entries(RuntimeMemoryQuery(task_id="task-1", run_id="run-1"))
+        self.assertTrue(any(entry.entry_type is RuntimeMemoryEntryType.REFLEXION for entry in entries))
+
+    def test_runtime_solver_returns_control_signal_when_reflexion_requests_replan(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="cannot proceed",
+                action="fail",
+                observation="stuck",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.FAILED,
+                    reason="cannot proceed",
+                ),
+            )
+        )
+        reflexion = StubRuntimeReflexion(
+            ReflexionResult(
+                summary="request replan",
+                next_attempt_hint="rebuild the plan around this failure",
+                action=ReflexionAction.REQUEST_REPLAN,
+            )
+        )
+        orchestrator = create_orchestrator(
+            react_step_runner=react_runner,
+            runtime_reflexion=reflexion,
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Request replan.",
+            )
+        )
+        node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            node_status=NodeStatus.RUNNING,
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+
+        solver_result = orchestrator.runtime_solver.solve_current_node(
+            context=context,
+            node=node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
+            create_step_id=orchestrator._create_step_id,
+        )
+
+        self.assertEqual(solver_result.control_signal, SolverControlSignal.REQUEST_REPLAN)
 
     def test_run_execute_phase_aligns_runtime_active_node_when_node_is_selected(self):
         react_runner = FakeReActStepRunner(
@@ -952,6 +1121,8 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         orchestrator = RuntimeOrchestrator(
             graph_store=InMemoryTaskGraphStore(),
             tool_registry=registry,
+            completion_evaluator=StubCompletionEvaluator(),
+            runtime_reflexion=StubRuntimeReflexion(),
             memory_store=self.create_memory_store(),
         )
         orchestrator.react_step_runner.model_provider = provider
@@ -977,9 +1148,10 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         executed = orchestrator.run_execute_phase(context)
 
-        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual(len(provider.calls), 3)
         self.assertEqual(provider.calls[0]["tools"][0]["name"], "echo_text")
         self.assertEqual(provider.calls[1]["tools"], [])
+        self.assertEqual(provider.calls[2]["tools"], [])
         self.assertEqual(
             executed.domain_state.task_graph_state.nodes[0].node_status,
             NodeStatus.COMPLETED,
@@ -1247,6 +1419,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             context=context,
             node=running_node,
             build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
             create_step_id=orchestrator._create_step_id,
         )
 
@@ -1266,7 +1439,13 @@ class RuntimeOrchestratorTests(unittest.TestCase):
                 step_result=StepResult(status_signal=StepStatusSignal.PROGRESSED),
             )
         )
-        solver = RuntimeSolver(react_step_runner=react_runner, max_steps_per_node=2)
+        solver = RuntimeSolver(
+            react_step_runner=react_runner,
+            completion_evaluator=StubCompletionEvaluator(),
+            runtime_reflexion=StubRuntimeReflexion(),
+            memory_store=None,
+            max_steps_per_node=2,
+        )
         orchestrator = create_orchestrator(react_step_runner=react_runner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -1289,6 +1468,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             context=context,
             node=running_node,
             build_step_prompt=orchestrator.build_react_step_prompt,
+            build_completion_check_input=orchestrator.build_completion_check_input,
             create_step_id=orchestrator._create_step_id,
         )
 

@@ -32,11 +32,13 @@ class ReflexionTrigger(StrEnum):
     FAILED = "failed"
 
 
-class ReplanSignal(StrEnum):
-    """Minimal replan signals retained in runtime memory."""
+class ReflexionAction(StrEnum):
+    """Persisted reflexion action suggestion."""
 
-    NONE = "none"
-    SUGGESTED = "suggested"
+    RETRY_CURRENT_NODE = "retry_current_node"
+    MARK_BLOCKED = "mark_blocked"
+    MARK_FAILED = "mark_failed"
+    REQUEST_REPLAN = "request_replan"
 
 
 @dataclass(slots=True)
@@ -56,8 +58,8 @@ class RuntimeMemoryEntry:
     related_result_refs: list[ResultRef] = field(default_factory=list)
     reflexion_trigger: ReflexionTrigger | None = None
     reflexion_reason: str = ""
-    next_try_hint: str = ""
-    replan_signal: ReplanSignal = ReplanSignal.NONE
+    next_attempt_hint: str = ""
+    reflexion_action: ReflexionAction | None = None
     created_at: str = ""
     seq: int | None = None
 
@@ -82,15 +84,17 @@ class RuntimeMemoryEntry:
                 raise ValueError("reflexion_trigger is required for reflexion entries")
             if not self.reflexion_reason.strip():
                 raise ValueError("reflexion_reason is required for reflexion entries")
+            if self.reflexion_action is None:
+                raise ValueError("reflexion_action is required for reflexion entries")
         else:
             if self.reflexion_trigger is not None:
                 raise ValueError("reflexion_trigger is only allowed for reflexion entries")
             if self.reflexion_reason.strip():
                 raise ValueError("reflexion_reason is only allowed for reflexion entries")
-            if self.next_try_hint.strip():
-                raise ValueError("next_try_hint is only allowed for reflexion entries")
-            if self.replan_signal is not ReplanSignal.NONE:
-                raise ValueError("replan_signal is only allowed for reflexion entries")
+            if self.next_attempt_hint.strip():
+                raise ValueError("next_attempt_hint is only allowed for reflexion entries")
+            if self.reflexion_action is not None:
+                raise ValueError("reflexion_action is only allowed for reflexion entries")
 
 
 @dataclass(slots=True)

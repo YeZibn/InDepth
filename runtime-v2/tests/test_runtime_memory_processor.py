@@ -10,8 +10,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.memory import (
+    ReflexionAction,
     ReflexionTrigger,
-    ReplanSignal,
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
     RuntimeMemoryProcessor,
@@ -119,8 +119,8 @@ class RuntimeMemoryProcessorTests(unittest.TestCase):
                 content="Need a different approach.",
                 reflexion_trigger=ReflexionTrigger.FAILED,
                 reflexion_reason="tool output was insufficient",
-                next_try_hint="inspect file before calling tool again",
-                replan_signal=ReplanSignal.SUGGESTED,
+                next_attempt_hint="inspect file before calling tool again",
+                reflexion_action=ReflexionAction.REQUEST_REPLAN,
                 created_at="2026-04-28T21:10:03+08:00",
             )
         )
@@ -137,8 +137,8 @@ class RuntimeMemoryProcessorTests(unittest.TestCase):
 
         self.assertIn("[reflexion][trigger=failed]", output.prompt_context_text)
         self.assertIn("reason=tool output was insufficient", output.prompt_context_text)
-        self.assertIn("next_try_hint=inspect file before calling tool again", output.prompt_context_text)
-        self.assertIn("replan_signal=suggested", output.prompt_context_text)
+        self.assertIn("next_attempt_hint=inspect file before calling tool again", output.prompt_context_text)
+        self.assertIn("action=request_replan", output.prompt_context_text)
 
     def test_build_prompt_context_text_renders_tool_metadata(self):
         store = self.create_store()

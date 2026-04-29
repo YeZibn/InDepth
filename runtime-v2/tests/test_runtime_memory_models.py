@@ -9,8 +9,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.memory import (
+    ReflexionAction,
     ReflexionTrigger,
-    ReplanSignal,
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
     RuntimeMemoryQuery,
@@ -54,7 +54,7 @@ class RuntimeMemoryModelsTests(unittest.TestCase):
 
         self.assertEqual(entry.entry_type, RuntimeMemoryEntryType.CONTEXT)
         self.assertEqual(entry.role, RuntimeMemoryRole.ASSISTANT)
-        self.assertEqual(entry.replan_signal, ReplanSignal.NONE)
+        self.assertIsNone(entry.reflexion_action)
         self.assertEqual(entry.related_result_refs[0].ref_id, "ref-1")
 
     def test_reflexion_entry_requires_structured_reflexion_fields(self):
@@ -69,14 +69,14 @@ class RuntimeMemoryModelsTests(unittest.TestCase):
             content="current approach failed due to missing prerequisite",
             reflexion_trigger=ReflexionTrigger.FAILED,
             reflexion_reason="missing prerequisite",
-            next_try_hint="inspect dependency chain first",
-            replan_signal=ReplanSignal.SUGGESTED,
+            next_attempt_hint="inspect dependency chain first",
+            reflexion_action=ReflexionAction.REQUEST_REPLAN,
             created_at="2026-04-28T20:00:00+08:00",
         )
 
         self.assertEqual(entry.entry_type, RuntimeMemoryEntryType.REFLEXION)
         self.assertEqual(entry.reflexion_trigger, ReflexionTrigger.FAILED)
-        self.assertEqual(entry.replan_signal, ReplanSignal.SUGGESTED)
+        self.assertEqual(entry.reflexion_action, ReflexionAction.REQUEST_REPLAN)
 
     def test_reflexion_entry_rejects_missing_trigger(self):
         with self.assertRaises(ValueError):

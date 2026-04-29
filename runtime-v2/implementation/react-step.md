@@ -59,6 +59,8 @@
 2. `LLM_API_KEY`
 3. `LLM_BASE_URL`
 
+推荐直接参考 [`.env.example`](/Users/yezibin/Project/InDepth/runtime-v2/.env.example) 在 `runtime-v2/` 根目录创建本地 `.env`。
+
 当前 `HttpChatModelProvider` 的特点如下：
 
 1. 直接读取 `.env` 和系统环境变量
