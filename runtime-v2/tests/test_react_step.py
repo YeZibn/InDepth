@@ -44,6 +44,30 @@ def echo_text(text: str) -> str:
 
 
 class ReActStepRunnerTests(unittest.TestCase):
+    def test_run_step_sends_rendered_step_prompt_as_user_message(self):
+        rendered_prompt = "\n".join(
+            [
+                "## Base Prompt",
+                "base",
+                "## Phase Prompt",
+                "phase",
+                "## Dynamic Injection",
+                "dynamic",
+            ]
+        )
+        provider = SequenceModelProvider([
+            ModelOutput(
+                content='{"thought":"need progress","action":"inspect state","observation":"state loaded","status_signal":"progressed","reason":""}',
+                raw={},
+            )
+        ])
+        runner = ReActStepRunner(model_provider=provider)
+
+        runner.run_step(ReActStepInput(step_prompt=rendered_prompt))
+
+        self.assertEqual(provider.calls[0]["messages"][1]["role"], "user")
+        self.assertEqual(provider.calls[0]["messages"][1]["content"], rendered_prompt)
+
     def test_run_step_parses_valid_json_output_without_tool(self):
         provider = SequenceModelProvider([
             ModelOutput(

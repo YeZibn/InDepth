@@ -317,7 +317,7 @@ class RuntimeOrchestrator:
         return step_result
 
     def build_react_step_prompt(self, context: RunContext, node: TaskGraphNode) -> str:
-        """Assemble the minimal agent-facing prompt for a running node."""
+        """Render the formal execution prompt blocks into the current step prompt string."""
 
         execution_prompt = self.build_execution_prompt(context, node)
         return self.render_execution_prompt(execution_prompt)
@@ -348,7 +348,7 @@ class RuntimeOrchestrator:
 
     @staticmethod
     def render_execution_prompt(execution_prompt: ExecutionPrompt) -> str:
-        """Render the three prompt blocks into the current single-string step prompt."""
+        """Render the three formal prompt blocks into the current single-string step prompt."""
 
         return "\n\n".join(
             [

@@ -328,7 +328,7 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
-- 任务 05：未开始
+- 任务 05：已完成
 - 任务 06：未开始
 
 ---
@@ -336,6 +336,36 @@
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 060：完成模块 16 的任务 05 Prompt 模块消费链与 Runner 口径收口
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 05，正式收口 prompt 模块产物到 `step_prompt: str` 的主链消费方式，并同步整理 orchestrator / `ReActStepRunner` / 测试口径，不改变 runner 核心执行逻辑
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/src/rtv2/solver/react_step.py`
+    - `runtime-v2/tests/test_react_step.py`
+  - 已正式确认当前主链消费方式为：
+    - `ExecutionPromptAssembler` 产出三段 prompt block
+    - orchestrator 将三段 block 渲染为单个 `step_prompt` 字符串
+    - `ReActStepRunner` 继续消费 `step_prompt: str`
+  - 已同步 runner 侧正式口径：
+    - `ReActStepInput.step_prompt` 明确为 prompt 模块渲染后的正式 step prompt
+    - `ReActStepRunner` 明确是在该 prompt 外层再叠加执行器级 ReAct 协议
+    - followup tool-result 链继续复用该渲染后 prompt
+  - 已补测试：
+    - 验证 runner 会将渲染后的正式 `step_prompt` 原样作为 user message 发送给模型
+- 验证结果：
+  - 已执行相关回归：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 36 tests ... OK`
+- 遗留问题：
+  - 当前 `step_prompt` 仍是单字符串形态，尚未升级为 message 级 prompt 输入
+  - `prepare / finalize` prompt 仍未进入正式主链消费
+- 下一步：
+  - 进入模块 16 的任务 06，补测试、实现文档与开发进度，完成模块 16 收尾
 
 #### 记录 058：完成模块 16 的任务 04 Prompt 输入提取责任链与主输入接线方案定稿
 

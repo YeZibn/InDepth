@@ -15,7 +15,11 @@ from rtv2.tools import LocalToolExecutor, ToolCall, ToolRegistry
 
 @dataclass(slots=True)
 class ReActStepInput:
-    """Minimal agent-facing input for a single ReAct step."""
+    """Minimal agent-facing input for a single ReAct step.
+
+    `step_prompt` is the rendered prompt string produced by the prompt module
+    and orchestrator bridge, not an ad hoc prompt assembled inside the step runner.
+    """
 
     step_prompt: str
     task_id: str = ""
@@ -36,7 +40,11 @@ class ReActStepOutput:
 
 
 class ReActStepRunner:
-    """Run a single ReAct step using a real LLM provider."""
+    """Run a single ReAct step using a real LLM provider.
+
+    The runner consumes a rendered `step_prompt` string and adds its own
+    executor-level ReAct protocol instruction around that prompt.
+    """
 
     def __init__(
         self,
@@ -143,6 +151,7 @@ class ReActStepRunner:
 
     @staticmethod
     def _build_initial_messages(step_input: ReActStepInput) -> list[dict[str, str]]:
+        """Build first-round model messages around the rendered step prompt string."""
         return [
             {
                 "role": "system",
@@ -168,6 +177,7 @@ class ReActStepRunner:
         tool_call: ToolCall,
         tool_result_text: str,
     ) -> list[dict[str, str]]:
+        """Build second-round messages by reusing the rendered step prompt and appending tool output."""
         return [
             {
                 "role": "system",
