@@ -557,7 +557,7 @@
 
 1. 收口 `Planner / Solver / Reflexion / Re-plan` 在 runtime-v2 中的正式运行框架。
 2. 对齐现有 `prepare / execute / finalize / verification` 与目标架构之间的映射关系。
-3. 明确 node 内 solve、运行期纠偏、重规划判定与回流到 planning 的边界。
+3. 明确 node 内 solve、运行期纠偏、重规划动作与回流到 planning 的边界。
 
 落地子任务：
 
@@ -567,8 +567,8 @@
    产物：solver loop design。
 3. `S13-T3` 定义 `Reflexion` 的触发条件、写入位置与最小语义。
    产物：reflexion runtime memory note。
-4. `S13-T4` 定义 `Re-plan` 的判定条件、判定结果与回流流程。
-   产物：replan gate design。
+4. `S13-T4` 定义 `request_replan` 的触发来源、回流流程与层级边界。
+   产物：replan action flow design。
 5. `S13-T5` 统一修正相关旧设计稿中的框架表述与编号引用。
    产物：design alignment patch。
 6. `S13-T6` 定义 `StepResult` 的最小正式结构。
@@ -587,7 +587,7 @@
 建议启动顺序：
 
 1. 先定 phase mapping 与 solver loop。
-2. 再定 reflexion 与 re-plan 的边界。
+2. 再定 reflexion 与 re-plan 动作边界。
 3. 然后补齐 `StepResult` 与统一 runtime memory 结构。
 4. 最后统一修正文档与接口口径。
 
@@ -602,19 +602,73 @@
 7. `Completion Evaluator` 只在 node 尝试进入 `completed` 前触发
 8. `Reflexion` 只在 completion fail、node blocked、node failed 时触发
 9. `Reflexion` 主落点是 runtime memory，内容保持精简结构化
-10. `Reflexion` 可输出 `replan_signal`，但当前只作为建议信号
-11. `Re-plan` 不是重规划执行器，而是 runtime 外层的 run 级重规划判定器
-12. `Re-plan` 不直接生成新计划，只负责判断是否需要回到 `PreparePhase`
-13. 真正的重规划由 `PreparePhase` 执行
-14. `Re-plan` 的最小判定结果当前收敛为：
-    - `no_replan`
-    - `need_replan`
-15. 当结果为 `need_replan` 时，需要附带 `reason`
-16. 当前最小原因集合包括：
-    - `node_failed`
-    - `persistent_blocked`
-    - `repeated_completion_fail`
+10. `request_replan` 收敛为 `Reflexion` 可产出的统一动作
+11. 外层独立 `Re-plan` 判定器当前取消
+12. 真正的重规划由 `PreparePhase` 执行
+13. node 级 `Reflexion` 可在执行链路中输出：
+    - `request_replan`
+14. final verification fail 也先进入 run 级 `Reflexion`
+15. run 级 `Reflexion` 第一版只允许输出：
+    - `request_replan`
+    - `finish_failed`
+16. 当动作为 `request_replan` 时，统一回到 `PreparePhase`
+17. 当动作为 `finish_failed` 时，当前 run 直接失败结束
+18. `request_replan` 当前只允许由两类 `Reflexion` 产出：
+    - `node_reflexion`
+    - `run_reflexion`
+19. 第一版为 `request_replan` 保留一个轻量正式承载结构
+20. 其最小字段当前收口为：
+    - `source`
+    - `node_id`
+    - `reason`
+    - `created_at`
+21. `node_id` 在 `run_reflexion` 场景下允许为空
+22. 第一版当前不在该结构中复制 graph / memory / verifier 原文 / step 全轨迹
+23. 真正的重规划上下文仍统一来自当前 `RunContext`
+24. `request_replan` 第一版当前不新开新的 `RunContext`
+25. 回流时直接复用当前 run 内已有正式状态
+26. 当 `request_replan` 被消费时，主链统一切回 `PreparePhase`
+27. `PreparePhase` 在 replan 场景下读取：
+    - 原 `user_input`
+    - 当前 `goal`
+    - 当前 graph
+    - 全量 runtime memory
+    - 当前 `request_replan`
+28. 第一版当前不先清空 graph
+29. graph 继续通过新的 `prepare_result.patch` 在当前 graph 基础上修改
+30. 新 `prepare_result` 覆盖旧的正式 `prepare_result`
+31. `request_replan` 作为一次性控制信息保留
+32. 当 `PreparePhase` 成功消费后，应从正式状态中清空
+33. `node_reflexion` 只归 `Solver / ExecutePhase` 使用
+34. `node_reflexion` 第一版只处理：
+    - completion evaluator fail
+    - step blocked
+    - step failed
+35. `node_reflexion` 第一版动作固定为：
+    - `retry_current_node`
+    - `mark_blocked`
+    - `mark_failed`
+    - `request_replan`
+36. `run_reflexion` 只归 `FinalizePhase` 中的 verification fail 使用
+37. `run_reflexion` 第一版只处理：
     - `final_verification_fail`
+38. `run_reflexion` 第一版动作固定为：
+    - `request_replan`
+    - `finish_failed`
+39. `run_reflexion` 不允许输出 node 级动作
+40. 两层当前都归入 `Reflexion` 语义族，但动作集合按层级分开
+41. 第一版当前不扩展到更多 run 级失败类型
+42. 第一版当前不展开 `abandoned` 与 `request_replan` 的共存语义
+43. 第一版当前不做 `retry_finalize` 等额外 run 级动作
+44. `Reflexion` 虽不作为独立 phase，但应接入主链统一 prompt 架构
+45. `node_reflexion` 与 `run_reflexion` 的 prompt 都采用三段结构：
+    - `base prompt`
+    - `phase prompt`
+    - `dynamic injection`
+46. 两层 `Reflexion` 当前都应读取统一 runtime memory 上下文
+47. `ReflexionInput` 继续保留，但作为 prompt 组装输入
+48. 第一版允许为 `node_reflexion` 与 `run_reflexion` 分别定义独立 prompt input 结构
+49. 第一版不新增独立 `RunPhase.REFLEXION`
 17. `StepResult` 是 `Actor -> Solver` 的最小运行时结构化交接对象
 18. `StepResult` 的最小字段当前收敛为：
     - `result_refs`
@@ -637,9 +691,9 @@
     - `trigger`
     - `reason`
     - `next_try_hint`
-    - `replan_signal`
-24. 当前 `PreparePhase / ExecutePhase / Re-plan / Finalize` 都读取全量 `runtime memory`
-25. 当前阶段不引入按阶段裁剪的 `memory view`
+    - `action`
+33. 当前 `PreparePhase / ExecutePhase / Finalize` 都读取全量 `runtime memory`
+34. 当前阶段不引入按阶段裁剪的 `memory view`
 
 ## 5. 总实现顺序表
 

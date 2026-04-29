@@ -18,8 +18,8 @@
 
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，后续增量设计模块正在持续补充
-- 开发状态：已完成模块 01 ~ 模块 21
-- 当前重点：模块 21 已结项，准备进入下一模块讨论
+- 开发状态：已完成模块 01 ~ 模块 22
+- 当前重点：模块 22 已结项，待进入下一模块讨论
 
 ---
 
@@ -68,19 +68,6 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
-- 任务 04：已完成
-- 任务 05：已完成
-- 任务 06：已完成
-- 任务 02：已完成
-- 任务 03：已完成
-- 任务 04：已完成
-- 任务 02：已完成
-- 任务 03：已完成
-- 任务 04：已完成
-- 任务 05：已完成
-- 任务 06：已完成
-- 任务 02：已完成
-- 任务 03：已完成
 
 ### 模块 04：Task Graph Patch 与最小 Store 骨架
 
@@ -100,9 +87,6 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
-- 任务 05：已完成
-- 任务 06：已完成
-- 任务 07：已完成
 
 ### 模块 05：RuntimeHost 最小主链骨架
 
@@ -438,6 +422,11 @@
 当前进度：
 
 - 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
 
 ### 模块 21：Completion Evaluator / Reflexion 正式成型
 
@@ -457,12 +446,258 @@
 当前进度：
 
 - 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+
+### 模块 22：Replan 控制链路正式成型
+
+- 模块目标：
+  - 给当前 runtime 补上正式 `replan` 控制链路
+  - 明确 `replan` 在整体运行框架中的位置与边界
+  - 打通 `solver / evaluator / verifier` 上抛信号到 `prepare` 回流之间的最小主链
+  - 暂时不提前进入复杂 `replan` 判定策略与多种回流策略
+- 已定子任务：
+  - 任务 01：对齐当前设计稿与代码现状，收口 `replan` 第一版模块目标，并修订旧表述
+  - 任务 02：确定 `request_replan` 的正式触发来源与最小承载结构
+  - 任务 03：确定 `request_replan -> prepare` 的回流流程、状态变化与上下文保留边界
+  - 任务 04：确定 run 级 `Reflexion` 与 node 级 `Reflexion` 的动作边界，以及第一版暂不实现范围
+  - 任务 05：实现最小 `request_replan` 控制链路并补测试
+  - 任务 06：补实现文档与开发进度
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 094：完成模块 22 的任务 05 / 06 request_replan 主链接线、回归与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 22 的任务 05、任务 06，正式落地 `request_replan` 状态对象、node/run 两层 `Reflexion` 的主链 prompt 接线、execute/finalize 回流链路、相关测试与实现文档收尾
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/finalize/reflexion.py`
+  - 已更新：
+    - `runtime-v2/src/rtv2/state/models.py`
+    - `runtime-v2/src/rtv2/prompting/models.py`
+    - `runtime-v2/src/rtv2/prompting/assembler.py`
+    - `runtime-v2/src/rtv2/prompting/__init__.py`
+    - `runtime-v2/src/rtv2/solver/reflexion.py`
+    - `runtime-v2/src/rtv2/solver/runtime_solver.py`
+    - `runtime-v2/src/rtv2/finalize/models.py`
+    - `runtime-v2/src/rtv2/finalize/__init__.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_run_identity.py`
+    - `runtime-v2/tests/test_prompting.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_host.py`
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/implementation/solver.md`
+    - `runtime-v2/implementation/finalize.md`
+    - `runtime-v2/implementation/prompting.md`
+    - `runtime-v2/development-progress.md`
+  - 已正式落地：
+    - `RequestReplan`
+    - `RequestReplanSource`
+    - `FinalizeReflexion`
+    - `RunReflexionAction / RunReflexionInput / RunReflexionResult`
+    - `NodeReflexionPromptInput`
+    - `RunReflexionPromptInput`
+    - `prepare` 对 `request_replan` 的动态注入
+    - node/run 两层 `Reflexion` 读取统一 runtime memory 上下文
+    - `execute -> request_replan -> prepare -> execute` 回流
+    - `finalize verification fail -> run_reflexion -> request_replan -> prepare -> execute -> finalize` 回流
+  - 已确认当前最小 replan 链路规则为：
+    - `request_replan` 正式挂在 `runtime_state`
+    - replan 当前不新开新的 `RunContext`
+    - `prepare` 成功消费后清空 `request_replan`
+    - node 级 `request_replan` 上抬时，当前 node 会先正式收为 `failed`
+- 验证结果：
+  - 已执行：
+    - `pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_run_identity.py -q`
+    - `pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_models.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_processor.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_sqlite_store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_tools.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py -q`
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/runtime_solver.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/reflexion.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/reflexion.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/prompting/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/prompting/assembler.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/state/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/models.py`
+  - 结果：
+    - `60 passed`
+    - `41 passed`
+    - `py_compile passed`
+- 遗留问题：
+  - `prepare` 在 replan 场景下当前仍以“追加/修改 patch”为主，尚未引入更复杂的 graph 替换策略
+  - run 级 `Reflexion` 当前只覆盖 `final_verification_fail`
+  - evaluator 当前尚未接入同一套主链 prompt 结构
+- 下一步：
+  - 模块 22 当前阶段可视为结项，可进入下一个模块讨论
+
+#### 记录 092：完成模块 22 的任务 04 两层 Reflexion 动作边界与暂不实现范围定稿
+
+- 状态：已完成
+- 范围：完成模块 22 的任务 04，正式收口 run 级 `Reflexion` 与 node 级 `Reflexion` 的动作边界，以及第一版暂不实现范围，不进入代码实现
+- 结果：
+  - 已确认 `node_reflexion` 只归 `Solver / ExecutePhase` 使用
+  - 已确认 `node_reflexion` 第一版只处理：
+    - completion evaluator fail
+    - step blocked
+    - step failed
+  - 已确认 `node_reflexion` 第一版动作固定为：
+    - `retry_current_node`
+    - `mark_blocked`
+    - `mark_failed`
+    - `request_replan`
+  - 已确认 `run_reflexion` 只归 `FinalizePhase` 中的 verification fail 使用
+  - 已确认 `run_reflexion` 第一版只处理：
+    - `final_verification_fail`
+  - 已确认 `run_reflexion` 第一版动作固定为：
+    - `request_replan`
+    - `finish_failed`
+  - 已确认 `run_reflexion` 不允许输出 node 级动作
+  - 已确认两层当前都归入 `Reflexion` 语义族，但动作集合按层级分开，不强行统一成单个动作枚举
+  - 已确认第一版当前不进入：
+    - 通用多场景 run 级 `Reflexion`
+    - node / run 两层统一动作枚举
+    - `abandoned` 与 `request_replan` 的共存语义
+    - `request_replan` 的 memory 深度裁剪策略
+    - `PreparePhase` 内部针对 `request_replan` 的特殊多轮机制
+    - `retry_finalize` 等额外 run 级动作
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/runtime-v2-12-structure-implementation-plan-design-v1.md`
+- 遗留问题：
+  - 模块 22 的具体代码落点与第一版实现裁剪仍待模块 22 任务 05 开始前最终收口
+- 下一步：
+  - 进入模块 22 的任务 05，开始实现最小 `request_replan` 控制链路并补测试
+
+#### 记录 093：模块 22 任务 05 开始前补充 Reflexion 实现口径
+
+- 状态：已完成
+- 范围：在模块 22 任务 05 开始前，补充 `Reflexion` 的实现口径约束，明确其 prompt 和 memory 接线方式，不进入代码实现
+- 结果：
+  - 已确认 `Reflexion` 虽不作为独立 phase，但应接入主链统一 prompt 架构
+  - 已确认 `node_reflexion` 与 `run_reflexion` 的 prompt 都采用三段结构：
+    - `base prompt`
+    - `phase prompt`
+    - `dynamic injection`
+  - 已确认两层 `Reflexion` 当前都应读取统一 runtime memory 上下文
+  - 已确认 `ReflexionInput` 继续保留，但作为 prompt 组装输入，而不是直接替代完整上下文
+  - 已确认第一版允许为 `node_reflexion` 与 `run_reflexion` 分别定义独立 prompt input 结构
+  - 已确认第一版不新增独立 `RunPhase.REFLEXION`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/runtime-v2-12-structure-implementation-plan-design-v1.md`
+
+#### 记录 091：完成模块 22 的任务 03 request_replan 到 PreparePhase 的回流流程定稿
+
+- 状态：已完成
+- 范围：完成模块 22 的任务 03，正式收口 `request_replan -> prepare` 的回流流程、状态变化与上下文保留边界，不进入代码实现
+- 结果：
+  - 已确认 `request_replan` 第一版当前不新开新的 `RunContext`
+  - 已确认回流直接复用当前 run 内已有正式状态
+  - 已确认当 `request_replan` 被消费时：
+    - orchestrator 将 `current_phase` 切回 `PREPARE`
+    - 然后重新执行一次 `run_prepare_phase(...)`
+  - 已确认 `PreparePhase` 在 replan 场景下读取：
+    - 原 `user_input`
+    - 当前 `goal`
+    - 当前 graph
+    - 全量 runtime memory
+    - 当前 `request_replan`
+  - 已确认第一版当前不先清空 graph
+  - 已确认 graph 继续通过新的 `prepare_result.patch` 在当前 graph 基础上修改
+  - 已确认新的 `prepare_result` 会覆盖旧的正式 `prepare_result`
+  - 已确认 `request_replan` 作为一次性控制信息存在
+  - 已确认当 `PreparePhase` 成功消费后，应从正式状态中清空
+  - 已确认随后主链重新进入 `ExecutePhase`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/runtime-v2-12-structure-implementation-plan-design-v1.md`
+- 遗留问题：
+  - run 级 `Reflexion` 与 node 级 `Reflexion` 的动作边界和最终实现分层仍待模块 22 任务 04 收口
+  - `request_replan` 的具体正式落点仍待实现时最终定型
+- 下一步：
+  - 进入模块 22 的任务 04，确定 run 级 `Reflexion` 与 node 级 `Reflexion` 的动作边界，以及第一版暂不实现范围
+
+#### 记录 090：完成模块 22 的任务 02 request_replan 触发来源与最小承载结构定稿
+
+- 状态：已完成
+- 范围：完成模块 22 的任务 02，正式收口 `request_replan` 的触发来源与最小承载结构，不进入代码实现
+- 结果：
+  - 已确认 `request_replan` 第一版只允许由两类 `Reflexion` 产出：
+    - `node_reflexion`
+    - `run_reflexion`
+  - 已确认 `node_reflexion` 对应：
+    - `Solver` 内部在 node 级失败路径上的 `Reflexion.action = request_replan`
+  - 已确认 `run_reflexion` 对应：
+    - final verification fail 后 run 级 `Reflexion.action = request_replan`
+  - 已确认第一版为 `request_replan` 保留一个轻量正式承载结构
+  - 已确认其最小字段收口为：
+    - `source`
+    - `node_id`
+    - `reason`
+    - `created_at`
+  - 已确认 `node_id` 在 `run_reflexion` 场景下允许为空
+  - 已确认第一版不在该结构中复制：
+    - graph snapshot
+    - runtime memory snapshot
+    - verifier 原始结果全文
+    - step 全轨迹
+  - 已确认真正的重规划上下文仍统一来自当前 `RunContext`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/runtime-v2-12-structure-implementation-plan-design-v1.md`
+- 遗留问题：
+  - `request_replan -> prepare` 的具体状态回流方式仍待模块 22 任务 03 收口
+  - run 级 `Reflexion` 与 node 级 `Reflexion` 的动作边界和最终实现分层仍待模块 22 任务 04 收口
+- 下一步：
+  - 进入模块 22 的任务 03，确定 `request_replan -> prepare` 的回流流程、状态变化与上下文保留边界
+
+#### 记录 089：完成模块 22 的任务 01 Replan 第一版目标对齐与旧表述修订
+
+- 状态：已完成
+- 范围：完成模块 22 的任务 01，对齐当前设计稿与代码现状，收口 `replan` 第一版模块目标、`final verification fail` 的处理方向，以及相关旧表述修订，不进入代码实现
+- 结果：
+  - 已确认外层独立 `replan` 判定器当前取消
+  - 已确认 `replan` 第一版不再作为独立组件存在，而是 `Reflexion` 可产出的统一动作
+  - 已确认执行链路内部仍保留 node 级 `Reflexion.action`
+  - 已确认 `solver` 内部若产出 `request_replan`
+    - 控制链路向上抬升
+    - 后续统一回到 `PreparePhase`
+  - 已确认 `final verification fail` 不再直接回退 `execute`
+  - 已确认 `final verification fail` 先进入 run 级 `Reflexion`
+  - 已确认 run 级 `Reflexion` 第一版动作只保留：
+    - `request_replan`
+    - `finish_failed`
+  - 已确认两种动作语义为：
+    - `request_replan` -> 回到 `PreparePhase`
+    - `finish_failed` -> 当前 run 直接失败结束
+  - 已确认真正的重规划始终由 `PreparePhase` 执行，而不是由 `Reflexion` 直接执行
+  - 已同步修正 `S13` 与总设计书中的旧口径：
+    - 删除外层 `replan gate` 表述
+    - 删除 `replan_signal` 建议信号表述
+    - 删除 `verification fail -> execute` 的旧回退口径
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+  - `runtime-v2/design/runtime-v2-12-structure-implementation-plan-design-v1.md`
+- 遗留问题：
+  - `request_replan` 的正式触发来源与最小承载结构仍待模块 22 任务 02 收口
+  - `request_replan -> prepare` 的具体状态回流方式仍待模块 22 任务 03 收口
+- 下一步：
+  - 进入模块 22 的任务 02，确定 `request_replan` 的正式触发来源与最小承载结构
 
 #### 记录 088：完成模块 21 的任务 05 / 06 Evaluator / Reflexion / Solver 接线、回归与文档收尾
 

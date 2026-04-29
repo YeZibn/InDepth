@@ -53,6 +53,7 @@ class PreparePromptInput:
     runtime_memory_text: str = ""
     capability_text: str = ""
     finalize_return_input: str = ""
+    request_replan_text: str = ""
 
 
 @dataclass(slots=True)
@@ -64,3 +65,25 @@ class FinalizePromptInput:
     graph_snapshot_text: str = ""
     runtime_memory_text: str = ""
     capability_text: str = ""
+
+
+@dataclass(slots=True)
+class NodeReflexionPromptInput:
+    """Formal input consumed by node-level reflexion prompt assembly."""
+
+    node_id: str
+    node_name: str
+    trigger_type: str
+    latest_summary: str
+    issues: list[str] = field(default_factory=list)
+    runtime_memory_text: str = ""
+
+
+@dataclass(slots=True)
+class RunReflexionPromptInput:
+    """Formal input consumed by run-level reflexion prompt assembly."""
+
+    trigger_type: str
+    latest_summary: str
+    issues: list[str] = field(default_factory=list)
+    runtime_memory_text: str = ""

@@ -6,7 +6,15 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from rtv2.finalize import FinalizeGenerationResult, Handoff, RuntimeVerifier, VerificationResultStatus
+from rtv2.finalize import (
+    FinalizeGenerationResult,
+    FinalizeReflexion,
+    Handoff,
+    RunReflexionAction,
+    RunReflexionInput,
+    RuntimeVerifier,
+    VerificationResultStatus,
+)
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.memory import (
     RuntimeMemoryEntry,
@@ -25,7 +33,9 @@ from rtv2.prompting import (
     ExecutionPromptAssembler,
     ExecutionPromptInput,
     FinalizePromptInput,
+    NodeReflexionPromptInput,
     PreparePromptInput,
+    RunReflexionPromptInput,
 )
 from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
 from rtv2.solver import CompletionCheckInput, CompletionEvaluator, ReActStepRunner, RuntimeReflexion, RuntimeSolver
@@ -37,6 +47,8 @@ from rtv2.state.models import (
     RunIdentity,
     RunLifecycle,
     RunPhase,
+    RequestReplan,
+    RequestReplanSource,
     RuntimeState,
 )
 from rtv2.task_graph.store import TaskGraphStore
@@ -71,6 +83,7 @@ class RuntimeOrchestrator:
         finalize_model_provider: ModelProvider | None = None,
         finalize_generation_config: GenerationConfig | None = None,
         runtime_verifier: RuntimeVerifier | None = None,
+        finalize_reflexion: FinalizeReflexion | None = None,
         verifier_model_provider: ModelProvider | None = None,
         verifier_generation_config: GenerationConfig | None = None,
         completion_evaluator: CompletionEvaluator | None = None,
@@ -111,6 +124,11 @@ class RuntimeOrchestrator:
             model_provider=verifier_model_provider,
             generation_config=verifier_generation_config,
             max_rounds=20,
+        )
+        self.finalize_reflexion = finalize_reflexion or FinalizeReflexion(
+            model_provider=reflexion_model_provider,
+            generation_config=reflexion_generation_config,
+            max_rounds=10,
         )
         self.completion_evaluator = completion_evaluator or CompletionEvaluator(
             model_provider=completion_evaluator_model_provider,
@@ -191,7 +209,7 @@ class RuntimeOrchestrator:
         if context.run_lifecycle.current_phase is not RunPhase.PREPARE:
             raise ValueError("Prepare phase requires current_phase=PREPARE")
 
-        if context.domain_state.task_graph_state.nodes:
+        if context.domain_state.task_graph_state.nodes and context.runtime_state.request_replan is None:
             raise ValueError("Prepare phase currently only supports empty-graph initialization")
 
         self._append_run_user_input_entry(context)
@@ -207,6 +225,7 @@ class RuntimeOrchestrator:
         context.runtime_state.prepare_result = prepare_result
         self._apply_graph_patch(context, prepare_result.patch)
         self._append_prepare_result_entry(context, prepare_result)
+        context.runtime_state.request_replan = None
         context.run_lifecycle.current_phase = RunPhase.EXECUTE
         return context
 
@@ -228,15 +247,26 @@ class RuntimeOrchestrator:
                 node=selected_node,
                 build_step_prompt=self.build_react_step_prompt,
                 build_completion_check_input=self.build_completion_check_input,
+                build_reflexion_prompt=self.build_node_reflexion_prompt,
                 create_step_id=self._create_step_id,
             )
             self._apply_solver_result(context, solver_result)
             if solver_result.control_signal is SolverControlSignal.REQUEST_REPLAN:
-                self._apply_graph_patch(
+                self._store_request_replan(
                     context,
-                    TaskGraphPatch(graph_status=TaskGraphStatus.BLOCKED, active_node_id=""),
+                    RequestReplan(
+                        source=RequestReplanSource.NODE_REFLEXION,
+                        node_id=selected_node.node_id,
+                        reason=(
+                            (solver_result.final_step_result.reason if solver_result.final_step_result is not None else "")
+                            or "Node reflexion requested replan."
+                        ),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ),
                 )
-                break
+                context.run_lifecycle.current_phase = RunPhase.PREPARE
+                context = self.run_prepare_phase(context)
+                continue
 
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
@@ -271,6 +301,31 @@ class RuntimeOrchestrator:
                 runtime_state="completed",
                 output_text=handoff.final_output,
             )
+
+        context.runtime_state.finalize_return_input = self._build_finalize_return_input(verification_result)
+        run_reflexion_input = RunReflexionInput(
+            trigger_type="final_verification_fail",
+            latest_summary=verification_result.summary,
+            issues=verification_result.issues,
+        )
+        run_reflexion_result = self.finalize_reflexion.reflect(
+            run_reflexion_input,
+            self.build_run_reflexion_prompt(context, run_reflexion_input),
+        )
+        if run_reflexion_result.action is RunReflexionAction.REQUEST_REPLAN:
+            self._store_request_replan(
+                context,
+                RequestReplan(
+                    source=RequestReplanSource.RUN_REFLEXION,
+                    node_id="",
+                    reason=run_reflexion_result.summary,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            context.run_lifecycle.current_phase = RunPhase.PREPARE
+            context = self.run_prepare_phase(context)
+            context = self.run_execute_phase(context)
+            return self.run_finalize_phase(context)
 
         context.run_lifecycle.result_status = "fail"
         context.run_lifecycle.stop_reason = "final_verification_failed"
@@ -441,6 +496,7 @@ class RuntimeOrchestrator:
                 runtime_memory_text=prompt_context.prompt_context_text,
                 capability_text=self._build_tool_capability_text(),
                 finalize_return_input=self._build_finalize_return_input_text(context),
+                request_replan_text=self._build_request_replan_text(context),
             )
         )
 
@@ -466,6 +522,50 @@ class RuntimeOrchestrator:
                 capability_text=self._build_tool_capability_text(),
             )
         )
+
+    def build_node_reflexion_prompt(self, context: RunContext, reflexion_input) -> str:
+        prompt_context = self.memory_processor.build_prompt_context_text(
+            RuntimeMemoryProcessorInput(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                current_phase=context.run_lifecycle.current_phase.value,
+                active_node_id=reflexion_input.node_id,
+                user_input=context.run_identity.user_input,
+                compression_state=context.runtime_state.compression_state,
+            )
+        )
+        prompt = self.prompt_assembler.build_node_reflexion_prompt(
+            NodeReflexionPromptInput(
+                node_id=reflexion_input.node_id,
+                node_name=reflexion_input.node_name,
+                trigger_type=reflexion_input.trigger_type,
+                latest_summary=reflexion_input.latest_summary,
+                issues=list(reflexion_input.issues),
+                runtime_memory_text=prompt_context.prompt_context_text,
+            )
+        )
+        return self.render_execution_prompt(prompt)
+
+    def build_run_reflexion_prompt(self, context: RunContext, reflexion_input: RunReflexionInput) -> str:
+        prompt_context = self.memory_processor.build_prompt_context_text(
+            RuntimeMemoryProcessorInput(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                current_phase=context.run_lifecycle.current_phase.value,
+                active_node_id=context.runtime_state.active_node_id,
+                user_input=context.run_identity.user_input,
+                compression_state=context.runtime_state.compression_state,
+            )
+        )
+        prompt = self.prompt_assembler.build_run_reflexion_prompt(
+            RunReflexionPromptInput(
+                trigger_type=reflexion_input.trigger_type,
+                latest_summary=reflexion_input.latest_summary,
+                issues=list(reflexion_input.issues),
+                runtime_memory_text=prompt_context.prompt_context_text,
+            )
+        )
+        return self.render_execution_prompt(prompt)
 
     def build_completion_check_input(
         self,
@@ -638,6 +738,29 @@ class RuntimeOrchestrator:
         return "\n".join(lines)
 
     @staticmethod
+    def _build_request_replan_text(context: RunContext) -> str:
+        request_replan = context.runtime_state.request_replan
+        if request_replan is None:
+            return ""
+        return "\n".join(
+            [
+                f"Source: {request_replan.source.value}",
+                f"Node id: {request_replan.node_id or '(empty)'}",
+                f"Reason: {request_replan.reason or '(empty)'}",
+                f"Created at: {request_replan.created_at or '(empty)'}",
+            ]
+        )
+
+    @staticmethod
+    def _build_finalize_return_input(verification_result) -> object:
+        from rtv2.state.models import FinalizeReturnInput
+
+        return FinalizeReturnInput(
+            verification_summary=verification_result.summary,
+            verification_issues=list(verification_result.issues),
+        )
+
+    @staticmethod
     def _render_result_refs(result_refs: list) -> list[str]:
         rendered: list[str] = []
         for result_ref in result_refs:
@@ -753,7 +876,7 @@ class RuntimeOrchestrator:
         if not goal:
             raise RuntimeError("Prepare fallback requires a non-empty goal or user input")
 
-        node_id = self._create_node_id()
+        node_id = self._create_node_id_for_graph(context.domain_state.task_graph_state)
         patch = TaskGraphPatch(
             new_nodes=[
                 TaskGraphNode(
@@ -768,6 +891,7 @@ class RuntimeOrchestrator:
                 )
             ],
             active_node_id=node_id,
+            graph_status=TaskGraphStatus.ACTIVE,
         )
         return PrepareResult(
             goal=goal,
@@ -776,8 +900,6 @@ class RuntimeOrchestrator:
 
     def _normalize_prepare_payload(self, context: RunContext, planner_output: ModelOutput) -> PrepareResult:
         payload = self._load_prepare_payload(planner_output.content)
-        if context.domain_state.task_graph_state.nodes:
-            raise ValueError("Prepare payload normalization currently supports empty graphs only")
 
         goal = str(payload.get("goal", "") or "").strip()
         if not goal:
@@ -838,7 +960,7 @@ class RuntimeOrchestrator:
                     raise ValueError(f"Prepare node dependency ref is required for ref: {ref}")
                 dependencies.append(dependency_ref)
 
-            node_id = self._create_node_id()
+            node_id = self._create_node_id_for_graph(context.domain_state.task_graph_state, ref_to_node_id.values())
             ref_to_node_id[ref] = node_id
             normalized_nodes.append(
                 (
@@ -890,8 +1012,26 @@ class RuntimeOrchestrator:
             patch=TaskGraphPatch(
                 new_nodes=final_nodes,
                 active_node_id=active_node_id,
+                graph_status=TaskGraphStatus.ACTIVE,
             ),
         )
+
+    @staticmethod
+    def _store_request_replan(context: RunContext, request_replan: RequestReplan) -> None:
+        context.runtime_state.request_replan = request_replan
+
+    def _create_node_id_for_graph(
+        self,
+        graph_state: TaskGraphState,
+        pending_node_ids=None,
+    ) -> str:
+        existing_ids = {node.node_id for node in graph_state.nodes}
+        if pending_node_ids is not None:
+            existing_ids.update(str(node_id) for node_id in pending_node_ids)
+        while True:
+            node_id = self._create_node_id()
+            if node_id not in existing_ids:
+                return node_id
 
     @staticmethod
     def _load_prepare_payload(raw_text: str) -> dict[str, object]:

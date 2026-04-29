@@ -18,6 +18,8 @@
 
 1. [runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
 2. [react_step.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/react_step.py)
+3. [solver/reflexion.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/reflexion.py)
+4. [finalize/reflexion.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/reflexion.py)
 
 ## 当前正式结构
 
@@ -36,6 +38,9 @@
 1. `ExecutionPromptInput`
 2. `ExecutionNodePromptContext`
 3. `PreparePromptInput`
+4. `FinalizePromptInput`
+5. `NodeReflexionPromptInput`
+6. `RunReflexionPromptInput`
 
 ## 当前责任链
 
@@ -53,6 +58,7 @@
    - `ExecutionPrompt`
 4. `RuntimeOrchestrator` 当前再把三段 prompt block 渲染为单个 `step_prompt` 字符串
 5. `ReActStepRunner` 继续消费该 `step_prompt` 字符串
+6. node/run 两层 `Reflexion` 也改为消费渲染后的三段 prompt 字符串
 
 这意味着：
 
@@ -81,7 +87,9 @@
 
 1. `EXECUTE` 已有正式最小文本
 2. `PREPARE` 已有正式最小 planner contract
-3. `FINALIZE` 仍为占位 stub
+3. `FINALIZE` 已有正式最小 closeout contract
+4. `node_reflexion` 已有正式最小动作 contract
+5. `run_reflexion` 已有正式最小动作 contract
 
 ### `dynamic_injection`
 
@@ -114,6 +122,18 @@
 4. task 级 `runtime_memory_text`
 5. capability 文本
 6. `finalize_return_input`
+7. `request_replan`
+
+当前 `Reflexion` 侧也已接入主链 prompt 装配：
+
+1. `node_reflexion`
+   - 注入 node 失败锚点
+   - 注入 issues
+   - 注入 task 级 `runtime_memory_text`
+2. `run_reflexion`
+   - 注入 final verification fail 摘要
+   - 注入 issues
+   - 注入 task 级 `runtime_memory_text`
 
 ## 当前实现边界
 
@@ -127,11 +147,13 @@
 4. orchestrator 对 prompt 模块的正式消费
 5. `ReActStepRunner` 对渲染后 `step_prompt` 的正式消费口径
 6. `PreparePhase` 的正式 prompt 装配入口
+7. `FinalizePhase` 的正式 prompt 装配入口
+8. node/run 两层 `Reflexion` 的正式 prompt 装配入口
 
 尚未完成：
 
-1. `FINALIZE` 的正式 prompt 文本
-2. evaluator / reflexion / replan 的 prompt 模块
+1. evaluator 的正式 prompt 模块
+2. 更细粒度的 `replan` prompt 专用视角
 3. message 级 prompt 输入
 4. context budget / compression 感知下的 prompt 裁剪
 
@@ -147,6 +169,6 @@
 
 1. 三段 prompt block 生成
 2. 空字段渲染
-3. `PREPARE` planner contract 与 `FINALIZE` stub 行为
+3. `PREPARE / FINALIZE / Reflexion` prompt contract 行为
 4. orchestrator 主链接入
 5. runner 消费渲染后 `step_prompt`

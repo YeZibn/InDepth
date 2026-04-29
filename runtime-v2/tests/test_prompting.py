@@ -13,7 +13,9 @@ from rtv2.prompting import (
     ExecutionPromptAssembler,
     ExecutionPromptInput,
     FinalizePromptInput,
+    NodeReflexionPromptInput,
     PreparePromptInput,
+    RunReflexionPromptInput,
 )
 from rtv2.state.models import RunPhase
 
@@ -112,6 +114,57 @@ class ExecutionPromptAssemblerTests(unittest.TestCase):
         self.assertIn("Goal: Deliver the final result.", finalize_prompt.dynamic_injection)
         self.assertIn("## Current Graph Snapshot", finalize_prompt.dynamic_injection)
         self.assertIn("## Runtime Memory", finalize_prompt.dynamic_injection)
+
+    def test_build_prepare_prompt_includes_request_replan_when_present(self):
+        assembler = ExecutionPromptAssembler()
+
+        prepare_prompt = assembler.build_prepare_prompt(
+            PreparePromptInput(
+                user_input="Replan the runtime work.",
+                graph_snapshot_text="Graph id: graph-1",
+                runtime_memory_text="## Task task-1\n[user] prior context",
+                request_replan_text="Source: node_reflexion\nReason: Current path is exhausted.",
+            )
+        )
+
+        self.assertIn("## Request Replan", prepare_prompt.dynamic_injection)
+        self.assertIn("Current path is exhausted.", prepare_prompt.dynamic_injection)
+
+    def test_build_node_reflexion_prompt_returns_three_blocks(self):
+        assembler = ExecutionPromptAssembler()
+
+        prompt = assembler.build_node_reflexion_prompt(
+            NodeReflexionPromptInput(
+                node_id="node-1",
+                node_name="Execute work",
+                trigger_type="failed",
+                latest_summary="The latest attempt failed.",
+                issues=["tool result was insufficient"],
+                runtime_memory_text="## Run run-1\n[assistant] prior reflexion",
+            )
+        )
+
+        self.assertIn("main runtime-v2 agent executor", prompt.base_prompt)
+        self.assertIn("Current chain: node reflexion inside execute.", prompt.phase_prompt)
+        self.assertIn("Node id: node-1", prompt.dynamic_injection)
+        self.assertIn("## Runtime Memory", prompt.dynamic_injection)
+
+    def test_build_run_reflexion_prompt_returns_three_blocks(self):
+        assembler = ExecutionPromptAssembler()
+
+        prompt = assembler.build_run_reflexion_prompt(
+            RunReflexionPromptInput(
+                trigger_type="final_verification_fail",
+                latest_summary="Final output missed a required claim.",
+                issues=["missing required claim"],
+                runtime_memory_text="## Run run-1\n[system] prior finalize context",
+            )
+        )
+
+        self.assertIn("main runtime-v2 agent executor", prompt.base_prompt)
+        self.assertIn("Current chain: run reflexion after final verification fail.", prompt.phase_prompt)
+        self.assertIn("Trigger type: final_verification_fail", prompt.dynamic_injection)
+        self.assertIn("## Runtime Memory", prompt.dynamic_injection)
 
 
 if __name__ == "__main__":

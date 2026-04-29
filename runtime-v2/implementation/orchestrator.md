@@ -15,6 +15,7 @@
 7. `prepare` planner payload -> `PrepareResult.patch` 规范化与回写
 8. `SolverResult` 消费与 graph 终态收口
 9. finalize generator 与 verifier 编排
+10. `request_replan` 控制链路与主链回流
 
 对应代码：
 
@@ -94,6 +95,7 @@
    - 调用 `RuntimeSolver.solve_current_node(...)`
    - 消费 `SolverResult.final_step_result.patch`
    - 刷新 `runtime_state.active_node_id`
+   - 若收到 `request_replan`，则回流 `PREPARE`
    - 若无可执行 node，则收口 graph 终态
    - 推进到 `FINALIZE`
    - 写入：
@@ -105,7 +107,8 @@
    - 调 finalize generator 生成 `final_output / graph_summary`
    - 组装 `Handoff`
    - 调独立 `RuntimeVerifier`
-   - 根据 verifier verdict 收口为 `HostRunResult`
+   - verifier `fail` 时先过 run 级 `Reflexion`
+   - 根据最终动作收口为 `HostRunResult` 或回流 `PREPARE`
 4. phase 顺序不对时，当前显式抛错
 
 ## 当前边界
@@ -113,9 +116,9 @@
 当前 orchestrator 层明确不负责：
 
 1. prepare 内多轮循环
-2. 非空图增量 planning
+2. 非空图下更复杂的替换式 planning 策略
 3. finalize 内 tool loop
-4. 完整 replan 回流
+4. `abandoned` 与 replan 的共存语义
 5. phase 间复杂闭环
 
 这些内容会在后续模块继续落地。
@@ -159,6 +162,7 @@
 2. solver 负责 node 级循环
 3. graph patch 继续只从 `StepResult.patch` 进入 graph store
 4. stale `active_node_id` 当前会被忽略，而不是卡死在已完成 node 上
+5. solver 若上抛 `request_replan`，orchestrator 会写入正式 `request_replan` 状态并回流 `prepare`
 
 ## `select_active_node(...)` 的当前规则补充
 
@@ -197,6 +201,12 @@
    - `stop_reason = "finalize_passed"`
    - host result 返回 `completed + final_output`
 6. verifier verdict 为 `fail` 时：
+   - 先写入 `finalize_return_input`
+   - 再进入 run 级 `Reflexion`
+7. run 级 `Reflexion.action = request_replan` 时：
+   - 写入正式 `request_replan`
+   - 回流 `prepare -> execute -> finalize`
+8. run 级 `Reflexion.action = finish_failed` 时：
    - `result_status = "fail"`
    - `stop_reason = "final_verification_failed"`
    - host result 返回 `failed + empty output`
@@ -205,7 +215,23 @@
 
 1. finalize generator 与 verifier 已经分开挂载
 2. verifier 是独立边界对象，不复用 execute 当前的 `ReActStepRunner`
-3. verification fail 第一版当前直接结束，不回退 execute，也不接 replan
+3. verification fail 不再直接回退 execute
+4. verification fail 第一版通过 run 级 `Reflexion` 决定：
+   - `request_replan`
+   - `finish_failed`
+
+## 当前 replan 回流
+
+当前 orchestrator 已正式接入最小 `request_replan` 回流。
+
+当前规则如下：
+
+1. `request_replan` 正式挂在 `runtime_state`
+2. 第一次 `prepare` 仍支持空图初始化
+3. replan 场景下允许在非空图上再次运行 `prepare`
+4. 当前不先清空 graph
+5. graph 继续通过新的 `prepare_result.patch` 在当前 graph 基础上修改
+6. `prepare` 成功消费后会清空 `runtime_state.request_replan`
 
 ## prepare fallback 的当前工程语义
 
@@ -221,5 +247,5 @@
 orchestrator 层下一步预计进入：
 
 1. prepare payload 到 patch 的校验细化与错误分类增强
-2. 非空图 / replan 场景下的 prepare 扩展
-3. finalize / verification 的回流与 replan 闭环
+2. 非空图 / replan 场景下更复杂的 prepare patch 策略
+3. finalize / verification 的更细分 run-level closeout 动作

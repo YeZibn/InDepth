@@ -14,6 +14,8 @@ from rtv2.state.models import (
     DomainState,
     ExternalSignalState,
     FinalizeReturnInput,
+    RequestReplan,
+    RequestReplanSource,
     RunContext,
     RunIdentity,
     RunLifecycle,
@@ -96,6 +98,12 @@ class RunIdentityTests(unittest.TestCase):
                 verification_summary="Verifier found a missing test.",
                 verification_issues=["Add integration coverage for resume replacement flow."],
             ),
+            request_replan=RequestReplan(
+                source=RequestReplanSource.NODE_REFLEXION,
+                node_id="node-1",
+                reason="Current node path is exhausted.",
+                created_at="2026-04-30T10:00:00Z",
+            ),
         )
 
         self.assertEqual(runtime_state.active_node_id, "node-1")
@@ -109,6 +117,7 @@ class RunIdentityTests(unittest.TestCase):
             runtime_state.finalize_return_input.verification_issues,
             ["Add integration coverage for resume replacement flow."],
         )
+        self.assertEqual(runtime_state.request_replan.source, RequestReplanSource.NODE_REFLEXION)
 
     def test_runtime_state_defaults_to_empty_optional_state(self):
         runtime_state = RuntimeState()
@@ -117,6 +126,7 @@ class RunIdentityTests(unittest.TestCase):
         self.assertIsNone(runtime_state.compression_state)
         self.assertIsNone(runtime_state.external_signal_state)
         self.assertIsNone(runtime_state.finalize_return_input)
+        self.assertIsNone(runtime_state.request_replan)
 
     def test_domain_state_keeps_task_graph_and_optional_verification_state(self):
         graph_state = {"graph_id": "graph-1", "graph_status": "active"}

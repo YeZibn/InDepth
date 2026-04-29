@@ -11,13 +11,16 @@
 3. `VerificationResult`
 4. `RuntimeVerifier`
 5. `run_finalize_phase(...)` 的真实收口链
+6. `FinalizeReflexion`
+7. verification fail 后的最小 replan 回流
 
 对应代码：
 
 1. [src/rtv2/finalize/models.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/models.py)
 2. [src/rtv2/finalize/verifier.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/verifier.py)
-3. [src/rtv2/orchestrator/runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
-4. [tests/test_runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py)
+3. [src/rtv2/finalize/reflexion.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/reflexion.py)
+4. [src/rtv2/orchestrator/runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py)
+5. [tests/test_runtime_orchestrator.py](/Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py)
 
 ## 当前主流程
 
@@ -30,7 +33,8 @@
    - `graph_summary`
 4. 组装 `Handoff`
 5. 调 `RuntimeVerifier.verify(...)`
-6. 根据 `VerificationResult` 收口为最终 `HostRunResult`
+6. verification `fail` 时进入 `FinalizeReflexion`
+7. 根据最终动作收口为最终 `HostRunResult` 或回流 `prepare`
 
 ## Finalize Generator
 
@@ -92,6 +96,19 @@
    - `thought`
 3. verifier 再进入下一轮受控继续验证
 
+## FinalizeReflexion
+
+当前 `FinalizeReflexion` 是 run 级 reflexion helper。
+
+当前特征如下：
+
+1. 只在 `final_verification_fail` 后触发
+2. 复用统一 judge 基座
+3. 读取主链三段 prompt 与 runtime memory 上下文
+4. 第一版动作只允许：
+   - `request_replan`
+   - `finish_failed`
+
 ## 收口规则
 
 ### verification pass
@@ -107,16 +124,22 @@
 
 当前收口为：
 
-1. `run_lifecycle.result_status = "fail"`
-2. `run_lifecycle.stop_reason = "final_verification_failed"`
-3. `HostRunResult.runtime_state = "failed"`
-4. `HostRunResult.output_text = ""`
+1. 先写入 `finalize_return_input`
+2. 再进入 `FinalizeReflexion`
+3. 若动作是 `request_replan`
+   - 写入正式 `request_replan`
+   - 回流 `prepare -> execute -> finalize`
+4. 若动作是 `finish_failed`
+   - `run_lifecycle.result_status = "fail"`
+   - `run_lifecycle.stop_reason = "final_verification_failed"`
+   - `HostRunResult.runtime_state = "failed"`
+   - `HostRunResult.output_text = ""`
 
 当前第一版不做：
 
 1. `fail -> execute`
-2. `fail -> replan`
-3. `replan` 判定器
+2. `retry_finalize`
+3. 通用 run 级失败动作扩展
 
 ## 当前测试覆盖
 
@@ -125,5 +148,6 @@
 1. finalize prompt 合同
 2. finalize phase 正常 pass 收口
 3. finalize phase fail 收口
-4. finalize phase 只允许在 graph 全部 completed 时进入
-5. host 主链对 finalize 输出的最小集成
+4. finalize fail -> run reflexion -> replan
+5. finalize phase 只允许在 graph 全部 completed 时进入
+6. host 主链对 finalize 输出的最小集成

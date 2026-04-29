@@ -35,6 +35,11 @@ class VerificationStatus(StrEnum):
     FAILED = "failed"
 
 
+class RequestReplanSource(StrEnum):
+    NODE_REFLEXION = "node_reflexion"
+    RUN_REFLEXION = "run_reflexion"
+
+
 @dataclass(slots=True)
 class RunIdentity:
     """Stable host/runtime identity for a single run instance."""
@@ -103,6 +108,16 @@ class PrepareResult:
 
 
 @dataclass(slots=True)
+class RequestReplan:
+    """Minimal structured request used to route control back to prepare."""
+
+    source: RequestReplanSource
+    node_id: str
+    reason: str
+    created_at: str
+
+
+@dataclass(slots=True)
 class RuntimeState:
     """Runtime control state shared across the main execution chain."""
 
@@ -111,6 +126,7 @@ class RuntimeState:
     compression_state: CompressionState | None = None
     external_signal_state: ExternalSignalState | None = None
     finalize_return_input: FinalizeReturnInput | None = None
+    request_replan: RequestReplan | None = None
 
 
 @dataclass(slots=True)

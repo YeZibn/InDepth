@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from rtv2.memory import SQLiteRuntimeMemoryStore
 from rtv2.host.runtime_host import RuntimeHost
-from rtv2.finalize import VerificationResult, VerificationResultStatus
+from rtv2.finalize import RunReflexionAction, RunReflexionResult, VerificationResult, VerificationResultStatus
 from rtv2.judge import JudgeResultStatus
 from rtv2.model.base import ModelOutput
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
@@ -87,11 +87,19 @@ class StubCompletionEvaluator:
 
 
 class StubRuntimeReflexion:
-    def reflect(self, input):
+    def reflect(self, input, prompt_text=""):
         return ReflexionResult(
             summary="retry current node",
             next_attempt_hint="continue",
             action=ReflexionAction.RETRY_CURRENT_NODE,
+        )
+
+
+class StubFinalizeReflexion:
+    def reflect(self, input, prompt_text=""):
+        return RunReflexionResult(
+            summary="finish failed",
+            action=RunReflexionAction.FINISH_FAILED,
         )
 
 
@@ -124,6 +132,7 @@ def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> Runt
                 * 8
             ),
             runtime_verifier=StubRuntimeVerifier(),
+            finalize_reflexion=StubFinalizeReflexion(),
             completion_evaluator=StubCompletionEvaluator(),
             runtime_reflexion=StubRuntimeReflexion(),
             react_step_runner=FakeReActStepRunner(),

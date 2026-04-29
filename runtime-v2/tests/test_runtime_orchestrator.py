@@ -10,7 +10,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.host.interfaces import StartRunIdentity
-from rtv2.finalize import RuntimeVerifier, VerificationResult, VerificationResultStatus
+from rtv2.finalize import (
+    RunReflexionAction,
+    RunReflexionResult,
+    RuntimeVerifier,
+    VerificationResult,
+    VerificationResultStatus,
+)
 from rtv2.judge import JudgeResultStatus
 from rtv2.memory import (
     RuntimeMemoryEntry,
@@ -53,6 +59,18 @@ class FakeReActStepRunner:
         return self.output
 
 
+class SequenceReActStepRunner:
+    def __init__(self, outputs) -> None:
+        self.outputs = list(outputs)
+        self.inputs = []
+
+    def run_step(self, step_input):
+        self.inputs.append(step_input)
+        if not self.outputs:
+            raise AssertionError("No fake react outputs left")
+        return self.outputs.pop(0)
+
+
 class StubRuntimeVerifier:
     def __init__(self, result: VerificationResult | None = None) -> None:
         self.result = result or VerificationResult(
@@ -65,6 +83,18 @@ class StubRuntimeVerifier:
     def verify(self, handoff):
         self.handoffs.append(handoff)
         return self.result
+
+
+class SequenceRuntimeVerifier:
+    def __init__(self, results) -> None:
+        self.results = list(results)
+        self.handoffs = []
+
+    def verify(self, handoff):
+        self.handoffs.append(handoff)
+        if not self.results:
+            raise AssertionError("No verifier results left")
+        return self.results.pop(0)
 
 
 class StubCompletionEvaluator:
@@ -90,7 +120,20 @@ class StubRuntimeReflexion:
         )
         self.inputs = []
 
-    def reflect(self, input):
+    def reflect(self, input, prompt_text=""):
+        self.inputs.append(input)
+        return self.result
+
+
+class StubFinalizeReflexion:
+    def __init__(self, result: RunReflexionResult | None = None) -> None:
+        self.result = result or RunReflexionResult(
+            summary="finish failed",
+            action=RunReflexionAction.FINISH_FAILED,
+        )
+        self.inputs = []
+
+    def reflect(self, input, prompt_text=""):
         self.inputs.append(input)
         return self.result
 
@@ -100,6 +143,7 @@ def create_orchestrator(
     planner_model_provider=None,
     finalize_model_provider=None,
     runtime_verifier=None,
+    finalize_reflexion=None,
     completion_evaluator=None,
     runtime_reflexion=None,
 ) -> RuntimeOrchestrator:
@@ -126,6 +170,7 @@ def create_orchestrator(
             ]
         ),
         runtime_verifier=runtime_verifier or StubRuntimeVerifier(),
+        finalize_reflexion=finalize_reflexion or StubFinalizeReflexion(),
         completion_evaluator=completion_evaluator or StubCompletionEvaluator(),
         runtime_reflexion=runtime_reflexion or StubRuntimeReflexion(),
         memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
@@ -1157,6 +1202,154 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             NodeStatus.COMPLETED,
         )
         self.assertEqual(executed.runtime_state.active_node_id, "")
+
+    def test_run_execute_phase_replans_back_to_prepare_and_returns_to_execute(self):
+        planner_provider = SequenceModelProvider([
+            ModelOutput(
+                content=(
+                    '{"goal":"Replanned goal.","active_node_ref":"plan_node_2","nodes":'
+                    '[{"ref":"plan_node_2","name":"Retry through replanning","kind":"execution",'
+                    '"description":"Retry after replan.","node_status":"ready",'
+                    '"owner":"main","dependencies":[],"order":1}]}'
+                ),
+                raw={},
+            ),
+        ])
+        reflexion = StubRuntimeReflexion(
+            ReflexionResult(
+                summary="Need a replan.",
+                next_attempt_hint="Go back to prepare.",
+                action=ReflexionAction.REQUEST_REPLAN,
+            )
+        )
+        orchestrator = create_orchestrator(
+            planner_model_provider=planner_provider,
+            runtime_reflexion=reflexion,
+            react_step_runner=SequenceReActStepRunner(
+                [
+                    ReActStepOutput(
+                        thought="fail node",
+                        action="stop",
+                        observation="failed",
+                        step_result=StepResult(
+                            status_signal=StepStatusSignal.FAILED,
+                            reason="current node cannot continue",
+                        ),
+                    ),
+                    ReActStepOutput(
+                        thought="complete node",
+                        action="finish",
+                        observation="done",
+                        step_result=StepResult(
+                            status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                            reason="replanned node completed",
+                        ),
+                    ),
+                ]
+            ),
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Replan this task.",
+            )
+        )
+        context.run_identity.goal = "Old goal"
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Failing",
+                kind="execution",
+                description="Current path is exhausted.",
+                node_status=NodeStatus.RUNNING,
+            )
+        ]
+        orchestrator.graph_store.save_graph(context.domain_state.task_graph_state)
+
+        executed = orchestrator.run_execute_phase(context)
+
+        self.assertEqual(executed.run_lifecycle.current_phase, RunPhase.FINALIZE)
+        self.assertEqual(executed.run_identity.goal, "Replanned goal.")
+        self.assertIsNone(executed.runtime_state.request_replan)
+        self.assertTrue(any(node.name == "Retry through replanning" for node in executed.domain_state.task_graph_state.nodes))
+
+    def test_run_finalize_phase_verification_fail_can_request_replan(self):
+        planner_provider = SequenceModelProvider([
+            ModelOutput(
+                content=(
+                    '{"goal":"Replanned final goal.","active_node_ref":"plan_node_3","nodes":'
+                    '[{"ref":"plan_node_3","name":"Retry after verification fail","kind":"execution",'
+                    '"description":"Retry after final verification fail.","node_status":"ready",'
+                    '"owner":"main","dependencies":[],"order":1}]}'
+                ),
+                raw={},
+            ),
+        ])
+        finalize_provider = SequenceModelProvider([
+            ModelOutput(
+                content='{"final_output":"First final answer.","graph_summary":"Initial completed graph."}',
+                raw={},
+            ),
+            ModelOutput(
+                content='{"final_output":"Second final answer.","graph_summary":"Replanned completed graph."}',
+                raw={},
+            ),
+        ])
+        verifier = SequenceRuntimeVerifier([
+            VerificationResult(
+                result_status=VerificationResultStatus.FAIL,
+                summary="Missing required detail.",
+                issues=["required detail missing"],
+            ),
+            VerificationResult(
+                result_status=VerificationResultStatus.PASS,
+                summary="Looks good now.",
+                issues=[],
+            ),
+        ])
+        finalize_reflexion = StubFinalizeReflexion(
+            RunReflexionResult(
+                summary="Need to replan after verification fail.",
+                action=RunReflexionAction.REQUEST_REPLAN,
+            )
+        )
+        orchestrator = create_orchestrator(
+            planner_model_provider=planner_provider,
+            finalize_model_provider=finalize_provider,
+            runtime_verifier=verifier,
+            finalize_reflexion=finalize_reflexion,
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Finalize with replan.",
+            )
+        )
+        context.run_identity.goal = "Initial goal"
+        context.run_lifecycle.current_phase = RunPhase.FINALIZE
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Completed node",
+                kind="execution",
+                description="Done.",
+                node_status=NodeStatus.COMPLETED,
+            )
+        ]
+        orchestrator.graph_store.save_graph(context.domain_state.task_graph_state)
+        orchestrator.react_step_runner = FakeReActStepRunner()
+
+        result = orchestrator.run_finalize_phase(context)
+
+        self.assertEqual(result.runtime_state, "completed")
+        self.assertEqual(result.output_text, "Second final answer.")
 
     def test_build_react_step_prompt_reads_task_level_runtime_memory_across_runs(self):
         memory_store = self.create_memory_store()

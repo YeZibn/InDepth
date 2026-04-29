@@ -6,7 +6,9 @@ from rtv2.prompting.models import (
     ExecutionPrompt,
     ExecutionPromptInput,
     FinalizePromptInput,
+    NodeReflexionPromptInput,
     PreparePromptInput,
+    RunReflexionPromptInput,
 )
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     "ExecutionPromptAssembler",
     "ExecutionPromptInput",
     "FinalizePromptInput",
+    "NodeReflexionPromptInput",
     "PreparePromptInput",
+    "RunReflexionPromptInput",
 ]

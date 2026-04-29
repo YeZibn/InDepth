@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from rtv2.prompting.models import ExecutionPrompt, ExecutionPromptInput, FinalizePromptInput, PreparePromptInput
+from rtv2.prompting.models import (
+    ExecutionPrompt,
+    ExecutionPromptInput,
+    FinalizePromptInput,
+    NodeReflexionPromptInput,
+    PreparePromptInput,
+    RunReflexionPromptInput,
+)
 from rtv2.state.models import RunPhase
 
 
@@ -34,6 +41,20 @@ class ExecutionPromptAssembler:
             base_prompt=self._build_base_prompt(),
             phase_prompt=self._build_phase_prompt(prompt_input.phase),
             dynamic_injection=self._build_dynamic_injection(prompt_input),
+        )
+
+    def build_node_reflexion_prompt(self, prompt_input: NodeReflexionPromptInput) -> ExecutionPrompt:
+        return ExecutionPrompt(
+            base_prompt=self._build_base_prompt(),
+            phase_prompt=self._build_node_reflexion_phase_prompt(),
+            dynamic_injection=self._build_node_reflexion_dynamic_injection(prompt_input),
+        )
+
+    def build_run_reflexion_prompt(self, prompt_input: RunReflexionPromptInput) -> ExecutionPrompt:
+        return ExecutionPrompt(
+            base_prompt=self._build_base_prompt(),
+            phase_prompt=self._build_run_reflexion_phase_prompt(),
+            dynamic_injection=self._build_run_reflexion_dynamic_injection(prompt_input),
         )
 
     @staticmethod
@@ -97,6 +118,32 @@ class ExecutionPromptAssembler:
             ]
         )
 
+    @staticmethod
+    def _build_node_reflexion_phase_prompt() -> str:
+        return "\n".join(
+            [
+                "Current chain: node reflexion inside execute.",
+                "Diagnose the latest node-level failure and choose the next node-level action.",
+                "Do not call tools and do not invent missing state.",
+                "Return JSON only.",
+                "Required top-level keys: summary, next_attempt_hint, action.",
+                "Allowed actions: retry_current_node, mark_blocked, mark_failed, request_replan.",
+            ]
+        )
+
+    @staticmethod
+    def _build_run_reflexion_phase_prompt() -> str:
+        return "\n".join(
+            [
+                "Current chain: run reflexion after final verification fail.",
+                "Diagnose the latest run-level closeout failure and choose the next run-level action.",
+                "Do not call tools and do not invent missing work.",
+                "Return JSON only.",
+                "Required top-level keys: summary, action.",
+                "Allowed actions: request_replan, finish_failed.",
+            ]
+        )
+
     def _build_dynamic_injection(self, prompt_input: ExecutionPromptInput) -> str:
         node_context = prompt_input.node_context
         lines = [
@@ -149,6 +196,13 @@ class ExecutionPromptAssembler:
                     prompt_input.finalize_return_input,
                 ]
             )
+        if prompt_input.request_replan_text.strip():
+            lines.extend(
+                [
+                    "## Request Replan",
+                    prompt_input.request_replan_text,
+                ]
+            )
         return "\n".join(lines)
 
     def _build_finalize_dynamic_injection(self, prompt_input: FinalizePromptInput) -> str:
@@ -163,6 +217,36 @@ class ExecutionPromptAssembler:
                 prompt_input.runtime_memory_text or "(empty)",
                 "## Capability Summary",
                 prompt_input.capability_text or "(empty)",
+            ]
+        )
+
+    def _build_node_reflexion_dynamic_injection(self, prompt_input: NodeReflexionPromptInput) -> str:
+        return "\n".join(
+            [
+                "## Current Reflexion Context",
+                f"Node id: {prompt_input.node_id or '(empty)'}",
+                f"Node name: {prompt_input.node_name or '(empty)'}",
+                f"Trigger type: {prompt_input.trigger_type or '(empty)'}",
+                "Latest summary:",
+                prompt_input.latest_summary or "(empty)",
+                "Issues:",
+                self._render_list(prompt_input.issues),
+                "## Runtime Memory",
+                prompt_input.runtime_memory_text or "(empty)",
+            ]
+        )
+
+    def _build_run_reflexion_dynamic_injection(self, prompt_input: RunReflexionPromptInput) -> str:
+        return "\n".join(
+            [
+                "## Current Reflexion Context",
+                f"Trigger type: {prompt_input.trigger_type or '(empty)'}",
+                "Latest summary:",
+                prompt_input.latest_summary or "(empty)",
+                "Issues:",
+                self._render_list(prompt_input.issues),
+                "## Runtime Memory",
+                prompt_input.runtime_memory_text or "(empty)",
             ]
         )
 

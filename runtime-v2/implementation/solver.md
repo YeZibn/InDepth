@@ -14,6 +14,7 @@
 6. `CompletionEvaluator`
 7. `RuntimeReflexion`
 8. judge 基座复用
+9. node 级 `request_replan` 上抬与当前 node 收口
 
 对应代码：
 
@@ -46,6 +47,7 @@
    - 负责 node 进入 `completed` 前的独立完成判定
 5. `RuntimeReflexion`
    - 负责失败诊断、下一步建议和 memory 写入输入生成
+   - 当前已接入统一 prompt + runtime memory 主链
 
 ## `SolverResult` 的作用
 
@@ -133,6 +135,17 @@
 5. 若 step 直接 `blocked / failed`
    - 同样先过 `RuntimeReflexion`
 
+当前 `RuntimeReflexion` 已不再只依赖局部硬编码失败摘要。
+
+当前执行链路中：
+
+1. orchestrator 会为 node 级 reflexion 组装三段 prompt
+2. prompt 会注入：
+   - 当前失败锚点
+   - issues
+   - task 级 runtime memory
+3. `RuntimeReflexion` 消费的是主链 prompt，而不是孤立小 prompt
+
 当前 `ReflexionAction` 的 solver 消费规则为：
 
 1. `retry_current_node`
@@ -142,8 +155,8 @@
 3. `mark_failed`
    - 当前 node 收为 `failed`
 4. `request_replan`
-   - 不伪装成普通 blocked
-   - 显式上抛 `SolverControlSignal.REQUEST_REPLAN`
+   - 当前 node 会先正式收为 `failed`
+   - 再显式上抛 `SolverControlSignal.REQUEST_REPLAN`
 
 ## patch 挂载策略
 
@@ -175,8 +188,8 @@
 2. 仍有未完成 node 但无可继续推进节点：
    - graph 收为 `blocked`
 3. solver 显式请求 `request_replan`：
-   - 当前 graph 先收为 `blocked`
-   - 后续外层 `replan` 模块再正式接入
+   - orchestrator 写入正式 `request_replan`
+   - 回流 `prepare`
 
 ## 当前保护与边界
 
@@ -187,10 +200,11 @@
 3. stale `active_node_id` 不再强行复用
 4. `CompletionEvaluator.max_rounds = 10`
 5. `RuntimeReflexion.max_rounds = 10`
+6. node 级 reflexion 已接入统一 prompt + memory 主链
 
 当前尚未进入：
 
-1. 正式 `replan` 判定器
+1. `abandoned` 与 replan 的共存语义
 2. subagent
 3. parallel node execution
 

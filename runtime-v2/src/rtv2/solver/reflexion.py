@@ -1,10 +1,17 @@
 """Reflexion helper for runtime-v2 solver."""
 
 from __future__ import annotations
+from dataclasses import dataclass
 
 from rtv2.judge import BaseJudge
 from rtv2.model import GenerationConfig, ModelProvider
 from rtv2.solver.models import ReflexionAction, ReflexionInput, ReflexionResult
+
+
+@dataclass(slots=True)
+class PromptedReflexionInput:
+    input: ReflexionInput
+    prompt_text: str
 
 
 class RuntimeReflexion(BaseJudge):
@@ -24,17 +31,18 @@ class RuntimeReflexion(BaseJudge):
             default_max_tokens=500,
         )
 
-    def reflect(self, input: ReflexionInput) -> ReflexionResult:
-        return self._run_loop(input)
+    def reflect(self, input: ReflexionInput, prompt_text: str) -> ReflexionResult:
+        return self._run_loop(PromptedReflexionInput(input=input, prompt_text=prompt_text))
 
     @staticmethod
-    def _build_initial_messages(input: ReflexionInput) -> list[dict[str, str]]:
+    def _build_initial_messages(input: PromptedReflexionInput) -> list[dict[str, str]]:
         return [
             {
                 "role": "system",
                 "content": (
                     "You are a solver-side reflexion helper. "
                     "Diagnose the latest local failure and suggest the next action. "
+                    "Use the provided three-block prompt as the formal context. "
                     "Do not call tools. Return JSON only. "
                     "If you need another internal review round, return {\"thought\": \"...\"}. "
                     "If you are ready to decide, return "
@@ -44,17 +52,7 @@ class RuntimeReflexion(BaseJudge):
             },
             {
                 "role": "user",
-                "content": "\n".join(
-                    [
-                        f"Node id: {input.node_id or '(empty)'}",
-                        f"Node name: {input.node_name or '(empty)'}",
-                        f"Trigger type: {input.trigger_type or '(empty)'}",
-                        "Latest summary:",
-                        input.latest_summary or "(empty)",
-                        "Issues:",
-                        "\n".join(f"- {item}" for item in input.issues) or "(empty)",
-                    ]
-                ),
+                "content": input.prompt_text,
             },
         ]
 

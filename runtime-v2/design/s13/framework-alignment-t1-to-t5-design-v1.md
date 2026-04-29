@@ -10,7 +10,7 @@
 1. `Planner / Solver / Reflexion / Re-plan` 与 `prepare / execute / finalize / verification` 的映射关系
 2. `Solver` 的内部结构与 node 内循环边界
 3. `Reflexion` 的触发条件、写入位置与最小语义
-4. `Re-plan` 的判定条件、判定结果与回流流程
+4. `Re-plan` 动作的触发来源、回流流程与层级边界
 5. 相关旧设计稿中的框架表述与编号引用修正
 
 ## 2. 正式结论摘要
@@ -21,8 +21,9 @@
 2. `Solver = ExecutePhase`
 3. `Verification = FinalizePhase` 内的最终守门链路
 4. `Reflexion` 不单独成为 phase，而是 `Solver` 内部的轻量纠偏机制
-5. `Re-plan` 不单独成为固定 phase，而是 runtime 外层的 run 级重规划判定动作
-6. 真正的重规划由 `PreparePhase` 执行，而不是由 `Re-plan` 直接执行
+5. 外层独立 `Re-plan` 判定器当前取消
+6. `request_replan` 收敛为 `Reflexion` 可产出的统一动作
+7. 真正的重规划由 `PreparePhase` 执行，而不是由 `Reflexion` 直接执行
 
 ## 3. 映射关系
 
@@ -31,8 +32,8 @@
 1. `Planner` 负责初始 planning 与重规划后的 planning 收口
 2. `Solver` 负责单个 active node 的局部求解与 node 状态推进
 3. `Verification` 负责最终结果守门，不参与执行中纠偏
-4. `Reflexion` 服务执行中纠偏，不承担最终验证职责
-5. `Re-plan` 只负责判断是否需要回到 `PreparePhase` 进行重规划
+4. `Reflexion` 同时服务执行中纠偏与 final verification fail 后的动作决策
+5. `request_replan` 只表示“回到 `PreparePhase` 重规划”的控制动作，不再单独抽成外层判定器
 
 ## 4. Solver 的正式位置
 
@@ -91,11 +92,12 @@
 1. `Completion Evaluator` 判定当前 node 还不能 completed
 2. `Solver` 判定当前 node 进入 `blocked`
 3. `Solver` 判定当前 node 进入 `failed`
+4. `FinalizePhase` 中 `verification fail`
 
 它的作用如下：
 
 1. 为后续 solve 留下短期纠偏记忆
-2. 为更高层 `Re-plan` 提供失败归因输入
+2. 为后续动作决策提供失败归因输入
 3. 不直接作为 task graph 的主存储
 
 ## 6. Node 内部循环
@@ -131,46 +133,97 @@
 3. 它不是正式验证结果
 4. 它不是最终 node 状态
 5. 它的内容保持精简结构化
-6. 它可输出 `replan_signal`
-7. `replan_signal` 当前只作为建议信号，不构成强制触发
+6. 它可输出动作
+7. `request_replan` 是正式控制动作，不再只是建议信号
 
 ## 8. Re-plan 的正式位置
 
-`Re-plan` 不是一个固定 phase，也不是一个直接执行重规划的组件。
+`Re-plan` 当前不是一个固定 phase，也不是一个独立判定组件。
 
 它的正式位置是：
 
-1. runtime 外层的 run 级重规划判定动作
+1. `Reflexion` 可产出的统一控制动作之一
 
 它负责：
 
-1. 判断当前 run 是否需要回到 `PreparePhase`
-2. 为重规划提供回流原因与输入上下文
+1. 表达当前 run 或当前 node 已需要回到 `PreparePhase`
+2. 为后续 `PreparePhase` 重规划提供动作原因
 
 它不负责：
 
 1. 直接生成新 task graph
 2. 直接执行新 node
 3. 替代 `Planner`
+4. 单独作为 runtime 外层 gate 做二次判定
 
 ## 9. Re-plan 的触发条件与流程
 
 当前正式流程如下：
 
-1. `Solver` 或 `FinalizePhase` 产出升级信号
-2. 满足以下任一条件时，允许进入 `Re-plan` 判定：
-   - `node_failed`
-   - `persistent_blocked`
-   - `repeated_completion_fail`
-   - `final_verification_fail`
-3. runtime 外层结合 node 状态、graph 状态、失败历史、runtime memory 与 verification 结果决定是否进入 `Re-plan`
-4. `Re-plan` 输出最小判定结果：
-   - `no_replan`
-   - `need_replan`
-5. 当结果为 `need_replan` 时，附带 `reason` 与重规划输入上下文
-6. 随后回到 `PreparePhase`
-7. `PreparePhase` 基于已有目标、graph、结果与记忆重新执行 planning
+1. `Solver` 内部失败时，先进入 node 级 `Reflexion`
+2. 若 node 级 `Reflexion.action = request_replan`
+   - 则上抛重规划控制信号
+   - 随后回到 `PreparePhase`
+3. `FinalizePhase` 中若 `verification fail`
+   - 先进入 run 级 `Reflexion`
+4. run 级 `Reflexion` 第一版只允许输出：
+   - `request_replan`
+   - `finish_failed`
+5. 若 run 级 `Reflexion.action = request_replan`
+   - 则回到 `PreparePhase`
+6. 若 run 级 `Reflexion.action = finish_failed`
+   - 则当前 run 直接失败结束
+7. `PreparePhase` 基于已有目标、graph、结果与统一 runtime memory 重新执行 planning
 8. 产出新的 planning 结果后，再继续后续 `ExecutePhase`
+
+当前第一版补充如下：
+
+1. `request_replan` 当前只允许由两类 `Reflexion` 产出：
+   - `node_reflexion`
+   - `run_reflexion`
+2. `node_reflexion` 指 `Solver` 内部在 node 级失败路径上产出的 `request_replan`
+3. `run_reflexion` 指 final verification fail 后 run 级 `Reflexion` 产出的 `request_replan`
+4. 第一版为 `request_replan` 保留一个轻量正式承载结构
+5. 其最小字段收口为：
+   - `source`
+   - `node_id`
+   - `reason`
+   - `created_at`
+6. 其中：
+   - `source` 当前最小值集合为：
+     - `node_reflexion`
+     - `run_reflexion`
+   - `node_id` 在 `run_reflexion` 场景下允许为空
+7. 第一版当前不在该结构中复制：
+   - graph snapshot
+   - runtime memory snapshot
+   - verifier 原始结果全文
+   - step 全轨迹
+8. 真正的重规划上下文仍统一来自当前 `RunContext`
+
+当前第一版 `request_replan -> prepare` 回流规则补充如下：
+
+1. `request_replan` 当前不新开新的 `RunContext`
+2. 回流直接复用当前 run 内已有的正式状态
+3. 当 `request_replan` 被消费时：
+   - orchestrator 将 `current_phase` 切回 `PREPARE`
+   - 然后重新执行一次 `run_prepare_phase(...)`
+4. `PreparePhase` 在 replan 场景下读取：
+   - 原 `user_input`
+   - 当前 `goal`
+   - 当前 graph
+   - 全量 runtime memory
+   - 当前 `request_replan`
+5. 第一版当前不先清空 graph
+6. graph 继续通过新的 `prepare_result.patch` 在当前 graph 基础上修改
+7. 新的 `prepare_result` 会覆盖旧的正式 `prepare_result`
+8. 正式回写规则仍为：
+   - `prepare_result.goal -> run_identity.goal`
+   - `prepare_result -> runtime_state.prepare_result`
+   - `prepare_result.patch` 应用后写回 `domain_state.task_graph_state`
+9. `request_replan` 作为一次性控制信息存在
+10. 当 `PreparePhase` 成功消费后，应从正式状态中清空
+11. 随后主链重新进入 `ExecutePhase`
 
 ## 10. Verification 的正式边界
 
@@ -199,10 +252,62 @@
 2. `finalize` 继续沿用统一 prompt 架构并读取统一上下文
 3. `final_output` 由 `FinalizePhase` 基于上下文重新生成
 4. verifier 只消费 `handoff`
-5. verification `fail` 第一版当前直接结束，不回退 `execute`，也不直接触发 `replan`
-6. `final_verification_fail` 的回流与判定器后置到后续模块
+5. verification `fail` 不再直接回退 `execute`
+6. verification `fail` 会先进入 run 级 `Reflexion`
+7. run 级 `Reflexion` 决定：
+   - `request_replan`
+   - `finish_failed`
 
-## 11. 当前未展开部分
+## 11. Node 级与 Run 级 Reflexion 边界
+
+当前第一版正式边界如下：
+
+1. `node_reflexion` 只归 `Solver / ExecutePhase` 使用
+2. `node_reflexion` 只处理以下触发场景：
+   - completion evaluator fail
+   - step blocked
+   - step failed
+3. `node_reflexion` 第一版动作固定为：
+   - `retry_current_node`
+   - `mark_blocked`
+   - `mark_failed`
+   - `request_replan`
+4. `run_reflexion` 只归 `FinalizePhase` 中的 verification fail 使用
+5. `run_reflexion` 第一版当前只处理：
+   - `final_verification_fail`
+6. `run_reflexion` 第一版动作固定为：
+   - `request_replan`
+   - `finish_failed`
+7. `run_reflexion` 不允许输出：
+   - `retry_current_node`
+   - `mark_blocked`
+   - `mark_failed`
+8. 两层当前都归入 `Reflexion` 语义族，但动作集合按层级分开，不强行统一成单个动作枚举
+
+## 12. 当前暂不实现范围
+
+当前第一版明确不进入：
+
+1. 通用多场景 run 级 `Reflexion`
+2. node / run 两层统一成完全通用动作枚举
+3. `abandoned` 与 `request_replan` 的共存语义
+4. `request_replan` 的 memory 深度裁剪策略
+5. `PreparePhase` 内部针对 `request_replan` 的特殊多轮机制
+6. `retry_finalize`、`pause_run` 等额外 run 级动作
+
+当前补充实现口径如下：
+
+1. `Reflexion` 虽不作为独立 phase，但应接入主链统一 prompt 架构
+2. `node_reflexion` 与 `run_reflexion` 的 prompt 都采用三段结构：
+   - `base prompt`
+   - `phase prompt`
+   - `dynamic injection`
+3. 两层 `Reflexion` 当前都应读取统一 runtime memory 上下文
+4. `ReflexionInput` 继续保留，但作为 prompt 组装输入，而不是直接替代完整上下文
+5. 第一版允许为 `node_reflexion` 与 `run_reflexion` 分别定义独立 prompt input 结构
+6. 第一版不新增独立 `RunPhase.REFLEXION`
+
+## 13. 当前未展开部分
 
 本模块当前明确不进入：
 
@@ -211,7 +316,7 @@
 3. `PreparePhase` 在重规划场景下的具体输入输出 contract
 4. solver 内部 prompt 注入的具体模板
 
-## 12. PreparePhase 第一版落地边界补充
+## 14. PreparePhase 第一版落地边界补充
 
 针对后续开发阶段，当前补充结论如下：
 
@@ -233,7 +338,7 @@
    - skill resource 直读
    - finalize / evaluator / reflexion 联动深化
 
-## 13. PreparePhase 第一版最小输入输出 contract 补充
+## 15. PreparePhase 第一版最小输入输出 contract 补充
 
 当前补充结论如下：
 
@@ -256,7 +361,7 @@
    - `goal`
    - `graph_change_summary`
 
-## 14. PreparePhase Prompt 与 Planner 调用链补充
+## 16. PreparePhase Prompt 与 Planner 调用链补充
 
 当前补充结论如下：
 

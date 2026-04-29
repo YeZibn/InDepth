@@ -58,6 +58,7 @@ class RuntimeSolver:
         node: TaskGraphNode,
         build_step_prompt,
         build_completion_check_input,
+        build_reflexion_prompt=None,
         create_step_id,
     ) -> SolverResult:
         """Run the minimal node-scoped solve loop for the selected node."""
@@ -92,6 +93,9 @@ class RuntimeSolver:
                 final_node_status=current_node.node_status,
                 step_count=step_count,
             )
+
+        if build_reflexion_prompt is None:
+            build_reflexion_prompt = lambda _context, _input: ""
 
         while step_count < self.max_steps_per_node:
             step_count += 1
@@ -147,7 +151,17 @@ class RuntimeSolver:
                         trigger_type="completion_check_failed",
                         latest_summary=completion_check_result.summary,
                         issues=completion_check_result.issues,
-                    )
+                    ),
+                    build_reflexion_prompt(
+                        context,
+                        ReflexionInput(
+                            node_id=current_node.node_id,
+                            node_name=current_node.name,
+                            trigger_type="completion_check_failed",
+                            latest_summary=completion_check_result.summary,
+                            issues=completion_check_result.issues,
+                        ),
+                    ),
                 )
                 self._append_reflexion_entry(
                     context=context,
@@ -177,7 +191,17 @@ class RuntimeSolver:
                         trigger_type="blocked",
                         latest_summary=final_step_result.reason,
                         issues=[final_step_result.reason],
-                    )
+                    ),
+                    build_reflexion_prompt(
+                        context,
+                        ReflexionInput(
+                            node_id=current_node.node_id,
+                            node_name=current_node.name,
+                            trigger_type="blocked",
+                            latest_summary=final_step_result.reason,
+                            issues=[final_step_result.reason],
+                        ),
+                    ),
                 )
                 self._append_reflexion_entry(
                     context=context,
@@ -207,7 +231,17 @@ class RuntimeSolver:
                         trigger_type="failed",
                         latest_summary=final_step_result.reason,
                         issues=[final_step_result.reason],
-                    )
+                    ),
+                    build_reflexion_prompt(
+                        context,
+                        ReflexionInput(
+                            node_id=current_node.node_id,
+                            node_name=current_node.name,
+                            trigger_type="failed",
+                            latest_summary=final_step_result.reason,
+                            issues=[final_step_result.reason],
+                        ),
+                    ),
                 )
                 self._append_reflexion_entry(
                     context=context,
@@ -395,9 +429,17 @@ class RuntimeSolver:
                 step_count=step_count,
             )
         if action is ReflexionAction.REQUEST_REPLAN:
+            step_result.patch = TaskGraphPatch(
+                node_updates=[NodePatch(
+                    node_id=current_node.node_id,
+                    node_status=NodeStatus.FAILED,
+                    failure_reason=step_result.reason or reflexion_result.summary,
+                )]
+            )
+            step_result = self._merge_with_running_transition(running_transition_patch, step_result)
             return SolverResult(
-                final_step_result=None,
-                final_node_status=None,
+                final_step_result=step_result,
+                final_node_status=NodeStatus.FAILED,
                 step_count=step_count,
                 control_signal=SolverControlSignal.REQUEST_REPLAN,
             )
