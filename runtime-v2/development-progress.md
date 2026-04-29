@@ -68,6 +68,11 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+- 任务 02：已完成
+- 任务 03：已完成
 
 ### 模块 04：Task Graph Patch 与最小 Store 骨架
 
@@ -403,12 +408,256 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+- 任务 07：已完成
+
+### 模块 20：FinalizePhase / Verification 正式成型
+
+- 模块目标：
+  - 把当前空壳 `run_finalize_phase(...)` 补成真实 finalize 主链
+  - 明确 `handoff -> verification -> outcome` 的正式顺序
+  - 让 final verification 成为正式收口闸门
+  - 先把 finalize 主体站稳，暂不一次性并入 replan 判定器与 memory closeout
+- 已定子任务：
+  - 任务 01：对齐现有设计稿与当前代码状态，收口 `FinalizePhase / Verification` 第一版范围，并修订旧表述
+  - 任务 02：确定 `handoff / VerificationResult / finalize outcome` 的最小正式结构
+  - 任务 03：确定 `FinalizePhase` 的主流程、进入条件、退出条件与 fail 收口规则
+  - 任务 04：实现最小 verifier skeleton 与 finalize prompt / 调用链
+  - 任务 05：实现 `verification pass / fail` 的正式收口并补测试
+  - 任务 06：补实现文档与开发进度，完成模块收尾
+
+当前进度：
+
+- 任务 01：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 083：完成模块 20 的任务 05 / 06 Finalize / Verifier 主链接线、回归与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 20 的任务 05、任务 06，正式落地 finalize generator、独立 verifier、`run_finalize_phase(...)` 主链、最小回归测试与实现文档收尾
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/finalize/models.py`
+    - `runtime-v2/src/rtv2/finalize/verifier.py`
+    - `runtime-v2/implementation/finalize.md`
+  - 已更新：
+    - `runtime-v2/src/rtv2/finalize/__init__.py`
+    - `runtime-v2/src/rtv2/prompting/models.py`
+    - `runtime-v2/src/rtv2/prompting/assembler.py`
+    - `runtime-v2/src/rtv2/prompting/__init__.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_prompting.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_host.py`
+    - `runtime-v2/implementation/README.md`
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/development-progress.md`
+  - 已正式落地：
+    - `FinalizeGenerationResult`
+    - `Handoff`
+    - `VerificationResult`
+    - `VerificationResultStatus`
+    - `RuntimeVerifier`
+    - `ExecutionPromptAssembler.build_finalize_prompt(...)`
+    - `RuntimeOrchestrator.run_finalize_phase(...)` 的真实 finalize / verify 主链
+  - 已实现 finalize 当前最小规则：
+    - `run_finalize_phase(...)` 只接受 `current_phase = FINALIZE`
+    - graph 必须全部 `completed`
+    - finalize generator 生成 `final_output + graph_summary`
+    - verifier 只消费 `Handoff`
+    - verifier `pass` 时收口 `completed + final_output`
+    - verifier `fail` 时收口 `failed + empty output`
+  - 已实现 verifier 当前最小规则：
+    - 独立边界对象
+    - 轻量 ReAct 风格多轮循环
+    - 最大轮数 `20`
+    - 禁止 tool call
+    - 超限时自动收成 `fail`
+- 验证结果：
+  - 已执行：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 44 tests ... OK`
+    - `Ran 55 tests ... OK`
+- 遗留问题：
+  - verification fail 后当前仍不回退 execute，也不接 replan
+  - finalize / verifier 当前还未接 memory closeout hooks
+  - verifier prompt 与 finalize prompt 仍可继续细化
+- 下一步：
+  - 模块 20 可视为当前阶段结项，可进入下一个模块讨论
+
+#### 记录 079：完成模块 20 的任务 01 FinalizePhase / Verification 第一版范围定稿与设计对齐
+
+- 状态：已完成
+- 范围：完成模块 20 的任务 01，对齐现有 `S11 / S13` 设计稿与当前代码状态，收口 `FinalizePhase / Verification` 第一版正式范围、进入条件与失败边界，不进入代码实现
+- 结果：
+  - 已确认 `FinalizePhase` 第一版不是空壳，而是一次正式交付尝试
+  - 已确认 `finalize` 第一版继续沿用统一 prompt 架构：
+    - `base prompt`
+    - `phase prompt`
+    - `dynamic injection`
+  - 已确认 `finalize` 和前面阶段一样读取统一上下文来源：
+    - `runtime memory`
+    - `run_identity`
+    - graph / 执行结果摘要
+    - capability 背景
+  - 已确认 `final_output` 第一版由 `FinalizePhase` 基于上下文重新生成，而不是直接复用 execute 某条已有文本
+  - 已确认 `FinalizePhase` 第一版只在 graph 全部 `completed` 时进入
+  - 已确认 `blocked / failed / 无可继续推进` 当前都不进入 `finalize`
+  - 已确认第一版 `handoff` 先收口为最小结构：
+    - `goal`
+    - `user_input`
+    - `graph_summary`
+    - `final_output`
+  - 已确认第一版 `VerificationResult` 先收口为最小结构：
+    - `result_status: pass | fail`
+    - `summary`
+    - `issues`
+  - 已确认第一版 verification `pass` 时正常收口
+  - 已确认第一版 verification `fail` 时先直接结束，不做：
+    - `fail -> execute`
+    - `fail -> replan`
+    - `replan` 判定器
+  - 已确认第一版失败收口建议语义：
+    - `HostRunResult.output_text = ""`
+    - `HostRunResult.runtime_state = "failed"`
+    - `run_lifecycle.result_status = "fail"`
+    - `run_lifecycle.stop_reason = "final_verification_failed"`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s11/finalize-pipeline-rulebook-t6-design-v1.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+- 遗留问题：
+  - `handoff` 的正式代码模型与 graph summary 的具体表达仍待模块 20 任务 02 收口
+  - verification `pass` 时的 host-facing outcome 字段仍待模块 20 任务 02/03 结合实现细化
+  - verification fail 后的 replan 判定器与回流逻辑明确后置到后续模块
+- 下一步：
+  - 进入模块 20 的任务 02，确定 `handoff / VerificationResult / finalize outcome` 的最小正式结构
+
+#### 记录 080：完成模块 20 的任务 02 Handoff / VerificationResult / finalize outcome 最小结构定稿
+
+- 状态：已完成
+- 范围：完成模块 20 的任务 02，正式收口 `Handoff`、`VerificationResult` 以及 finalize pass / fail 时的最小 host-facing 收口语义，不进入代码实现
+- 结果：
+  - 已确认第一版 `Handoff` 最小正式结构为：
+    - `goal: str`
+    - `user_input: str`
+    - `graph_summary: str`
+    - `final_output: str`
+  - 已确认第一版 `Handoff` 不保留：
+    - `run_id`
+    - `task_id`
+    - 其他额外标识字段
+  - 已确认 `graph_summary` 第一版直接使用单个 `str`
+  - 已确认第一版 `VerificationResult` 最小正式结构为：
+    - `result_status: pass | fail`
+    - `summary: str`
+    - `issues: list[str]`
+  - 已确认 `VerificationResult.issues` 在 `pass` 时允许为空列表
+  - 已确认 verifier 继续只消费 `Handoff`
+  - 已确认 finalize `pass` 的第一版收口为：
+    - `HostRunResult.output_text = final_output`
+    - `HostRunResult.runtime_state = "completed"`
+    - `run_lifecycle.result_status = "pass"`
+    - `run_lifecycle.stop_reason = "finalize_passed"`
+  - 已确认 finalize `fail` 的第一版收口为：
+    - `HostRunResult.output_text = ""`
+    - `HostRunResult.runtime_state = "failed"`
+    - `run_lifecycle.result_status = "fail"`
+    - `run_lifecycle.stop_reason = "final_verification_failed"`
+  - 已确认第一版不单独引入新的 `RunOutcome` 模型
+  - 已确认当前先由 `run_finalize_phase(...)` 直接组装 `HostRunResult`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s11/finalize-pipeline-rulebook-t6-design-v1.md`
+  - `runtime-v2/design/s11/verification-skeleton-t7-design-v1.md`
+- 遗留问题：
+  - `graph_summary` 的具体生成规则仍待模块 20 任务 03 收口
+  - `final_output` 的 prompt / 调用链仍待模块 20 任务 04 实现时落定
+- 下一步：
+  - 进入模块 20 的任务 03，确定 `FinalizePhase` 的主流程、退出条件与 fail 收口规则
+
+#### 记录 081：完成模块 20 的任务 03 FinalizePhase 主流程、退出条件与 fail 收口规则定稿
+
+- 状态：已完成
+- 范围：完成模块 20 的任务 03，正式收口 `FinalizePhase` 第一版的内部顺序、进入条件、`final_output / graph_summary` 生成方式以及 pass / fail 的退出规则，不进入代码实现
+- 结果：
+  - 已确认 `run_finalize_phase(...)` 第一版只接受：
+    - `current_phase = FINALIZE`
+  - 已确认进入 `finalize` 前要求 graph 全部 `completed`
+  - 已确认 `FinalizePhase` 第一版读取统一上下文，并由 LLM 同时生成：
+    - `final_output`
+    - `graph_summary`
+  - 已确认 `graph_summary` 第一版不直接复用规则化 graph snapshot，而是和 `final_output` 一起由 finalize LLM 基于上下文生成
+  - 已确认 `Handoff` 通过以下字段组装：
+    - `goal`
+    - `user_input`
+    - `graph_summary`
+    - `final_output`
+  - 已确认 verifier 继续只消费 `Handoff`
+  - 已确认 `VerificationResult.summary / issues` 第一版先不额外挂到复杂状态位
+  - 已确认 finalize `pass` 的主流程为：
+    - 更新 `run_lifecycle.result_status = "pass"`
+    - 更新 `run_lifecycle.stop_reason = "finalize_passed"`
+    - 返回 `HostRunResult(runtime_state="completed", output_text=final_output)`
+  - 已确认 finalize `fail` 的主流程为：
+    - 更新 `run_lifecycle.result_status = "fail"`
+    - 更新 `run_lifecycle.stop_reason = "final_verification_failed"`
+    - 返回 `HostRunResult(runtime_state="failed", output_text="")`
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s11/finalize-pipeline-rulebook-t6-design-v1.md`
+- 遗留问题：
+  - finalize 专用 prompt 输入结构与 verifier 调用链仍待模块 20 任务 04 收口
+  - `verification_state` 第一版是否做最小状态同步仍待实现时决定
+- 下一步：
+  - 进入模块 20 的任务 04，确定最小 verifier skeleton 与 finalize prompt / 调用链
+
+#### 记录 082：完成模块 20 的任务 04 最小 Verifier Skeleton 与 Finalize 调用链定稿
+
+- 状态：已完成
+- 范围：完成模块 20 的任务 04，正式收口 finalize generator、独立 verifier 边界、轻量 ReAct verifier 结构以及两条模型调用链的挂载方式，不进入代码实现
+- 结果：
+  - 已确认 `finalize generator` 与 `verifier` 不应混成同一内部 helper
+  - 已确认 `finalize generator` 第一版可先保留在 orchestrator 邻近层，不强制先抽独立类
+  - 已确认 `verifier` 第一版必须是独立边界对象，而不是 orchestrator 私有内联逻辑
+  - 已确认 `verifier` 不复用当前 `ReActStepRunner`
+  - 已确认 `verifier` 采用独立的轻量 ReAct 架构，只服务 final verification
+  - 已确认 `verifier` 第一版只消费：
+    - `Handoff`
+  - 已确认 `verifier` 第一版只产出：
+    - `VerificationResult`
+  - 已确认 `verifier` 第一版当前不接：
+    - tool call
+    - memory 写入
+    - graph 动作
+    - next phase 决策
+  - 已确认 `finalize_model_provider` 与 `verifier_model_provider` 从第一版开始分开注入
+  - 已确认两条链第一版都禁止 tool call，并要求 JSON-only 输出
+  - 已确认 `verifier` 第一版允许多轮内部循环
+  - 已确认 `verifier` 第一版最大轮数上限为：
+    - `20`
+  - 已确认 orchestrator 在 finalize 侧当前只负责编排：
+    - 调 finalize generator
+    - build handoff
+    - 调 verifier
+    - 根据 verdict 收口
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s11/finalize-pipeline-rulebook-t6-design-v1.md`
+  - `runtime-v2/design/s11/verification-skeleton-t7-design-v1.md`
+- 遗留问题：
+  - verifier 轻量 ReAct 的最小输入输出模型仍待模块 20 任务 05 结合实现进一步收口
+  - finalize prompt / verifier prompt 的具体文本结构仍待实现时确定
+- 下一步：
+  - 进入模块 20 的任务 05，开始正式落地 finalize / verifier 主链与测试
 
 #### 记录 078：完成模块 19 的任务 05 / 06 / 07 Solver 主链接线、回归与文档收尾
 

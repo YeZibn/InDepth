@@ -53,3 +53,14 @@ class PreparePromptInput:
     runtime_memory_text: str = ""
     capability_text: str = ""
     finalize_return_input: str = ""
+
+
+@dataclass(slots=True)
+class FinalizePromptInput:
+    """Formal input consumed by finalize-phase prompt assembly."""
+
+    user_input: str
+    goal: str = ""
+    graph_snapshot_text: str = ""
+    runtime_memory_text: str = ""
+    capability_text: str = ""

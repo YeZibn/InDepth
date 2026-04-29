@@ -1,6 +1,6 @@
 # S11-T6 Finalize Pipeline 规则（V1）
 
-更新时间：2026-04-22  
+更新时间：2026-04-29  
 状态：Draft  
 对应任务：`S11-T6`
 
@@ -21,24 +21,19 @@
 本任务最终结论如下：
 
 1. 进入 `finalize` 必须满足正式触发条件
-2. final verification fail 后允许多次回退 `execute -> finalize`
-3. `partial` 只允许在 verification pass 时出现
-4. `finalize` 必须存在最终失败出口
-5. 第一版保留 finalize 重试上限概念，但不在设计层写死数值
-6. finalize closeout 后必须预留记忆接入挂点
+2. 第一版 `finalize` 只在 graph 全部 `completed` 时进入
+3. final verification fail 当前直接结束 run，不做回退动作
+4. `partial` 暂不进入第一版实现
+5. finalize closeout 后仍需预留记忆接入挂点
 
 ## 3. 进入 Finalize 的触发条件
 
-第一版建议至少满足以下条件之一：
+当前第一版正式规定：
 
-1. 当前主链路已经形成可交付 `final_output`
-2. 当前 graph 已无必须继续推进的关键 `running / ready` node
-3. `step` 明确判断当前 run 应进入最终收口尝试
-
-本任务明确规定：
-
-1. `finalize` 不是任意时刻都可进入
-2. 它应是一次“正式交付尝试”
+1. 只有当 graph 全部 `completed` 时，才允许进入 `finalize`
+2. `blocked / failed / 无可继续推进` 当前都不进入 `finalize`
+3. `finalize` 不是任意时刻都可进入
+4. 它应是一次“正式交付尝试”
 
 ## 4. Finalize Pipeline 正式顺序
 
@@ -46,10 +41,11 @@
 
 ```text
 enter finalize
+  -> generate final_output + graph_summary
   -> build handoff
   -> run final verification
      -> pass -> determine result_status -> build RunOutcome -> close run
-     -> fail -> build finalize_return_input -> back to execute
+     -> fail -> close run as failed
 ```
 
 ## 5. 分步规则
@@ -61,6 +57,16 @@ enter finalize
 1. 进入 `finalize` 后先生成统一 `handoff`
 2. `handoff` 是 final verification 的正式输入
 3. 没有 `handoff` 不允许进入 verification
+4. 第一版 `handoff` 最小正式结构收口为：
+   - `goal: str`
+   - `user_input: str`
+   - `graph_summary: str`
+   - `final_output: str`
+5. 第一版 `handoff` 当前不保留：
+   - `run_id`
+   - `task_id`
+   - 其他额外标识字段
+6. `handoff` 中的 `final_output` 与 `graph_summary` 第一版都由 finalize LLM 基于统一上下文生成
 
 ## 5.2 Run Final Verification
 
@@ -70,21 +76,40 @@ enter finalize
 2. verifier 只验证最终结果
 3. verifier 消费统一 `handoff`
 4. verifier 返回 `VerificationResult`
+5. 第一版 `VerificationResult` 最小结构收口为：
+   - `result_status: pass | fail`
+   - `summary: str`
+   - `issues: list[str]`
+6. `issues` 在 `pass` 时允许为空列表
+7. `VerificationResult.summary / issues` 第一版先只用于 finalize 内部判定与收口，不额外挂到复杂状态位
+8. verifier 第一版是独立边界对象，不内联成 orchestrator 私有逻辑
+9. verifier 第一版采用轻量 ReAct 架构，但不复用 execute 当前的 `ReActStepRunner`
+10. verifier 第一版允许多轮内部循环，但最大轮数上限固定为 `20`
+11. verifier 第一版当前不接：
+    - tool call
+    - memory 写入
+    - graph 动作
+    - next phase 决策
+
+## 5.2.1 Finalize Generator 与 Verifier 的挂载边界
+
+当前第一版补充结论如下：
+
+1. `finalize generator` 与 `verifier` 不应混成同一内部 helper
+2. `finalize generator` 第一版可先保留在 orchestrator 邻近层
+3. `verifier` 第一版必须保持独立边界对象
+4. `finalize_model_provider` 与 `verifier_model_provider` 从第一版开始分开注入
+5. 两条链第一版都禁止 tool call，并要求 JSON-only 输出
 
 ## 5.3 Determine Result Status
 
 规则如下：
 
 1. `result_status` 由 verification 与 finalize 共同收敛
-2. 允许结果为：
+2. 第一版当前只允许结果为：
    - `pass`
-   - `partial`
    - `fail`
-
-但本任务明确规定：
-
-1. `partial` 只允许在 verification `pass` 时出现
-2. verification `fail` 时不直接收成 `partial`
+3. `partial` 暂不进入第一版实现
 
 ## 5.4 Build RunOutcome
 
@@ -93,16 +118,31 @@ enter finalize
 1. 只有 verification `pass` 后，才允许正式构建 `RunOutcome`
 2. `handoff` 进入 `RunOutcome.handoff`
 3. `final_answer`、`result_status`、`stop_reason` 在此阶段正式收敛
+4. 第一版可先将 host-facing `output_text` 直接收口为 `final_output`
+5. 第一版当前不单独引入新的 `RunOutcome` 代码模型
+6. 当前先由 `run_finalize_phase(...)` 直接组装 `HostRunResult`
+7. finalize `pass` 时第一版收口为：
+   - `HostRunResult.runtime_state = "completed"`
+   - `HostRunResult.output_text = final_output`
+   - `run_lifecycle.result_status = "pass"`
+   - `run_lifecycle.stop_reason = "finalize_passed"`
 
 ## 6. Verification Fail 的回退规则
 
-本任务明确规定：
+当前第一版改为：
 
-1. verification fail 不直接结束 run
-2. verification fail 默认回退到 `execute`
-3. fail 问题通过 `finalize_return_input` 正式回灌
+1. verification fail 直接结束当前 run
+2. 当前不回退 `execute`
+3. 当前不直接进入 `replan`
+4. 当前也不引入 `replan` 判定器
+5. `final_verification_fail` 相关回流逻辑整体后置到后续模块
+6. host-facing 当前收口为：
+   - `output_text = ""`
+   - `runtime_state = "failed"`
+   - `result_status = "fail"`
+   - `stop_reason = "final_verification_failed"`
 
-推荐结构如下：
+`FinalizeReturnInput` 结构仍保留为后续回流设计预留：
 
 ```ts
 type FinalizeReturnInput = {
@@ -111,56 +151,34 @@ type FinalizeReturnInput = {
 };
 ```
 
-写入后执行：
+## 7. 当前不展开部分
 
-1. `current_phase -> execute`
-2. 下一轮 `step` 读取这份返工输入继续修正
+当前第一版先不展开：
 
-## 7. 多次 Finalize 回退
-
-第一版明确允许：
-
-1. `execute -> finalize -> execute`
-2. `execute -> finalize -> execute -> finalize`
-
-也就是说：
-
-1. final verification 不是一次性闸门
-2. 它可以成为主链路多轮收口尝试的一部分
-
-## 8. Finalize 重试上限
-
-本任务明确规定：
-
-1. 第一版保留“重试上限”概念
-2. 但不在设计文档中写死具体数值
-3. 具体数值留给实现配置层决定
-
-这样做的原因是：
-
-1. runtime 需要有明确失败出口
-2. 但不同任务类型对重试容忍度可能不同
+1. `execute -> finalize -> execute` 回退闭环
+2. `verification fail -> replan` 判定闭环
+3. finalize 重试上限
+4. `partial`
 
 ## 9. 最终 Fail 出口
 
 第一版建议以下情况可进入最终 `fail`：
 
-1. final verification fail 且达到 finalize 重试上限
+1. final verification fail
 2. 最终未形成可交付输出
 3. 关键证据始终不足，无法支撑结果成立
 
 这意味着：
 
 1. `fail` 必须有正式退出条件
-2. 不能让 run 无限在 `execute / finalize` 间循环
+2. 第一版当前直接以 verification fail 作为失败出口
 
-## 10. Partial 的限制
+## 10. Partial 的当前边界
 
-本任务再次明确：
+本任务当前明确：
 
-1. `partial` 只在 verification `pass` 时允许
-2. `partial` 表示“有限完成 + 正式说明”
-3. 它不是 verification fail 的宽松替代
+1. `partial` 暂不进入第一版实现
+2. 后续若重新引入，仍只允许在 verification `pass` 时出现
 
 ## 11. Memory Hook 预留
 
@@ -237,8 +255,8 @@ type FinalizeReturnInput = {
 
 可以压缩成 5 句话：
 
-1. `finalize` 只有在满足正式触发条件时才能进入
-2. final verification fail 后允许回退 `execute` 继续修正
-3. `partial` 只允许在 verification pass 时出现
-4. finalize 必须有重试上限与最终 fail 出口
+1. `finalize` 第一版只在 graph 全部 `completed` 时进入
+2. final verification fail 当前直接结束，不做回退动作
+3. `partial` 暂不进入第一版实现
+4. finalize 必须有明确最终 fail 出口
 5. finalize closeout 后必须预留记忆接入挂点

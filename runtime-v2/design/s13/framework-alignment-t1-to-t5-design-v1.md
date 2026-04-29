@@ -193,6 +193,15 @@
 2. `Reflexion` 属于 solve 侧
 3. `verification` 属于 finalize 侧
 
+当前补充第一版 finalize 边界如下：
+
+1. `FinalizePhase` 第一版只在 graph 全部 `completed` 时进入
+2. `finalize` 继续沿用统一 prompt 架构并读取统一上下文
+3. `final_output` 由 `FinalizePhase` 基于上下文重新生成
+4. verifier 只消费 `handoff`
+5. verification `fail` 第一版当前直接结束，不回退 `execute`，也不直接触发 `replan`
+6. `final_verification_fail` 的回流与判定器后置到后续模块
+
 ## 11. 当前未展开部分
 
 本模块当前明确不进入：

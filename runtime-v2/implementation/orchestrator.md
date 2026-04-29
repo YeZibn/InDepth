@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前 orchestrator 层已正式落地初始上下文构建、真实 `PreparePhase` planner 链、graph 级 `ExecutePhase / Solver` 主循环以及 `finalize` 收口骨架。
+当前 orchestrator 层已正式落地初始上下文构建、真实 `PreparePhase` planner 链、graph 级 `ExecutePhase / Solver` 主循环以及真实 `FinalizePhase / Verification` 收口链。
 
 当前已实现：
 
@@ -14,6 +14,7 @@
 6. `run_finalize_phase(...)`
 7. `prepare` planner payload -> `PrepareResult.patch` 规范化与回写
 8. `SolverResult` 消费与 graph 终态收口
+9. finalize generator 与 verifier 编排
 
 对应代码：
 
@@ -66,16 +67,11 @@
 3. `run_execute_phase(...)`
 4. `run_finalize_phase(...)`
 
-当前返回：
-
-1. `runtime_state = "completed"`
-2. `output_text = ""`
-
 这表示主 runtime 链已具备：
 
 1. `prepare` 的真实 planning
 2. `execute` 的 graph 级求解循环
-3. `finalize` 的最小 host 收口
+3. `finalize` 的真实验证与 host 收口
 
 ## 当前 phase 规则
 
@@ -105,7 +101,11 @@
      - `stop_reason = "execute_finished"`
 3. `run_finalize_phase(...)`
    - 要求输入 phase 为 `FINALIZE`
-   - 收口为最小 `HostRunResult`
+   - 要求 graph 全部 `completed`
+   - 调 finalize generator 生成 `final_output / graph_summary`
+   - 组装 `Handoff`
+   - 调独立 `RuntimeVerifier`
+   - 根据 verifier verdict 收口为 `HostRunResult`
 4. phase 顺序不对时，当前显式抛错
 
 ## 当前边界
@@ -114,7 +114,7 @@
 
 1. prepare 内多轮循环
 2. 非空图增量 planning
-3. 真实 finalize 守门链
+3. finalize 内 tool loop
 4. 完整 replan 回流
 5. phase 间复杂闭环
 
@@ -184,6 +184,29 @@
    - graph 收为 `blocked`
    - active node 置空
 
+## 当前 finalize 主链
+
+当前 `run_finalize_phase(...)` 的正式规则如下：
+
+1. graph 必须全部 `completed`
+2. finalize generator 当前使用独立 `finalize_model_provider`
+3. verifier 当前使用独立 `RuntimeVerifier`
+4. 两条链都禁止 tool call
+5. verifier verdict 为 `pass` 时：
+   - `result_status = "pass"`
+   - `stop_reason = "finalize_passed"`
+   - host result 返回 `completed + final_output`
+6. verifier verdict 为 `fail` 时：
+   - `result_status = "fail"`
+   - `stop_reason = "final_verification_failed"`
+   - host result 返回 `failed + empty output`
+
+当前这一步明确：
+
+1. finalize generator 与 verifier 已经分开挂载
+2. verifier 是独立边界对象，不复用 execute 当前的 `ReActStepRunner`
+3. verification fail 第一版当前直接结束，不回退 execute，也不接 replan
+
 ## prepare fallback 的当前工程语义
 
 当前当 prepare planner model 调用失败时：
@@ -199,4 +222,4 @@ orchestrator 层下一步预计进入：
 
 1. prepare payload 到 patch 的校验细化与错误分类增强
 2. 非空图 / replan 场景下的 prepare 扩展
-3. finalize / verification 正式链路
+3. finalize / verification 的回流与 replan 闭环

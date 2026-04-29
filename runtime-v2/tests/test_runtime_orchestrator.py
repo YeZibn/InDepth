@@ -10,6 +10,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.host.interfaces import StartRunIdentity
+from rtv2.finalize import RuntimeVerifier, VerificationResult, VerificationResultStatus
 from rtv2.memory import (
     RuntimeMemoryEntry,
     RuntimeMemoryEntryType,
@@ -44,7 +45,21 @@ class FakeReActStepRunner:
         return self.output
 
 
-def create_orchestrator(react_step_runner=None, planner_model_provider=None) -> RuntimeOrchestrator:
+class StubRuntimeVerifier:
+    def __init__(self, result: VerificationResult | None = None) -> None:
+        self.result = result or VerificationResult(
+            result_status=VerificationResultStatus.PASS,
+            summary="verified",
+            issues=[],
+        )
+        self.handoffs = []
+
+    def verify(self, handoff):
+        self.handoffs.append(handoff)
+        return self.result
+
+
+def create_orchestrator(react_step_runner=None, planner_model_provider=None, finalize_model_provider=None, runtime_verifier=None) -> RuntimeOrchestrator:
     db_dir = tempfile.mkdtemp()
     return RuntimeOrchestrator(
         graph_store=InMemoryTaskGraphStore(),
@@ -60,6 +75,14 @@ def create_orchestrator(react_step_runner=None, planner_model_provider=None) -> 
             )
         ),
         planner_model_provider=planner_model_provider,
+        finalize_model_provider=finalize_model_provider or SequenceModelProvider(
+            [
+                ModelOutput(
+                    content='{"final_output":"Final answer.","graph_summary":"All graph nodes completed."}'
+                )
+            ]
+        ),
+        runtime_verifier=runtime_verifier or StubRuntimeVerifier(),
         memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
     )
 
@@ -219,7 +242,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(run_result.task_id, "task-1")
         self.assertEqual(run_result.run_id, "run-1")
         self.assertEqual(run_result.runtime_state, "completed")
-        self.assertEqual(run_result.output_text, "")
+        self.assertEqual(run_result.output_text, "Final answer.")
 
     def test_prepare_execute_finalize_methods_advance_minimal_state(self):
         planner = SequenceModelProvider(
@@ -259,7 +282,9 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         finalized = orchestrator.run_finalize_phase(executed)
         self.assertEqual(finalized.runtime_state, "completed")
-        self.assertEqual(finalized.output_text, "")
+        self.assertEqual(finalized.output_text, "Final answer.")
+        self.assertEqual(executed.run_lifecycle.result_status, "pass")
+        self.assertEqual(executed.run_lifecycle.stop_reason, "finalize_passed")
 
     def test_prepare_phase_runs_planner_and_writes_goal_graph_and_memory(self):
         planner = SequenceModelProvider(
@@ -372,6 +397,75 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             orchestrator.run_finalize_phase(context)
+
+    def test_finalize_phase_requires_all_graph_nodes_completed(self):
+        orchestrator = create_orchestrator()
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Finalize validation.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.FINALIZE
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Incomplete node",
+                kind="execution",
+                description="Still running",
+                node_status=NodeStatus.RUNNING,
+            )
+        ]
+
+        with self.assertRaises(ValueError):
+            orchestrator.run_finalize_phase(context)
+
+    def test_finalize_phase_returns_failed_host_result_when_verifier_fails(self):
+        finalize_model_provider = SequenceModelProvider(
+            [ModelOutput(content='{"final_output":"Candidate output.","graph_summary":"Completed graph."}')]
+        )
+        runtime_verifier = StubRuntimeVerifier(
+            VerificationResult(
+                result_status=VerificationResultStatus.FAIL,
+                summary="missing evidence",
+                issues=["missing evidence"],
+            )
+        )
+        orchestrator = create_orchestrator(
+            finalize_model_provider=finalize_model_provider,
+            runtime_verifier=runtime_verifier,
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Finalize failure flow.",
+            )
+        )
+        context.run_identity.goal = "Finalize failure flow."
+        context.run_lifecycle.current_phase = RunPhase.FINALIZE
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Done node",
+                kind="execution",
+                description="Finished work",
+                node_status=NodeStatus.COMPLETED,
+            )
+        ]
+
+        result = orchestrator.run_finalize_phase(context)
+
+        self.assertEqual(result.runtime_state, "failed")
+        self.assertEqual(result.output_text, "")
+        self.assertEqual(context.run_lifecycle.result_status, "fail")
+        self.assertEqual(context.run_lifecycle.stop_reason, "final_verification_failed")
+        self.assertEqual(runtime_verifier.handoffs[0].final_output, "Candidate output.")
 
     def test_select_active_node_prefers_runtime_state_active_node(self):
         orchestrator = create_orchestrator()

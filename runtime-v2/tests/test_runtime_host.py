@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
 
 from rtv2.memory import SQLiteRuntimeMemoryStore
 from rtv2.host.runtime_host import RuntimeHost
+from rtv2.finalize import VerificationResult, VerificationResultStatus
 from rtv2.model.base import ModelOutput
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
 from rtv2.solver.models import StepResult, StepStatusSignal
@@ -66,6 +67,15 @@ class FakeReActStepRunner:
         )
 
 
+class StubRuntimeVerifier:
+    def verify(self, handoff):
+        return VerificationResult(
+            result_status=VerificationResultStatus.PASS,
+            summary="verified",
+            issues=[],
+        )
+
+
 def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> RuntimeHost:
     graph_store = InMemoryTaskGraphStore()
     db_dir = tempfile.mkdtemp()
@@ -86,6 +96,15 @@ def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> Runt
                 ]
                 * 8
             ),
+            finalize_model_provider=SequenceModelProvider(
+                [
+                    ModelOutput(
+                        content='{"final_output":"Host final answer.","graph_summary":"Completed graph."}'
+                    )
+                ]
+                * 8
+            ),
+            runtime_verifier=StubRuntimeVerifier(),
             react_step_runner=FakeReActStepRunner(),
             memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
         ),
@@ -164,7 +183,7 @@ class RuntimeHostTests(unittest.TestCase):
         self.assertEqual(run_result.task_id, "task-1")
         self.assertEqual(run_result.run_id, "run-1")
         self.assertEqual(run_result.runtime_state, "completed")
-        self.assertEqual(run_result.output_text, "")
+        self.assertEqual(run_result.output_text, "Host final answer.")
         self.assertEqual(host.host_state.current_task_id, "task-1")
         self.assertEqual(host.host_state.active_run_id, "run-1")
         self.assertEqual(id_generator.calls, ["session", "task", "run"])

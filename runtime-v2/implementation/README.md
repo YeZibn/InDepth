@@ -29,11 +29,12 @@
    [skills.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/skills.md)
 9. Solver / ExecutePhase：
    [solver.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/solver.md)
+10. Finalize / Verification：
+   [finalize.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/finalize.md)
 
 ## 预留实现块
 
 后续预计逐步补以下说明文档：
 
 1. `tools.md`
-2. `finalize.md`
-3. `subagent.md`
+2. `subagent.md`

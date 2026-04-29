@@ -5,6 +5,7 @@ from rtv2.prompting.models import (
     ExecutionNodePromptContext,
     ExecutionPrompt,
     ExecutionPromptInput,
+    FinalizePromptInput,
     PreparePromptInput,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "ExecutionPrompt",
     "ExecutionPromptAssembler",
     "ExecutionPromptInput",
+    "FinalizePromptInput",
     "PreparePromptInput",
 ]

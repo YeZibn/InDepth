@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from rtv2.finalize import FinalizeGenerationResult, Handoff, RuntimeVerifier, VerificationResultStatus
 from rtv2.host.interfaces import HostRunResult, StartRunIdentity
 from rtv2.memory import (
     RuntimeMemoryEntry,
@@ -23,6 +24,7 @@ from rtv2.prompting import (
     ExecutionPrompt,
     ExecutionPromptAssembler,
     ExecutionPromptInput,
+    FinalizePromptInput,
     PreparePromptInput,
 )
 from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
@@ -66,6 +68,11 @@ class RuntimeOrchestrator:
         prompt_assembler: ExecutionPromptAssembler | None = None,
         planner_model_provider: ModelProvider | None = None,
         planner_generation_config: GenerationConfig | None = None,
+        finalize_model_provider: ModelProvider | None = None,
+        finalize_generation_config: GenerationConfig | None = None,
+        runtime_verifier: RuntimeVerifier | None = None,
+        verifier_model_provider: ModelProvider | None = None,
+        verifier_generation_config: GenerationConfig | None = None,
         runtime_solver: RuntimeSolver | None = None,
     ) -> None:
         self.graph_store = graph_store
@@ -83,9 +90,21 @@ class RuntimeOrchestrator:
             temperature=0.1,
             max_tokens=1200,
         )
+        self.finalize_model_provider = finalize_model_provider or HttpChatModelProvider(
+            default_config=GenerationConfig(temperature=0.1, max_tokens=1200)
+        )
+        self.finalize_generation_config = finalize_generation_config or GenerationConfig(
+            temperature=0.1,
+            max_tokens=1200,
+        )
         self.react_step_runner = react_step_runner or ReActStepRunner(
             tool_registry=tool_registry,
             memory_store=self.memory_store,
+        )
+        self.runtime_verifier = runtime_verifier or RuntimeVerifier(
+            model_provider=verifier_model_provider,
+            generation_config=verifier_generation_config,
+            max_rounds=20,
         )
         self.runtime_solver = runtime_solver or RuntimeSolver(
             react_step_runner=self.react_step_runner,
@@ -204,10 +223,35 @@ class RuntimeOrchestrator:
         if context.run_lifecycle.current_phase is not RunPhase.FINALIZE:
             raise ValueError("Finalize phase requires current_phase=FINALIZE")
 
+        graph_state = context.domain_state.task_graph_state
+        if not graph_state.nodes or any(node.node_status is not NodeStatus.COMPLETED for node in graph_state.nodes):
+            raise ValueError("Finalize phase requires all graph nodes to be completed")
+
+        finalize_result = self._run_finalize_generator(context)
+        handoff = Handoff(
+            goal=context.run_identity.goal,
+            user_input=context.run_identity.user_input,
+            graph_summary=finalize_result.graph_summary,
+            final_output=finalize_result.final_output,
+        )
+        verification_result = self.runtime_verifier.verify(handoff)
+
+        if verification_result.result_status is VerificationResultStatus.PASS:
+            context.run_lifecycle.result_status = "pass"
+            context.run_lifecycle.stop_reason = "finalize_passed"
+            return HostRunResult(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                runtime_state="completed",
+                output_text=handoff.final_output,
+            )
+
+        context.run_lifecycle.result_status = "fail"
+        context.run_lifecycle.stop_reason = "final_verification_failed"
         return HostRunResult(
             task_id=context.run_identity.task_id,
             run_id=context.run_identity.run_id,
-            runtime_state="completed",
+            runtime_state="failed",
             output_text="",
         )
 
@@ -371,6 +415,29 @@ class RuntimeOrchestrator:
                 runtime_memory_text=prompt_context.prompt_context_text,
                 capability_text=self._build_tool_capability_text(),
                 finalize_return_input=self._build_finalize_return_input_text(context),
+            )
+        )
+
+    def build_finalize_prompt(self, context: RunContext) -> ExecutionPrompt:
+        """Build the three-block finalize prompt for closeout generation."""
+
+        prompt_context = self.memory_processor.build_prompt_context_text(
+            RuntimeMemoryProcessorInput(
+                task_id=context.run_identity.task_id,
+                run_id=context.run_identity.run_id,
+                current_phase=context.run_lifecycle.current_phase.value,
+                active_node_id=context.runtime_state.active_node_id,
+                user_input=context.run_identity.user_input,
+                compression_state=context.runtime_state.compression_state,
+            )
+        )
+        return self.prompt_assembler.build_finalize_prompt(
+            FinalizePromptInput(
+                user_input=context.run_identity.user_input,
+                goal=context.run_identity.goal,
+                graph_snapshot_text=self._build_graph_snapshot_text(context.domain_state.task_graph_state),
+                runtime_memory_text=prompt_context.prompt_context_text,
+                capability_text=self._build_tool_capability_text(),
             )
         )
 
@@ -542,6 +609,38 @@ class RuntimeOrchestrator:
             ],
             tools=[],
             config=self.planner_generation_config,
+        )
+
+    def _run_finalize_generator(self, context: RunContext) -> FinalizeGenerationResult:
+        finalize_prompt = self.build_finalize_prompt(context)
+        rendered_prompt = self.render_execution_prompt(finalize_prompt)
+        model_output = self.finalize_model_provider.generate(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the runtime-v2 finalize generator. "
+                        "Return valid JSON only and do not call tools."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": rendered_prompt,
+                },
+            ],
+            tools=[],
+            config=self.finalize_generation_config,
+        )
+        payload = self._load_prepare_payload(model_output.content)
+        final_output = str(payload.get("final_output", "") or "").strip()
+        graph_summary = str(payload.get("graph_summary", "") or "").strip()
+        if not final_output:
+            raise ValueError("Finalize generator output must contain non-empty final_output")
+        if not graph_summary:
+            raise ValueError("Finalize generator output must contain non-empty graph_summary")
+        return FinalizeGenerationResult(
+            final_output=final_output,
+            graph_summary=graph_summary,
         )
 
     def _build_prepare_fallback_result(self, context: RunContext) -> PrepareResult:

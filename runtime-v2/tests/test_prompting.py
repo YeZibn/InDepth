@@ -12,6 +12,7 @@ from rtv2.prompting import (
     ExecutionNodePromptContext,
     ExecutionPromptAssembler,
     ExecutionPromptInput,
+    FinalizePromptInput,
     PreparePromptInput,
 )
 from rtv2.state.models import RunPhase
@@ -93,18 +94,24 @@ class ExecutionPromptAssemblerTests(unittest.TestCase):
         self.assertIn("## Capability Summary", prepare_prompt.dynamic_injection)
         self.assertIn("## Finalize Return Input", prepare_prompt.dynamic_injection)
 
-    def test_finalize_phase_prompt_keeps_reserved_stub(self):
+    def test_build_finalize_prompt_returns_finalize_specific_contract(self):
         assembler = ExecutionPromptAssembler()
-        base_input = ExecutionNodePromptContext(user_input="x")
-
-        finalize_prompt = assembler.build_execution_prompt(
-            ExecutionPromptInput(
-                phase=RunPhase.FINALIZE,
-                node_context=base_input,
+        finalize_prompt = assembler.build_finalize_prompt(
+            FinalizePromptInput(
+                user_input="Wrap up the task.",
+                goal="Deliver the final result.",
+                graph_snapshot_text="Graph id: graph-1",
+                runtime_memory_text="## Task task-1\n[user] prior context",
+                capability_text="- echo_text: Echo text.",
             )
         )
 
-        self.assertIn("reserved for later implementation", finalize_prompt.phase_prompt)
+        self.assertIn("Current phase: finalize.", finalize_prompt.phase_prompt)
+        self.assertIn("Return JSON only.", finalize_prompt.phase_prompt)
+        self.assertIn("Required top-level keys: final_output, graph_summary.", finalize_prompt.phase_prompt)
+        self.assertIn("Goal: Deliver the final result.", finalize_prompt.dynamic_injection)
+        self.assertIn("## Current Graph Snapshot", finalize_prompt.dynamic_injection)
+        self.assertIn("## Runtime Memory", finalize_prompt.dynamic_injection)
 
 
 if __name__ == "__main__":

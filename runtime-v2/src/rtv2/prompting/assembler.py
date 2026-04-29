@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rtv2.prompting.models import ExecutionPrompt, ExecutionPromptInput, PreparePromptInput
+from rtv2.prompting.models import ExecutionPrompt, ExecutionPromptInput, FinalizePromptInput, PreparePromptInput
 from rtv2.state.models import RunPhase
 
 
@@ -16,6 +16,15 @@ class ExecutionPromptAssembler:
             base_prompt=self._build_base_prompt(),
             phase_prompt=self._build_prepare_phase_prompt(),
             dynamic_injection=self._build_prepare_dynamic_injection(prompt_input),
+        )
+
+    def build_finalize_prompt(self, prompt_input: FinalizePromptInput) -> ExecutionPrompt:
+        """Build the formal prompt blocks for finalize-phase generation."""
+
+        return ExecutionPrompt(
+            base_prompt=self._build_base_prompt(),
+            phase_prompt=self._build_finalize_phase_prompt(),
+            dynamic_injection=self._build_finalize_dynamic_injection(prompt_input),
         )
 
     def build_execution_prompt(self, prompt_input: ExecutionPromptInput) -> ExecutionPrompt:
@@ -80,7 +89,11 @@ class ExecutionPromptAssembler:
         return "\n".join(
             [
                 "Current phase: finalize.",
-                "Finalize-phase prompt assembly is reserved for later implementation.",
+                "You are acting as the runtime-v2 finalize generator.",
+                "Use the provided context to produce the final delivery text and a concise graph summary.",
+                "Do not call tools and do not invent missing work.",
+                "Return JSON only.",
+                "Required top-level keys: final_output, graph_summary.",
             ]
         )
 
@@ -137,6 +150,21 @@ class ExecutionPromptAssembler:
                 ]
             )
         return "\n".join(lines)
+
+    def _build_finalize_dynamic_injection(self, prompt_input: FinalizePromptInput) -> str:
+        return "\n".join(
+            [
+                "## Current Task Context",
+                f"User input: {prompt_input.user_input or '(empty)'}",
+                f"Goal: {prompt_input.goal or '(empty)'}",
+                "## Current Graph Snapshot",
+                prompt_input.graph_snapshot_text or "(empty)",
+                "## Runtime Memory",
+                prompt_input.runtime_memory_text or "(empty)",
+                "## Capability Summary",
+                prompt_input.capability_text or "(empty)",
+            ]
+        )
 
     @staticmethod
     def _render_list(items: list[str]) -> str:

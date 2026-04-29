@@ -1,6 +1,6 @@
 # S11-T7 Verification Skeleton（V1）
 
-更新时间：2026-04-23  
+更新时间：2026-04-29  
 状态：Draft  
 对应任务：`S11-T7`
 
@@ -23,6 +23,9 @@
 3. verifier 只消费统一 `handoff`
 4. verifier 输出保持极简
 5. verifier 不决定后续动作
+6. verifier 第一版采用独立轻量 ReAct 架构
+7. verifier 不复用 execute 当前的 `ReActStepRunner`
+8. verifier 第一版允许多轮内部循环，但有轮数上限
 
 ## 3. Verifier 的定位
 
@@ -30,6 +33,7 @@ verifier 在 v1 中的定位是：
 
 1. final verification 专用链路
 2. 最终结果守门器
+3. 独立 verifier agent
 
 它不负责：
 
@@ -59,7 +63,7 @@ verifier 在 v1 中的定位是：
 type VerificationResult = {
   result_status: "pass" | "fail";
   summary: string;
-  issues?: string[];
+  issues: string[];
 };
 ```
 
@@ -68,6 +72,7 @@ type VerificationResult = {
 1. verifier 不直接输出 `partial`
 2. verifier 不直接输出 `next_phase`
 3. verifier 不直接输出 graph 动作
+4. `issues` 在 `pass` 时允许为空列表
 
 ## 6. Verifier 不决定后续动作
 
@@ -85,7 +90,12 @@ type VerificationResult = {
 第一版建议如下：
 
 ```ts
-type Handoff = unknown;
+type Handoff = {
+  goal: string;
+  user_input: string;
+  graph_summary: string;
+  final_output: string;
+};
 
 interface VerifierChain {
   verify(handoff: Handoff): VerificationResult;
@@ -96,6 +106,18 @@ interface VerifierChain {
 
 1. 输入只接 `handoff`
 2. 输出只给 `VerificationResult`
+3. 第一版 `handoff` 当前不额外携带 `run_id / task_id`
+
+## 7.1 轻量 ReAct 边界
+
+当前第一版补充结论如下：
+
+1. verifier 采用轻量 ReAct 架构
+2. 允许 verifier 内部进行多轮循环
+3. 第一版最大轮数上限为 `20`
+4. 第一版 verifier 当前不接 tool call
+5. verifier 不产出 `StepResult`
+6. verifier 不写 graph，不写 phase 决策
 
 ## 8. 与 Model Provider 的关系
 
@@ -109,6 +131,7 @@ interface VerifierChain {
 
 1. prompt 输入是 verifier 专用
 2. 调用位置是在 finalize 内部
+3. verifier model provider 与 finalize model provider 当前分开挂载
 
 ## 9. 与 Finalize Pipeline 的关系
 
