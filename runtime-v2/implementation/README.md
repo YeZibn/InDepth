@@ -23,6 +23,8 @@
    [memory.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/memory.md)
 6. Prompting：
    [prompting.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/prompting.md)
+7. Skills：
+   [skills.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/skills.md)
 
 ## 预留实现块
 

@@ -85,6 +85,34 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.addCleanup(tmpdir.cleanup)
         return SQLiteRuntimeMemoryStore(db_file=str(Path(tmpdir.name) / "runtime_memory.db"))
 
+    def create_skill_dir(
+        self,
+        root: Path,
+        *,
+        folder_name: str,
+        description: str = "Use this skill when needed.",
+    ) -> Path:
+        skill_dir = root / folder_name
+        skill_dir.mkdir(parents=True, exist_ok=False)
+        (skill_dir / "SKILL.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    f"name: {folder_name}",
+                    f"description: {description}",
+                    "---",
+                    "",
+                    "# Skill Body",
+                    "Detailed instructions.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        refs_dir = skill_dir / "references"
+        refs_dir.mkdir()
+        (refs_dir / "guide.md").write_text("guide", encoding="utf-8")
+        return skill_dir
+
     def test_explicit_react_step_runner_takes_priority_over_tool_registry_auto_wiring(self):
         registry = ToolRegistry()
         registry.register(echo_text)
@@ -950,6 +978,59 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         prompt = orchestrator.build_execution_prompt(context, node)
 
         self.assertNotIn("ppt-skill", prompt.dynamic_injection)
+
+    def test_orchestrator_auto_loads_enabled_skills_from_skill_paths(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        skill_dir = self.create_skill_dir(Path(tmpdir.name), folder_name="demo-skill")
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            skill_paths=[str(skill_dir)],
+            memory_store=self.create_memory_store(),
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Use auto-loaded skill.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            description="Do the current task.",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        prompt = orchestrator.build_execution_prompt(context, node)
+
+        self.assertIsNotNone(orchestrator.skill_registry)
+        self.assertEqual(
+            [skill.manifest.name for skill in orchestrator.skill_registry.list_enabled()],
+            ["demo-skill"],
+        )
+        self.assertIn("- demo-skill: Use this skill when needed.", prompt.dynamic_injection)
+
+    def test_orchestrator_auto_registers_skill_tools_from_skill_paths(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        skill_dir = self.create_skill_dir(Path(tmpdir.name), folder_name="demo-skill")
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            skill_paths=[str(skill_dir)],
+            memory_store=self.create_memory_store(),
+        )
+
+        self.assertIsNotNone(orchestrator.tool_registry)
+        tool_names = [schema["name"] for schema in orchestrator.tool_registry.list_tool_schemas()]
+        self.assertIn("get_skill_instructions", tool_names)
+        self.assertIn("get_skill_reference", tool_names)
+        self.assertIn("get_skill_script", tool_names)
+        self.assertIn("get_skill_asset", tool_names)
 
     def test_advance_node_minimally_materializes_failed_signal_without_patch(self):
         react_runner = FakeReActStepRunner(

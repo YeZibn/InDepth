@@ -352,7 +352,7 @@
 - 任务 03：已完成
 - 任务 04：已完成
 - 任务 05：已完成
-- 任务 06：未开始
+- 任务 06：已完成
 
 ---
 
@@ -360,10 +360,49 @@
 
 ### 2026-04-29
 
+#### 记录 069：完成模块 17 的任务 06 实现说明、主链接线与模块结项收尾
+
+- 状态：已完成
+- 范围：完成模块 17 的任务 06，补齐 skill 模块实现说明、README 索引、主 runtime 最小 skill 自动装载链与最终回归验证，完成模块 17 收尾
+- 结果：
+  - 已新增：
+    - `runtime-v2/implementation/skills.md`
+  - 已更新：
+    - `runtime-v2/implementation/README.md`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - 模块 17 的当前进度
+    - 模块 17 的开发记录
+  - 已正式接入主链接线：
+    - `RuntimeOrchestrator` 当前支持显式传入 `skill_paths`
+    - orchestrator 会通过 `LocalSkillLoader` 加载 skill
+    - 已加载 skill 会注册到 `SkillRegistry` 并默认启用
+    - skill resource access tools 会自动注册进统一 `ToolRegistry`
+  - 已补测试覆盖：
+    - `skill_paths` 自动加载后进入 enabled skill 列表
+    - 自动加载的 skill capability 摘要进入 prompt
+    - skill tools 会自动注册进主 runtime tool registry
+  - 已补实现说明：
+    - skill 模块代码入口
+    - loader / registry / prompt / tools 的责任链
+    - 主链接线现状
+    - 已完成项与未完成项
+- 验证结果：
+  - 已执行当前相关回归：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py`
+  - 结果：
+    - `Ran 49 tests ... OK`
+- 遗留问题：
+  - 当前 asset 仍只支持文本读取，不支持二进制内容
+  - 当前还未引入 host 层更正式的 skill 配置入口
+  - 当前尚未实现 dependency / version / reload / marketplace 等扩展能力
+- 下一步：
+  - 模块 17 已结项，可继续进入下一模块讨论
+
 #### 记录 068：完成模块 17 的任务 05 Skill Resource Access Tools 落地
 
 - 状态：已完成
-- 范围：完成模块 17 的任务 05，正式落地 skill resource access 的四个最小只读 tools，并补独立测试，不接 host / orchestrator 自动注册链
+- 范围：完成模块 17 的任务 05，正式落地 skill resource access 的四个最小只读 tools，并补独立测试
 - 结果：
   - 已新增：
     - `runtime-v2/src/rtv2/skills/tools.py`
@@ -396,7 +435,6 @@
   - 结果：
     - `Ran 11 tests ... OK`
 - 遗留问题：
-  - 当前 skill tools 还未由 host / orchestrator 自动注册进主 runtime
   - 当前 asset 仍只支持文本读取，不支持二进制内容
   - 当前还未补 skill 实现说明文档
 - 下一步：

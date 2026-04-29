@@ -22,7 +22,7 @@ from rtv2.prompting import (
     ExecutionPromptAssembler,
     ExecutionPromptInput,
 )
-from rtv2.skills import SkillRegistry, SkillStatus
+from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
 from rtv2.solver import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
@@ -48,13 +48,17 @@ class RuntimeOrchestrator:
         react_step_runner: ReActStepRunner | None = None,
         tool_registry: ToolRegistry | None = None,
         skill_registry: SkillRegistry | None = None,
+        skill_loader: LocalSkillLoader | None = None,
+        skill_paths: list[str] | None = None,
         memory_store: RuntimeMemoryStore | None = None,
         memory_processor: RuntimeMemoryProcessor | None = None,
         prompt_assembler: ExecutionPromptAssembler | None = None,
     ) -> None:
         self.graph_store = graph_store
-        self.tool_registry = tool_registry
+        self.skill_loader = skill_loader or LocalSkillLoader()
         self.skill_registry = skill_registry
+        self.tool_registry = tool_registry
+        self._load_and_enable_skills(skill_paths or [])
         self.memory_store = memory_store or SQLiteRuntimeMemoryStore()
         self.memory_processor = memory_processor or RuntimeMemoryProcessor(memory_store=self.memory_store)
         self.prompt_assembler = prompt_assembler or ExecutionPromptAssembler()
@@ -65,6 +69,23 @@ class RuntimeOrchestrator:
         self._graph_counter = 0
         self._node_counter = 0
         self._step_counter = 0
+
+    def _load_and_enable_skills(self, skill_paths: list[str]) -> None:
+        if not skill_paths:
+            return
+
+        if self.skill_registry is None:
+            self.skill_registry = SkillRegistry()
+
+        for skill_path in skill_paths:
+            for skill in self.skill_loader.load(skill_path):
+                self.skill_registry.register(skill)
+                self.skill_registry.enable(skill.manifest.name)
+
+        if self.tool_registry is None:
+            self.tool_registry = ToolRegistry()
+        for spec in build_skill_tools(self.skill_registry):
+            self.tool_registry.register(spec)
 
     def build_initial_context(self, start_run_identity: StartRunIdentity) -> RunContext:
         """Build the minimal formal run context for a new run."""
