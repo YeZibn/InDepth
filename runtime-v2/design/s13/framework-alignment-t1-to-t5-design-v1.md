@@ -201,3 +201,24 @@
 2. runtime memory 中 reflexion 的详细 schema
 3. `PreparePhase` 在重规划场景下的具体输入输出 contract
 4. solver 内部 prompt 注入的具体模板
+
+## 12. PreparePhase 第一版落地边界补充
+
+针对后续开发阶段，当前补充结论如下：
+
+1. `PreparePhase` 第一版应当是一次真实 planning 调用，而不只是 phase 切换壳
+2. 第一版主产物以 graph 层结果为主，而不是只停留在 planning summary
+3. 在空图场景下，`PreparePhase` 允许直接产出首批节点
+4. 第一版需要保留一个轻量正式 `prepare_result`，作为后续 `execute / replan / finalize` 的稳定消费口
+5. `PreparePhase` 第一版输入面包括：
+   - `RunContext`
+   - `runtime memory`
+   - 当前 `user_input`
+   - 当前 graph 状态
+   - 轻量 skill capability
+6. `PreparePhase` 第一版当前不展开：
+   - `replan` 回流实现
+   - prepare 内多轮循环
+   - prepare 阶段主动大量调 tool
+   - skill resource 直读
+   - finalize / evaluator / reflexion 联动深化

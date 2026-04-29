@@ -84,6 +84,17 @@ RuntimeHost
 2. 初始 `active_node_id` 就位
 3. `RunContext` 进入可执行状态
 
+这里的“初始 task graph 就位”在后续正式实现中，允许通过一次真实 planning 调用直接生成首批 graph 结果，而不是只保留文本 planning summary。
+
+第一版 `PreparePhase` 的补充边界如下：
+
+1. 主产物以 graph 层结果为主
+2. 空图场景允许直接产出首批节点
+3. 可以保留一个轻量 `prepare_result` 作为后续阶段消费口
+4. 不在本轮引入 `replan` 回流实现
+5. 不在本轮引入 prepare 内多轮循环
+6. 不默认直读 skill resource
+
 本任务明确规定：
 
 1. `PreparePhase` 不自己切 phase

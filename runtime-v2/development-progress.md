@@ -354,11 +354,62 @@
 - 任务 05：已完成
 - 任务 06：已完成
 
+### 模块 18：PreparePhase / Planner 正式落地
+
+- 模块目标：
+  - 把当前 `prepare` 从“切 phase 的空壳”补成真实的 `Planner`
+  - 打通 `runtime memory + prompt + skill + model` 到 `prepare` 的正式输入链
+  - 让 `prepare` 能产出可被后续 `execute` 消费的正式准备结果
+  - 先完成首版初始 planning，不把 `replan` 一次性全部压进来
+- 已定子任务：
+  - 任务 01：对齐现有设计稿与当前代码状态，确定 `PreparePhase` 第一版正式范围，并修订已有设计稿中的旧表述
+  - 任务 02：确定 `PreparePhase` 的最小输入输出 contract
+  - 任务 03：实现 `prepare` 的 prompt 装配与 planner 调用链
+  - 任务 04：实现 `prepare` 产物回写
+  - 任务 05：把 `PreparePhase` 正式接入 orchestrator 主链并补测试
+  - 任务 06：补实现文档与开发进度，完成模块收尾
+
+当前进度：
+
+- 任务 01：已完成
+
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 070：完成模块 18 的任务 01 PreparePhase / Planner 第一版范围定稿与设计对齐
+
+- 状态：已完成
+- 范围：完成模块 18 的任务 01，对齐当前代码中的 `prepare` 空壳实现与既有设计稿，收口 `PreparePhase` 第一版的正式范围、主产物与不做项，并同步修订相关旧表述
+- 结果：
+  - 已确认 `Planner = PreparePhase` 在开发落地阶段继续保持不变
+  - 已确认 `PreparePhase` 第一版不再只是 phase 切换壳，而是一次真实 planning 调用
+  - 已确认 `PreparePhase` 第一版主产物以 graph 层结果为主，而不是单独停留在 planning summary
+  - 已确认在空图场景下，`PreparePhase` 允许直接产出首批节点，而不是只返回文本计划
+  - 已确认 `PreparePhase` 第一版需要保留一个轻量正式 `prepare_result`，供后续 `execute / replan / finalize` 稳定消费
+  - 已确认第一版正式输入面包括：
+    - `RunContext`
+    - `runtime memory`
+    - 当前 `user_input`
+    - 当前 graph 状态
+    - 轻量 skill capability
+  - 已确认第一版暂不进入：
+    - `replan` 回流实现
+    - prepare 内多轮循环
+    - prepare 阶段主动大量调 tool
+    - skill resource 直读
+    - finalize / evaluator / reflexion 联动深化
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s3/runtime-skeleton-t6-design-v1.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+- 遗留问题：
+  - `prepare_result` 的正式字段结构仍待模块 18 任务 02 继续定稿
+  - graph 初始化结果与 `TaskGraphPatch` 的精确关系仍待任务 02 明确
+- 下一步：
+  - 进入模块 18 的任务 02，确定 `PreparePhase` 的最小输入输出 contract
 
 #### 记录 069：完成模块 17 的任务 06 实现说明、主链接线与模块结项收尾
 
