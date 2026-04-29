@@ -16,6 +16,12 @@ from rtv2.memory import (
     RuntimeMemoryStore,
     SQLiteRuntimeMemoryStore,
 )
+from rtv2.prompting import (
+    ExecutionNodePromptContext,
+    ExecutionPrompt,
+    ExecutionPromptAssembler,
+    ExecutionPromptInput,
+)
 from rtv2.solver import ReActStepInput, ReActStepRunner
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import DomainState, RunContext, RunIdentity, RunLifecycle, RunPhase, RuntimeState
@@ -42,11 +48,13 @@ class RuntimeOrchestrator:
         tool_registry: ToolRegistry | None = None,
         memory_store: RuntimeMemoryStore | None = None,
         memory_processor: RuntimeMemoryProcessor | None = None,
+        prompt_assembler: ExecutionPromptAssembler | None = None,
     ) -> None:
         self.graph_store = graph_store
         self.tool_registry = tool_registry
         self.memory_store = memory_store or SQLiteRuntimeMemoryStore()
         self.memory_processor = memory_processor or RuntimeMemoryProcessor(memory_store=self.memory_store)
+        self.prompt_assembler = prompt_assembler or ExecutionPromptAssembler()
         self.react_step_runner = react_step_runner or ReActStepRunner(
             tool_registry=tool_registry,
             memory_store=self.memory_store,
@@ -311,6 +319,12 @@ class RuntimeOrchestrator:
     def build_react_step_prompt(self, context: RunContext, node: TaskGraphNode) -> str:
         """Assemble the minimal agent-facing prompt for a running node."""
 
+        execution_prompt = self.build_execution_prompt(context, node)
+        return self.render_execution_prompt(execution_prompt)
+
+    def build_execution_prompt(self, context: RunContext, node: TaskGraphNode) -> ExecutionPrompt:
+        """Build the three-block execution prompt for the current node."""
+
         self._append_run_user_input_entry(context)
         prompt_context = self.memory_processor.build_prompt_context_text(
             RuntimeMemoryProcessorInput(
@@ -322,25 +336,106 @@ class RuntimeOrchestrator:
                 compression_state=context.runtime_state.compression_state,
             )
         )
-        return "\n".join([
-            "You are executing one minimal ReAct step for the current runtime node.",
-            "",
-            "Task-level runtime context:",
-            prompt_context.prompt_context_text,
-            "",
-            "Current node:",
-            f"- node_id: {node.node_id}",
-            f"- name: {node.name}",
-            f"- kind: {node.kind}",
-            f"- status: {node.node_status.value}",
-            f"- description: {node.description}",
-            "",
-            "Your task:",
-            "- Think briefly about the next useful move.",
-            "- Describe the action you would take in this single step.",
-            "- Report the resulting observation for this single step.",
-            "- Return a minimal step status signal for runtime consumption.",
-        ])
+        return self.prompt_assembler.build_execution_prompt(
+            ExecutionPromptInput(
+                phase=context.run_lifecycle.current_phase,
+                node_context=self._build_execution_node_prompt_context(context, node),
+                runtime_memory_text=prompt_context.prompt_context_text,
+                tool_capability_text=self._build_tool_capability_text(),
+                finalize_return_input=self._build_finalize_return_input_text(context),
+            )
+        )
+
+    @staticmethod
+    def render_execution_prompt(execution_prompt: ExecutionPrompt) -> str:
+        """Render the three prompt blocks into the current single-string step prompt."""
+
+        return "\n\n".join(
+            [
+                "## Base Prompt",
+                execution_prompt.base_prompt,
+                "## Phase Prompt",
+                execution_prompt.phase_prompt,
+                "## Dynamic Injection",
+                execution_prompt.dynamic_injection,
+            ]
+        )
+
+    def _build_execution_node_prompt_context(
+        self,
+        context: RunContext,
+        node: TaskGraphNode,
+    ) -> ExecutionNodePromptContext:
+        return ExecutionNodePromptContext(
+            user_input=context.run_identity.user_input,
+            goal=context.run_identity.goal,
+            active_node_id=node.node_id,
+            active_node_name=node.name,
+            active_node_description=node.description,
+            active_node_status=node.node_status.value,
+            dependency_summaries=self._build_dependency_summaries(
+                context.domain_state.task_graph_state,
+                node,
+            ),
+            artifacts=self._render_result_refs(node.artifacts),
+            evidence=self._render_result_refs(node.evidence),
+            notes=list(node.notes),
+        )
+
+    def _build_dependency_summaries(
+        self,
+        graph_state: TaskGraphState,
+        node: TaskGraphNode,
+    ) -> list[str]:
+        summaries: list[str] = []
+        for dependency_id in node.dependencies:
+            dependency_node = self._find_node(graph_state, dependency_id)
+            if dependency_node is None:
+                summaries.append(f"{dependency_id} | (missing) | unknown")
+                continue
+            summaries.append(
+                f"{dependency_node.node_id} | {dependency_node.name or '(empty)'} | {dependency_node.node_status.value}"
+            )
+        return summaries
+
+    def _build_tool_capability_text(self) -> str:
+        if self.tool_registry is None:
+            return "(no tools available)"
+
+        tool_schemas = self.tool_registry.list_tool_schemas()
+        if not tool_schemas:
+            return "(no tools available)"
+
+        lines = []
+        for schema in tool_schemas:
+            name = str(schema.get("name", "") or "").strip() or "(unnamed)"
+            description = str(schema.get("description", "") or "").strip() or "(no description)"
+            lines.append(f"- {name}: {description}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_finalize_return_input_text(context: RunContext) -> str:
+        finalize_return_input = context.runtime_state.finalize_return_input
+        if finalize_return_input is None:
+            return ""
+
+        lines = [
+            f"Verification summary: {finalize_return_input.verification_summary or '(empty)'}",
+            "Verification issues:",
+        ]
+        if finalize_return_input.verification_issues:
+            lines.extend(f"- {issue}" for issue in finalize_return_input.verification_issues)
+        else:
+            lines.append("(empty)")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_result_refs(result_refs: list) -> list[str]:
+        rendered: list[str] = []
+        for result_ref in result_refs:
+            title = result_ref.title or "(untitled)"
+            rendered.append(f"{result_ref.ref_id} | {result_ref.ref_type} | {title}")
+        return rendered
 
     def _append_run_user_input_entry(self, context: RunContext) -> None:
         existing_entries = self.memory_store.list_entries(

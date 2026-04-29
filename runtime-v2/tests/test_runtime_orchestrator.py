@@ -563,11 +563,13 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(step_result.patch)
         self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.COMPLETED)
         self.assertEqual(len(react_runner.inputs), 1)
-        self.assertIn("Task-level runtime context:", react_runner.inputs[0].step_prompt)
-        self.assertIn("- user_input: Running node.", react_runner.inputs[0].step_prompt)
+        self.assertIn("## Base Prompt", react_runner.inputs[0].step_prompt)
+        self.assertIn("## Phase Prompt", react_runner.inputs[0].step_prompt)
+        self.assertIn("## Dynamic Injection", react_runner.inputs[0].step_prompt)
+        self.assertIn("User input: Running node.", react_runner.inputs[0].step_prompt)
         self.assertIn("## Run run-1", react_runner.inputs[0].step_prompt)
-        self.assertIn("- node_id: node-1", react_runner.inputs[0].step_prompt)
-        self.assertIn("- status: running", react_runner.inputs[0].step_prompt)
+        self.assertIn("Active node id: node-1", react_runner.inputs[0].step_prompt)
+        self.assertIn("Active node status: running", react_runner.inputs[0].step_prompt)
 
     def test_advance_node_minimally_returns_none_for_non_progressing_statuses(self):
         orchestrator = create_orchestrator()
@@ -813,6 +815,9 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         prompt = orchestrator.build_react_step_prompt(context, node)
 
+        self.assertIn("## Base Prompt", prompt)
+        self.assertIn("## Phase Prompt", prompt)
+        self.assertIn("## Dynamic Injection", prompt)
         self.assertIn("## Run run-1", prompt)
         self.assertIn("Previous run input.", prompt)
         self.assertIn("## Run run-2", prompt)
@@ -820,6 +825,47 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         entries = memory_store.list_entries(RuntimeMemoryQuery(task_id="task-1", run_id="run-2"))
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].content, "Current run input.")
+
+    def test_build_execution_prompt_includes_tool_summary_and_dependency_summaries(self):
+        registry = ToolRegistry()
+        registry.register(echo_text)
+        orchestrator = RuntimeOrchestrator(
+            graph_store=InMemoryTaskGraphStore(),
+            tool_registry=registry,
+            memory_store=self.create_memory_store(),
+        )
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Inspect node context.",
+            )
+        )
+        dependency = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Dependency",
+            kind="execution",
+            node_status=NodeStatus.COMPLETED,
+        )
+        node = TaskGraphNode(
+            node_id="node-2",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            description="Process the current request.",
+            node_status=NodeStatus.RUNNING,
+            dependencies=["node-1"],
+        )
+        context.domain_state.task_graph_state.nodes = [dependency, node]
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+
+        prompt = orchestrator.build_execution_prompt(context, node)
+
+        self.assertIn("- echo_text: Echo text.", prompt.dynamic_injection)
+        self.assertIn("node-1 | Dependency | completed", prompt.dynamic_injection)
+        self.assertIn("Active node id: node-2", prompt.dynamic_injection)
 
     def test_advance_node_minimally_materializes_failed_signal_without_patch(self):
         react_runner = FakeReActStepRunner(

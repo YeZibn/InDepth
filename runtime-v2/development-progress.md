@@ -326,8 +326,8 @@
 
 - 任务 01：已完成
 - 任务 02：已完成
-- 任务 03：未开始
-- 任务 04：未开始
+- 任务 03：已完成
+- 任务 04：已完成
 - 任务 05：未开始
 - 任务 06：未开始
 
@@ -335,7 +335,116 @@
 
 ## 开发记录
 
+### 2026-04-29
+
+#### 记录 058：完成模块 16 的任务 04 Prompt 输入提取责任链与主输入接线方案定稿
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 04 设计对齐，明确 runtime memory、current node、run identity 在 prompt 主链中的提取责任链与正式接线位置，不进入代码实现
+- 结果：
+  - 已确认任务 04 的正式责任链为：
+    - `RuntimeOrchestrator` 负责读取状态与上游组件
+    - `RuntimeOrchestrator` 负责构造 `ExecutionNodePromptContext`
+    - `RuntimeOrchestrator` 负责构造 `ExecutionPromptInput`
+    - `ExecutionPromptAssembler` 只负责消费输入并产出 `ExecutionPrompt`
+  - 已确认 `ExecutionPromptAssembler` 不直接依赖：
+    - `RunContext`
+    - `TaskGraphNode`
+    - `RuntimeMemoryProcessor`
+  - 已确认 `runtime memory` 的正式来源为：
+    - `RuntimeMemoryProcessor.build_prompt_context_text(...)`
+    - 并落到 `ExecutionPromptInput.runtime_memory_text`
+  - 已确认 `run identity` 在 prompt 中只抽取：
+    - `user_input`
+    - `goal`
+    - 不把 `session_id / task_id / run_id` 直接送入 prompt
+  - 已确认 `current node` 相关信息统一进入：
+    - `ExecutionNodePromptContext`
+  - 已确认 `tool_capability_text` 由 orchestrator 基于 `ToolRegistry` 生成轻量摘要文本，再传给 assembler
+  - 已确认 `dependency_summaries` 第一版只采用轻量摘要，不引入依赖节点详细正文
+- 遗留问题：
+  - `tool_capability_text` 的具体文本格式仍待代码落地时最终收口
+  - `dependency_summaries` 后续如需 richer context，可在后续任务中再增强
+- 下一步：
+  - 进入模块 16 的任务 05，让 orchestrator / `ReActStepRunner` 正式消费 prompt 模块
+
+#### 记录 059：完成模块 16 的任务 04 Prompt 输入提取与 ExecutionPromptAssembler 主链接线
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 04，把 runtime memory、current node、run identity 正式接入 `ExecutionPromptAssembler`，并让 orchestrator 改为通过正式 prompt 输入对象构造当前 `step_prompt`
+- 结果：
+  - 已更新：
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+  - 已正式接入：
+    - `ExecutionPromptAssembler` 注入到 `RuntimeOrchestrator`
+    - `RuntimeOrchestrator.build_execution_prompt(...)`
+    - `RuntimeOrchestrator.render_execution_prompt(...)`
+    - `ExecutionNodePromptContext` 的主链构造
+    - `ExecutionPromptInput` 的主链构造
+  - 已按任务 04 定稿内容实现：
+    - `runtime memory` 继续来自 `RuntimeMemoryProcessor.build_prompt_context_text(...)`
+    - `user_input / goal` 从 `RunIdentity` 抽取进入 `node_context`
+    - `current node` 信息从 `TaskGraphNode` 整理进入 `node_context`
+    - `dependency_summaries` 第一版采用轻量摘要
+    - `tool_capability_text` 第一版由 orchestrator 基于 `ToolRegistry` 生成轻量文本
+  - 当前实现策略：
+    - orchestrator 现阶段仍把三段 prompt block 临时渲染回单个 `step_prompt` 字符串
+    - 这样可以先完成任务 04，不提前越到任务 05 中对 `ReActStepRunner` 的进一步结构调整
+- 验证结果：
+  - 已执行相关回归：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_react_step.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_memory_processor.py`
+  - 结果：
+    - `Ran 39 tests ... OK`
+- 遗留问题：
+  - `ReActStepRunner` 当前仍只消费单个 `step_prompt` 字符串
+  - 三段 prompt block 还未下沉为 step runner 的正式输入结构
+  - `tool_capability_text` 的文本格式仍保持最小版本
+- 下一步：
+  - 进入模块 16 的任务 05，让 orchestrator / `ReActStepRunner` 更正式地消费 prompt 模块产物
+
 ### 2026-04-28
+
+#### 记录 057：完成模块 16 的任务 03 Prompt 模型与最小 Assembler 骨架落地
+
+- 状态：已完成
+- 范围：完成模块 16 的任务 03，在 `src/rtv2/prompting` 下正式落地 prompt 模块的最小数据模型与 assembler 骨架，不进入 orchestrator / step runner 接线
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/prompting/models.py`
+    - `runtime-v2/src/rtv2/prompting/assembler.py`
+  - 已更新：
+    - `runtime-v2/src/rtv2/prompting/__init__.py`
+  - 已正式落地模型：
+    - `ExecutionNodePromptContext`
+    - `ExecutionPromptInput`
+    - `ExecutionPrompt`
+  - 已正式落地最小 assembler：
+    - `ExecutionPromptAssembler`
+    - `build_execution_prompt(...)`
+  - 已按任务 02 定稿内容实现：
+    - 三段输出结构：
+      - `base_prompt`
+      - `phase_prompt`
+      - `dynamic_injection`
+    - `ExecutionPromptInput` 最小五项输入
+    - `ExecutionNodePromptContext` 承载 node / task 局部动态视图
+  - 当前实现策略：
+    - `EXECUTE` phase prompt 已写成正式最小文本
+    - `PREPARE / FINALIZE` 先保留最小占位文本
+    - assembler 只做装配，不读取状态树，不负责 recall、tool 执行或 graph 推进
+- 验证结果：
+  - 已执行最小导入与实例化检查：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python - <<'PY' ...`
+  - 结果：
+    - 可正常导入 `ExecutionPromptAssembler / ExecutionPromptInput / ExecutionNodePromptContext`
+    - 可正常构建 `ExecutionPrompt`
+- 遗留问题：
+  - 当前 `dynamic_injection` 仍是直接字符串渲染，尚未和 runtime memory / node 提取逻辑正式接线
+  - 当前 `PREPARE / FINALIZE` prompt 仍是最小 stub
+  - 当前还未替换 orchestrator 中现有 `build_react_step_prompt(...)`
+- 下一步：
+  - 进入模块 16 的任务 04，把 runtime memory、current node、run identity 正式接入 assembler
 
 #### 记录 056：完成模块 16 的任务 02 Prompt 模块核心接口与输入输出模型定稿
 
