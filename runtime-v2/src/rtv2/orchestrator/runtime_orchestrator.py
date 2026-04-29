@@ -26,8 +26,8 @@ from rtv2.prompting import (
     PreparePromptInput,
 )
 from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
-from rtv2.solver import ReActStepInput, ReActStepRunner
-from rtv2.solver.models import StepResult, StepStatusSignal
+from rtv2.solver import ReActStepRunner, RuntimeSolver
+from rtv2.solver.models import SolverResult, StepResult, StepStatusSignal
 from rtv2.state.models import (
     DomainState,
     PrepareResult,
@@ -66,6 +66,7 @@ class RuntimeOrchestrator:
         prompt_assembler: ExecutionPromptAssembler | None = None,
         planner_model_provider: ModelProvider | None = None,
         planner_generation_config: GenerationConfig | None = None,
+        runtime_solver: RuntimeSolver | None = None,
     ) -> None:
         self.graph_store = graph_store
         self.skill_loader = skill_loader or LocalSkillLoader()
@@ -85,6 +86,10 @@ class RuntimeOrchestrator:
         self.react_step_runner = react_step_runner or ReActStepRunner(
             tool_registry=tool_registry,
             memory_store=self.memory_store,
+        )
+        self.runtime_solver = runtime_solver or RuntimeSolver(
+            react_step_runner=self.react_step_runner,
+            max_steps_per_node=20,
         )
         self._graph_counter = 0
         self._node_counter = 0
@@ -173,14 +178,20 @@ class RuntimeOrchestrator:
         if context.run_lifecycle.current_phase is not RunPhase.EXECUTE:
             raise ValueError("Execute phase requires current_phase=EXECUTE")
 
-        selected_node = self.select_active_node(context)
-        if selected_node is None:
-            step_result = self.initialize_minimal_graph(context)
-        else:
-            context.runtime_state.active_node_id = selected_node.node_id
-            step_result = self.advance_node_minimally(context, selected_node)
+        while True:
+            selected_node = self.select_active_node(context)
+            if selected_node is None:
+                self._finalize_execute_graph_status(context)
+                break
 
-        self._apply_step_result(context, step_result)
+            context.runtime_state.active_node_id = selected_node.node_id
+            solver_result = self.runtime_solver.solve_current_node(
+                context=context,
+                node=selected_node,
+                build_step_prompt=self.build_react_step_prompt,
+                create_step_id=self._create_step_id,
+            )
+            self._apply_solver_result(context, solver_result)
 
         context.run_lifecycle.current_phase = RunPhase.FINALIZE
         context.run_lifecycle.result_status = "completed"
@@ -227,99 +238,21 @@ class RuntimeOrchestrator:
             node = self._find_node(graph_state, context.runtime_state.active_node_id)
             if node is None:
                 raise ValueError("runtime_state.active_node_id points to a missing node")
-            return node
+            if node.node_status in {NodeStatus.READY, NodeStatus.RUNNING}:
+                return node
 
         if graph_state.active_node_id:
             node = self._find_node(graph_state, graph_state.active_node_id)
             if node is None:
                 raise ValueError("task_graph_state.active_node_id points to a missing node")
-            return node
+            if node.node_status in {NodeStatus.READY, NodeStatus.RUNNING}:
+                return node
 
         for node in graph_state.nodes:
             if node.node_status in {NodeStatus.READY, NodeStatus.RUNNING}:
                 return node
 
         return None
-
-    def initialize_minimal_graph(self, context: RunContext) -> StepResult | None:
-        """Create the first executable node when the current graph is empty."""
-
-        graph_state = context.domain_state.task_graph_state
-        if graph_state.nodes:
-            return None
-
-        initial_node = TaskGraphNode(
-            node_id=self._create_node_id(),
-            graph_id=graph_state.graph_id,
-            name="Handle user request",
-            kind="execution",
-            description=context.run_identity.user_input,
-            node_status=NodeStatus.READY,
-            owner="main",
-            dependencies=[],
-            order=1,
-        )
-        return StepResult(
-            patch=TaskGraphPatch(
-                new_nodes=[initial_node],
-                active_node_id=initial_node.node_id,
-            )
-        )
-
-    def advance_node_minimally(
-        self,
-        context: RunContext,
-        node: TaskGraphNode,
-    ) -> StepResult | None:
-        """Return the minimal node status transition step result for the selected node."""
-
-        if node.node_status is NodeStatus.PENDING:
-            return self._advance_pending_node(context, node)
-        if node.node_status is NodeStatus.READY:
-            return StepResult(
-                patch=TaskGraphPatch(
-                    node_updates=[NodePatch(
-                        node_id=node.node_id,
-                        node_status=NodeStatus.RUNNING,
-                    )]
-                )
-            )
-        if node.node_status is NodeStatus.RUNNING:
-            step_id = self._create_step_id()
-            react_output = self.react_step_runner.run_step(
-                ReActStepInput(
-                    step_prompt=self.build_react_step_prompt(context, node),
-                    task_id=context.run_identity.task_id,
-                    run_id=context.run_identity.run_id,
-                    step_id=step_id,
-                    node_id=node.node_id,
-                )
-            )
-            return self._materialize_running_node_step_result(node, react_output.step_result)
-        return None
-
-    def _advance_pending_node(
-        self,
-        context: RunContext,
-        node: TaskGraphNode,
-    ) -> StepResult | None:
-        graph_state = context.domain_state.task_graph_state
-
-        for dependency_id in node.dependencies:
-            dependency_node = self._find_node(graph_state, dependency_id)
-            if dependency_node is None:
-                raise ValueError(f"Node dependency not found: {dependency_id}")
-            if dependency_node.node_status is not NodeStatus.COMPLETED:
-                return None
-
-        return StepResult(
-            patch=TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.READY,
-                )]
-            )
-        )
 
     def _apply_step_result(self, context: RunContext, step_result: StepResult | None) -> None:
         """Consume the current minimal step result and write back its graph patch."""
@@ -342,44 +275,35 @@ class RuntimeOrchestrator:
         if patch.active_node_id is not None:
             context.runtime_state.active_node_id = patch.active_node_id
 
-    @staticmethod
-    def _materialize_running_node_step_result(
-        node: TaskGraphNode,
-        step_result: StepResult | None,
-    ) -> StepResult | None:
-        if step_result is None or step_result.patch is not None:
-            return step_result
+    def _apply_solver_result(self, context: RunContext, solver_result: SolverResult) -> None:
+        """Consume the current node-scoped solve result and write back its patch."""
 
-        if step_result.status_signal is StepStatusSignal.READY_FOR_COMPLETION:
-            step_result.patch = TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.COMPLETED,
-                )]
+        self._apply_step_result(context, solver_result.final_step_result)
+        self._refresh_runtime_active_node(context)
+
+    def _refresh_runtime_active_node(self, context: RunContext) -> None:
+        selected_node = self.select_active_node(context)
+        if selected_node is None:
+            context.runtime_state.active_node_id = ""
+            context.domain_state.task_graph_state.active_node_id = ""
+            return
+        context.runtime_state.active_node_id = selected_node.node_id
+        context.domain_state.task_graph_state.active_node_id = selected_node.node_id
+
+    def _finalize_execute_graph_status(self, context: RunContext) -> None:
+        graph_state = context.domain_state.task_graph_state
+        if graph_state.nodes and all(node.node_status is NodeStatus.COMPLETED for node in graph_state.nodes):
+            if graph_state.graph_status is not TaskGraphStatus.COMPLETED:
+                self._apply_graph_patch(
+                    context,
+                    TaskGraphPatch(graph_status=TaskGraphStatus.COMPLETED, active_node_id=""),
+                )
+            return
+        if graph_state.graph_status is not TaskGraphStatus.BLOCKED:
+            self._apply_graph_patch(
+                context,
+                TaskGraphPatch(graph_status=TaskGraphStatus.BLOCKED, active_node_id=""),
             )
-            return step_result
-
-        if step_result.status_signal is StepStatusSignal.BLOCKED:
-            step_result.patch = TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.BLOCKED,
-                    block_reason=step_result.reason,
-                )]
-            )
-            return step_result
-
-        if step_result.status_signal is StepStatusSignal.FAILED:
-            step_result.patch = TaskGraphPatch(
-                node_updates=[NodePatch(
-                    node_id=node.node_id,
-                    node_status=NodeStatus.FAILED,
-                    failure_reason=step_result.reason,
-                )]
-            )
-            return step_result
-
-        return step_result
 
     def build_react_step_prompt(self, context: RunContext, node: TaskGraphNode) -> str:
         """Render the formal execution prompt blocks into the current step prompt string."""
@@ -621,12 +545,28 @@ class RuntimeOrchestrator:
         )
 
     def _build_prepare_fallback_result(self, context: RunContext) -> PrepareResult:
-        step_result = self.initialize_minimal_graph(context)
-        patch = step_result.patch if step_result is not None else None
-        if patch is None:
-            raise RuntimeError("Prepare fallback could not build an initial graph patch")
+        goal = context.run_identity.goal.strip() or context.run_identity.user_input.strip()
+        if not goal:
+            raise RuntimeError("Prepare fallback requires a non-empty goal or user input")
+
+        node_id = self._create_node_id()
+        patch = TaskGraphPatch(
+            new_nodes=[
+                TaskGraphNode(
+                    node_id=node_id,
+                    graph_id=context.domain_state.task_graph_state.graph_id,
+                    name="Handle current request",
+                    kind="execution",
+                    description=goal,
+                    node_status=NodeStatus.READY,
+                    owner="main",
+                    order=1,
+                )
+            ],
+            active_node_id=node_id,
+        )
         return PrepareResult(
-            goal=context.run_identity.goal.strip() or context.run_identity.user_input.strip(),
+            goal=goal,
             patch=patch,
         )
 

@@ -87,6 +87,9 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+- 任务 07：已完成
 
 ### 模块 05：RuntimeHost 最小主链骨架
 
@@ -399,12 +402,95 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
+- 任务 04：已完成
 
 ---
 
 ## 开发记录
 
 ### 2026-04-29
+
+#### 记录 078：完成模块 19 的任务 05 / 06 / 07 Solver 主链接线、回归与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 19 的任务 05、任务 06、任务 07，正式落地 `RuntimeSolver`、`ExecutePhase` graph 级循环、node 状态收口与 graph 回写，并补全回归测试、实现文档与开发记录
+- 结果：
+  - 已新增：
+    - `runtime-v2/src/rtv2/solver/runtime_solver.py`
+    - `runtime-v2/implementation/solver.md`
+  - 已更新：
+    - `runtime-v2/src/rtv2/solver/models.py`
+    - `runtime-v2/src/rtv2/solver/__init__.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_host.py`
+    - `runtime-v2/implementation/README.md`
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/implementation/prepare.md`
+    - `runtime-v2/development-progress.md`
+  - 已正式落地：
+    - `RuntimeSolver.solve_current_node(...)`
+    - `SolverResult`
+    - execute graph 级外层循环
+    - solver node 级内层循环
+    - solver 结果到 graph patch 的正式回写链
+  - 已实现 solver 当前最小规则：
+    - `pending` 依赖完成后释放为 `ready`
+    - `ready` 在同次 solve 内提升为 `running`
+    - `running` 通过多轮 `ReActStepRunner` 推进
+    - `ready_for_completion / blocked / failed` 被正式收口为 node 终态
+    - 单 node 最多允许 `20` 个 step，超限收为 `blocked`
+  - 已实现 execute 当前最小规则：
+    - 外层按 graph 循环持续选择可执行 node
+    - solver 返回后立刻应用 `final_step_result.patch`
+    - 每轮后刷新 active node
+    - 无可执行 node 时统一收口 graph 终态
+  - 已修正工程残留问题：
+    - `prepare fallback` 不再调用已删除的旧 `initialize_minimal_graph(...)`
+    - `runtime_host` 测试改为使用本地 stub planner / react runner，避免依赖真实网络模型
+- 验证结果：
+  - 已执行：
+    - `PYTHONPATH=/Users/yezibin/Project/InDepth/runtime-v2/src /opt/miniconda3/envs/agent/bin/python -m unittest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_skills.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `Ran 53 tests ... OK`
+- 遗留问题：
+  - 当前还未引入 `Completion Evaluator`
+  - 当前还未接入 `Reflexion`
+  - 当前还未进入 `Re-plan`
+  - 当前 execute 仍未支持并行 node 求解
+- 下一步：
+  - 模块 19 已可视为结项，可进入下一个基础优先模块讨论
+
+#### 记录 077：完成模块 19 的任务 04 Solver 落点与单 node 多轮 step 推进方案定稿
+
+- 状态：已完成
+- 范围：完成模块 19 的任务 04 设计对齐，明确 `RuntimeSolver` 的代码落点、单 node 多轮 step 推进方式、步数保护上限与 patch 挂载策略，不进入代码实现
+- 结果：
+  - 已确认 `Solver` 正式单独落到：
+    - `src/rtv2/solver/runtime_solver.py`
+  - 已确认 `ReActStepRunner` 继续只负责单轮 actor step
+  - 已确认 `RuntimeSolver` 负责当前 node 的多轮 solve 收口
+  - 已确认第一版 `pending -> ready` 仍由 `Solver` 做最小释放判断
+  - 已确认当 node 从 `pending -> ready` 后，本次 solve 先结束，交回 graph 层重新选择，而不继续同轮进入 ReAct
+  - 已确认第一版 `ready -> running` 后允许在同一次 solve 中继续进入后续 running step
+  - 已确认第一版需要加入 `max_steps_per_node` 保护
+  - 已确认当前上限固定为：
+    - `20`
+  - 已确认当单 node 步数达到上限仍未收口时，第一版先统一收为：
+    - `blocked`
+  - 已确认步数超限更接近“当前策略未收口”，因此第一版不直接收成 `failed`
+  - 已确认 `SolverResult` 第一版不单独持有 `patch`
+  - 已确认 graph patch 继续通过：
+    - `SolverResult.final_step_result.patch`
+    承接正式 graph 修改
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s13/framework-alignment-t1-to-t5-design-v1.md`
+- 遗留问题：
+  - `RuntimeSolver` 的具体方法拆分与 orchestrator 接线仍待模块 19 任务 05/06 实现时落定
+  - 步数超限时是否记录更细的 solve 轨迹摘要，待后续 memory 深化时再展开
+- 下一步：
+  - 进入模块 19 的任务 05，开始实现 `Solver` 的 node 状态收口与 graph 回写
 
 #### 记录 076：完成模块 19 的任务 03 ExecutePhase 主循环边界与退出条件定稿
 

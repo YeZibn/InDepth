@@ -320,3 +320,24 @@
    - 若所有 node 都已 `completed`，则 `graph_status = completed`
    - 若 graph 已无可继续主线但未完成，则统一先收口为 `graph_status = blocked`
 7. 第一版当前不展开 `abandoned` 与 `replan` 的共存语义，该问题留待后续重点讨论
+
+## 17. Solver 第一版落点与单 node 多轮 step 推进补充
+
+当前补充结论如下：
+
+1. `Solver` 正式单独落到：
+   - `src/rtv2/solver/runtime_solver.py`
+2. `ReActStepRunner` 继续只负责单轮 actor step
+3. `RuntimeSolver` 负责当前 node 的多轮 solve 收口
+4. 第一版 `pending -> ready` 仍由 `Solver` 做最小释放判断
+5. 当 node 从 `pending -> ready` 后，本次 solve 先结束，交回 graph 层重新选择，而不继续同轮进入 ReAct
+6. 第一版 `ready -> running` 后允许在同一次 solve 中继续进入后续 running step
+7. 第一版需要加入 `max_steps_per_node` 保护
+8. 当前第一版上限固定为：
+   - `20`
+9. 当单 node 步数达到上限仍未收口时，第一版先统一收为：
+   - `blocked`
+10. 第一版 `SolverResult` 不单独持有 `patch`
+11. graph patch 继续通过：
+    - `SolverResult.final_step_result.patch`
+    承接正式 graph 修改

@@ -20,6 +20,7 @@ from rtv2.memory import (
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
 from rtv2.skills import RuntimeSkill, SkillManifest, SkillRegistry, SkillStatus
 from rtv2.model.base import ModelOutput
+from rtv2.solver import RuntimeSolver
 from rtv2.solver.react_step import ReActStepOutput
 from rtv2.solver.models import StepResult, StepStatusSignal
 from rtv2.state.models import RunPhase
@@ -47,7 +48,17 @@ def create_orchestrator(react_step_runner=None, planner_model_provider=None) -> 
     db_dir = tempfile.mkdtemp()
     return RuntimeOrchestrator(
         graph_store=InMemoryTaskGraphStore(),
-        react_step_runner=react_step_runner,
+        react_step_runner=react_step_runner or FakeReActStepRunner(
+            ReActStepOutput(
+                thought="complete node",
+                action="finish",
+                observation="done",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="default fake completion",
+                ),
+            )
+        ),
         planner_model_provider=planner_model_provider,
         memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
     )
@@ -506,64 +517,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             orchestrator.select_active_node(context)
 
-    def test_initialize_minimal_graph_returns_step_result_for_empty_graph(self):
-        orchestrator = create_orchestrator()
-        context = orchestrator.build_initial_context(
-            StartRunIdentity(
-                session_id="sess-1",
-                task_id="task-1",
-                run_id="run-1",
-                user_input="Handle this request.",
-            )
-        )
-        context.domain_state.task_graph_state.active_node_id = "stale-node"
-
-        step_result = orchestrator.initialize_minimal_graph(context)
-
-        self.assertIsNotNone(step_result)
-        self.assertIsNotNone(step_result.patch)
-        self.assertEqual(len(step_result.patch.new_nodes), 1)
-        initial_node = step_result.patch.new_nodes[0]
-        self.assertEqual(initial_node.node_id, "node-1")
-        self.assertEqual(initial_node.graph_id, context.domain_state.task_graph_state.graph_id)
-        self.assertEqual(initial_node.name, "Handle user request")
-        self.assertEqual(initial_node.kind, "execution")
-        self.assertEqual(initial_node.description, "Handle this request.")
-        self.assertEqual(initial_node.node_status, NodeStatus.READY)
-        self.assertEqual(initial_node.owner, "main")
-        self.assertEqual(initial_node.dependencies, [])
-        self.assertEqual(initial_node.order, 1)
-        self.assertEqual(initial_node.artifacts, [])
-        self.assertEqual(initial_node.evidence, [])
-        self.assertEqual(initial_node.notes, [])
-        self.assertEqual(initial_node.block_reason, "")
-        self.assertEqual(initial_node.failure_reason, "")
-        self.assertEqual(step_result.patch.active_node_id, "node-1")
-        self.assertIsNone(step_result.patch.graph_status)
-
-    def test_initialize_minimal_graph_returns_none_when_graph_is_not_empty(self):
-        orchestrator = create_orchestrator()
-        context = orchestrator.build_initial_context(
-            StartRunIdentity(
-                session_id="sess-1",
-                task_id="task-1",
-                run_id="run-1",
-                user_input="Existing node test.",
-            )
-        )
-        context.domain_state.task_graph_state.nodes = [
-            TaskGraphNode(
-                node_id="node-existing",
-                graph_id=context.domain_state.task_graph_state.graph_id,
-                name="Existing",
-                kind="execution",
-                node_status=NodeStatus.READY,
-            )
-        ]
-
-        self.assertIsNone(orchestrator.initialize_minimal_graph(context))
-
-    def test_advance_node_minimally_promotes_pending_node_when_dependencies_completed(self):
+    def test_runtime_solver_promotes_pending_node_when_dependencies_completed(self):
         orchestrator = create_orchestrator()
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -590,15 +544,20 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         )
         context.domain_state.task_graph_state.nodes = [dependency, pending_node]
 
-        step_result = orchestrator.advance_node_minimally(context, pending_node)
+        solver_result = orchestrator.runtime_solver.solve_current_node(
+            context=context,
+            node=pending_node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            create_step_id=orchestrator._create_step_id,
+        )
 
-        self.assertIsNotNone(step_result)
-        self.assertEqual(step_result.status_signal, StepStatusSignal.PROGRESSED)
-        self.assertIsNotNone(step_result.patch)
-        self.assertEqual(step_result.patch.node_updates[0].node_id, "node-2")
-        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.READY)
+        self.assertIsNotNone(solver_result.final_step_result)
+        self.assertEqual(solver_result.final_node_status, NodeStatus.READY)
+        self.assertEqual(solver_result.step_count, 0)
+        self.assertEqual(solver_result.final_step_result.patch.node_updates[0].node_id, "node-2")
+        self.assertEqual(solver_result.final_step_result.patch.node_updates[0].node_status, NodeStatus.READY)
 
-    def test_advance_node_minimally_keeps_pending_node_when_dependencies_not_completed(self):
+    def test_runtime_solver_keeps_pending_node_when_dependencies_not_completed(self):
         orchestrator = create_orchestrator()
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -625,9 +584,17 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         )
         context.domain_state.task_graph_state.nodes = [dependency, pending_node]
 
-        self.assertIsNone(orchestrator.advance_node_minimally(context, pending_node))
+        solver_result = orchestrator.runtime_solver.solve_current_node(
+            context=context,
+            node=pending_node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            create_step_id=orchestrator._create_step_id,
+        )
+        self.assertIsNone(solver_result.final_step_result)
+        self.assertIsNone(solver_result.final_node_status)
+        self.assertEqual(solver_result.step_count, 0)
 
-    def test_advance_node_minimally_raises_when_dependency_is_missing(self):
+    def test_runtime_solver_raises_when_dependency_is_missing(self):
         orchestrator = create_orchestrator()
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -648,10 +615,26 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         context.domain_state.task_graph_state.nodes = [pending_node]
 
         with self.assertRaises(ValueError):
-            orchestrator.advance_node_minimally(context, pending_node)
+            orchestrator.runtime_solver.solve_current_node(
+                context=context,
+                node=pending_node,
+                build_step_prompt=orchestrator.build_react_step_prompt,
+                create_step_id=orchestrator._create_step_id,
+            )
 
-    def test_advance_node_minimally_promotes_ready_to_running(self):
-        orchestrator = create_orchestrator()
+    def test_runtime_solver_promotes_ready_and_runs_until_completion(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="inspect current progress",
+                action="continue execution",
+                observation="work is complete",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="node reached completion",
+                ),
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
                 session_id="sess-1",
@@ -667,67 +650,33 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             kind="execution",
             node_status=NodeStatus.READY,
         )
-
-        step_result = orchestrator.advance_node_minimally(context, ready_node)
-
-        self.assertIsNotNone(step_result)
-        self.assertEqual(step_result.status_signal, StepStatusSignal.PROGRESSED)
-        self.assertIsNotNone(step_result.patch)
-        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.RUNNING)
-
-    def test_advance_node_minimally_runs_react_step_for_running_node(self):
-        react_runner = FakeReActStepRunner(
-            ReActStepOutput(
-                thought="inspect current progress",
-                action="continue execution",
-                observation="work is complete",
-                step_result=StepResult(
-                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
-                    reason="node reached completion",
-                    patch=TaskGraphPatch(
-                        node_updates=[NodePatch(
-                            node_id="node-1",
-                            node_status=NodeStatus.COMPLETED,
-                        )]
-                    ),
-                ),
-            )
-        )
-        orchestrator = create_orchestrator(react_step_runner=react_runner)
-        context = orchestrator.build_initial_context(
-            StartRunIdentity(
-                session_id="sess-1",
-                task_id="task-1",
-                run_id="run-1",
-                user_input="Running node.",
-            )
-        )
-        running_node = TaskGraphNode(
-            node_id="node-1",
-            graph_id=context.domain_state.task_graph_state.graph_id,
-            name="Running",
-            kind="execution",
-            node_status=NodeStatus.RUNNING,
-        )
         context.run_lifecycle.current_phase = RunPhase.EXECUTE
 
-        step_result = orchestrator.advance_node_minimally(context, running_node)
+        solver_result = orchestrator.runtime_solver.solve_current_node(
+            context=context,
+            node=ready_node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            create_step_id=orchestrator._create_step_id,
+        )
 
-        self.assertIsNotNone(step_result)
-        self.assertEqual(step_result.status_signal, StepStatusSignal.READY_FOR_COMPLETION)
-        self.assertEqual(step_result.reason, "node reached completion")
-        self.assertIsNotNone(step_result.patch)
-        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.COMPLETED)
+        self.assertIsNotNone(solver_result.final_step_result)
+        self.assertEqual(solver_result.final_node_status, NodeStatus.COMPLETED)
+        self.assertEqual(solver_result.step_count, 1)
+        self.assertEqual(solver_result.final_step_result.status_signal, StepStatusSignal.READY_FOR_COMPLETION)
+        self.assertEqual(solver_result.final_step_result.reason, "node reached completion")
+        self.assertIsNotNone(solver_result.final_step_result.patch)
+        self.assertEqual(solver_result.final_step_result.patch.node_updates[0].node_status, NodeStatus.RUNNING)
+        self.assertEqual(solver_result.final_step_result.patch.node_updates[-1].node_status, NodeStatus.COMPLETED)
         self.assertEqual(len(react_runner.inputs), 1)
         self.assertIn("## Base Prompt", react_runner.inputs[0].step_prompt)
         self.assertIn("## Phase Prompt", react_runner.inputs[0].step_prompt)
         self.assertIn("## Dynamic Injection", react_runner.inputs[0].step_prompt)
-        self.assertIn("User input: Running node.", react_runner.inputs[0].step_prompt)
+        self.assertIn("User input: Ready node.", react_runner.inputs[0].step_prompt)
         self.assertIn("## Run run-1", react_runner.inputs[0].step_prompt)
         self.assertIn("Active node id: node-1", react_runner.inputs[0].step_prompt)
         self.assertIn("Active node status: running", react_runner.inputs[0].step_prompt)
 
-    def test_advance_node_minimally_returns_none_for_non_progressing_statuses(self):
+    def test_runtime_solver_returns_current_status_for_non_progressing_statuses(self):
         orchestrator = create_orchestrator()
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -752,10 +701,28 @@ class RuntimeOrchestratorTests(unittest.TestCase):
                 kind="execution",
                 node_status=status,
             )
-            self.assertIsNone(orchestrator.advance_node_minimally(context, node))
+            solver_result = orchestrator.runtime_solver.solve_current_node(
+                context=context,
+                node=node,
+                build_step_prompt=orchestrator.build_react_step_prompt,
+                create_step_id=orchestrator._create_step_id,
+            )
+            self.assertIsNone(solver_result.final_step_result)
+            self.assertEqual(solver_result.final_node_status, status)
 
     def test_run_execute_phase_aligns_runtime_active_node_when_node_is_selected(self):
-        orchestrator = create_orchestrator()
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="done",
+                action="complete",
+                observation="done",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="done",
+                ),
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
                 session_id="sess-1",
@@ -776,35 +743,27 @@ class RuntimeOrchestratorTests(unittest.TestCase):
 
         executed = orchestrator.run_execute_phase(context)
 
-        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
+        self.assertEqual(executed.runtime_state.active_node_id, "")
         self.assertEqual(executed.run_lifecycle.current_phase, RunPhase.FINALIZE)
         self.assertEqual(
             executed.domain_state.task_graph_state.nodes[0].node_status,
-            NodeStatus.RUNNING,
+            NodeStatus.COMPLETED,
         )
-        self.assertEqual(executed.domain_state.task_graph_state.version, 2)
-
-    def test_run_execute_phase_applies_initialization_patch_back_to_graph(self):
-        orchestrator = create_orchestrator()
-        context = orchestrator.build_initial_context(
-            StartRunIdentity(
-                session_id="sess-1",
-                task_id="task-1",
-                run_id="run-1",
-                user_input="Initialize graph.",
-            )
-        )
-        context.run_lifecycle.current_phase = RunPhase.EXECUTE
-
-        executed = orchestrator.run_execute_phase(context)
-
-        self.assertEqual(len(executed.domain_state.task_graph_state.nodes), 1)
-        self.assertEqual(executed.domain_state.task_graph_state.active_node_id, "node-1")
-        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
-        self.assertEqual(executed.domain_state.task_graph_state.version, 2)
+        self.assertEqual(executed.domain_state.task_graph_state.graph_status, TaskGraphStatus.COMPLETED)
 
     def test_run_execute_phase_applies_node_advancement_patch_back_to_graph(self):
-        orchestrator = create_orchestrator()
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="done",
+                action="complete",
+                observation="done",
+                step_result=StepResult(
+                    status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                    reason="done",
+                ),
+            )
+        )
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
                 session_id="sess-1",
@@ -828,10 +787,10 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertEqual(len(executed.domain_state.task_graph_state.nodes), 1)
         self.assertEqual(
             executed.domain_state.task_graph_state.nodes[0].node_status,
-            NodeStatus.RUNNING,
+            NodeStatus.COMPLETED,
         )
-        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
-        self.assertEqual(executed.domain_state.task_graph_state.version, 2)
+        self.assertEqual(executed.runtime_state.active_node_id, "")
+        self.assertEqual(executed.domain_state.task_graph_state.graph_status, TaskGraphStatus.COMPLETED)
 
     def test_run_execute_phase_consumes_step_result_from_react_runner(self):
         react_runner = FakeReActStepRunner(
@@ -880,8 +839,8 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             executed.domain_state.task_graph_state.nodes[0].node_status,
             NodeStatus.COMPLETED,
         )
-        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
-        self.assertEqual(executed.domain_state.task_graph_state.version, 2)
+        self.assertEqual(executed.runtime_state.active_node_id, "")
+        self.assertEqual(executed.domain_state.task_graph_state.graph_status, TaskGraphStatus.COMPLETED)
 
     def test_run_execute_phase_auto_wires_tool_aware_react_runner_from_tool_registry(self):
         registry = ToolRegistry()
@@ -931,7 +890,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             executed.domain_state.task_graph_state.nodes[0].node_status,
             NodeStatus.COMPLETED,
         )
-        self.assertEqual(executed.runtime_state.active_node_id, "node-1")
+        self.assertEqual(executed.runtime_state.active_node_id, "")
 
     def test_build_react_step_prompt_reads_task_level_runtime_memory_across_runs(self):
         memory_store = self.create_memory_store()
@@ -1160,7 +1119,7 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         self.assertIn("get_skill_script", tool_names)
         self.assertIn("get_skill_asset", tool_names)
 
-    def test_advance_node_minimally_materializes_failed_signal_without_patch(self):
+    def test_runtime_solver_materializes_failed_signal_without_patch(self):
         react_runner = FakeReActStepRunner(
             ReActStepOutput(
                 thought="tool failed",
@@ -1188,14 +1147,64 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             kind="execution",
             node_status=NodeStatus.RUNNING,
         )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
 
-        step_result = orchestrator.advance_node_minimally(context, running_node)
+        solver_result = orchestrator.runtime_solver.solve_current_node(
+            context=context,
+            node=running_node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            create_step_id=orchestrator._create_step_id,
+        )
 
-        self.assertIsNotNone(step_result)
-        self.assertEqual(step_result.status_signal, StepStatusSignal.FAILED)
-        self.assertIsNotNone(step_result.patch)
-        self.assertEqual(step_result.patch.node_updates[0].node_status, NodeStatus.FAILED)
-        self.assertEqual(step_result.patch.node_updates[0].failure_reason, "tool execution failed")
+        self.assertIsNotNone(solver_result.final_step_result)
+        self.assertEqual(solver_result.final_node_status, NodeStatus.FAILED)
+        self.assertEqual(solver_result.final_step_result.status_signal, StepStatusSignal.FAILED)
+        self.assertIsNotNone(solver_result.final_step_result.patch)
+        self.assertEqual(solver_result.final_step_result.patch.node_updates[0].node_status, NodeStatus.FAILED)
+        self.assertEqual(solver_result.final_step_result.patch.node_updates[0].failure_reason, "tool execution failed")
+
+    def test_runtime_solver_blocks_when_step_limit_is_reached(self):
+        react_runner = FakeReActStepRunner(
+            ReActStepOutput(
+                thought="continue",
+                action="keep going",
+                observation="progress continues",
+                step_result=StepResult(status_signal=StepStatusSignal.PROGRESSED),
+            )
+        )
+        solver = RuntimeSolver(react_step_runner=react_runner, max_steps_per_node=2)
+        orchestrator = create_orchestrator(react_step_runner=react_runner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Long running node.",
+            )
+        )
+        context.run_lifecycle.current_phase = RunPhase.EXECUTE
+        running_node = TaskGraphNode(
+            node_id="node-1",
+            graph_id=context.domain_state.task_graph_state.graph_id,
+            name="Running",
+            kind="execution",
+            node_status=NodeStatus.RUNNING,
+        )
+
+        solver_result = solver.solve_current_node(
+            context=context,
+            node=running_node,
+            build_step_prompt=orchestrator.build_react_step_prompt,
+            create_step_id=orchestrator._create_step_id,
+        )
+
+        self.assertEqual(solver_result.final_node_status, NodeStatus.BLOCKED)
+        self.assertEqual(solver_result.step_count, 2)
+        self.assertEqual(solver_result.final_step_result.reason, "solver step limit reached")
+        self.assertEqual(
+            solver_result.final_step_result.patch.node_updates[0].block_reason,
+            "solver step limit reached",
+        )
 
 
 if __name__ == "__main__":

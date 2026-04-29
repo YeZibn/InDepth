@@ -27,6 +27,8 @@
    [prepare.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/prepare.md)
 8. Skills：
    [skills.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/skills.md)
+9. Solver / ExecutePhase：
+   [solver.md](/Users/yezibin/Project/InDepth/runtime-v2/implementation/solver.md)
 
 ## 预留实现块
 

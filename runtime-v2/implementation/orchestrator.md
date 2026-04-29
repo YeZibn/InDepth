@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-当前 orchestrator 层已正式落地初始上下文构建、真实 `PreparePhase` 最小 planner 链、最小 `execute` 推进链以及 `finalize` 收口骨架。
+当前 orchestrator 层已正式落地初始上下文构建、真实 `PreparePhase` planner 链、graph 级 `ExecutePhase / Solver` 主循环以及 `finalize` 收口骨架。
 
 当前已实现：
 
@@ -13,6 +13,7 @@
 5. `run_execute_phase(...)`
 6. `run_finalize_phase(...)`
 7. `prepare` planner payload -> `PrepareResult.patch` 规范化与回写
+8. `SolverResult` 消费与 graph 终态收口
 
 对应代码：
 
@@ -70,11 +71,11 @@
 1. `runtime_state = "completed"`
 2. `output_text = ""`
 
-这表示：
+这表示主 runtime 链已具备：
 
-1. 宿主入口和 orchestrator 主链骨架都已打通
-2. `prepare` 已不再是空壳
-3. `execute / finalize` 仍保持最小推进与最小收口
+1. `prepare` 的真实 planning
+2. `execute` 的 graph 级求解循环
+3. `finalize` 的最小 host 收口
 
 ## 当前 phase 规则
 
@@ -93,10 +94,11 @@
    - 推进到 `EXECUTE`
 2. `run_execute_phase(...)`
    - 要求输入 phase 为 `EXECUTE`
-   - 先产出最小 `StepResult | None`
-   - 若 `step_result.patch` 非空，则通过 `TaskGraphStore.apply_patch(...)` 正式回写 graph
-   - 用返回的新 graph 覆盖 `context.domain_state.task_graph_state`
-   - 若 patch 带 `active_node_id`，则同步 `runtime_state.active_node_id`
+   - 选择当前 `ready / running` node
+   - 调用 `RuntimeSolver.solve_current_node(...)`
+   - 消费 `SolverResult.final_step_result.patch`
+   - 刷新 `runtime_state.active_node_id`
+   - 若无可执行 node，则收口 graph 终态
    - 推进到 `FINALIZE`
    - 写入：
      - `result_status = "completed"`
@@ -138,92 +140,58 @@
 5. 不调用 store
 6. 若 active node 引用失效，则显式抛错
 
-## `initialize_minimal_graph(...)` 的作用
+## 当前 execute / solver 主循环
 
-`initialize_minimal_graph(...)` 用于在当前 graph 为空时，产出第一版最小起始节点结果。
-当前正式返回 `StepResult | None`，而不是直接返回 `TaskGraphPatch`。
+当前 `run_execute_phase(...)` 已不再自己做 node 内状态推进，而是改为 graph 层编排。
 
-当前规则如下：
+当前主循环如下：
 
-1. 只有 `task_graph_state.nodes` 为空时才触发
-2. 当前只新增 1 个最小初始 node
-3. 初始 node 当前固定为：
-   - `name = "Handle user request"`
-   - `kind = "execution"`
-   - `description = run_identity.user_input`
-   - `node_status = ready`
-   - `owner = "main"`
-   - `dependencies = []`
-   - `order = 1`
-4. 当前返回带正式 `TaskGraphPatch` 的最小 `StepResult`
-5. patch 当前同时回写 `active_node_id`
+1. `select_active_node(...)` 选择当前 `ready / running` node
+2. `runtime_state.active_node_id` 同步为当前 node
+3. 调用 `RuntimeSolver.solve_current_node(...)`
+4. 通过 `_apply_solver_result(...)` 消费 `final_step_result.patch`
+5. 通过 `_refresh_runtime_active_node(...)` 重新选择下一可执行 node
+6. 若无可执行 node，则 `_finalize_execute_graph_status(...)`
 
 当前这一步明确：
 
-1. 空图初始化既是兜底，也是第一版最小起始策略
-2. 当前不直接改 graph
-3. 当前不写 store
-4. 当前不改 `graph_status`
+1. orchestrator 负责 graph 级循环
+2. solver 负责 node 级循环
+3. graph patch 继续只从 `StepResult.patch` 进入 graph store
+4. stale `active_node_id` 当前会被忽略，而不是卡死在已完成 node 上
 
-当前它还承担一个额外工程角色：
+## `select_active_node(...)` 的当前规则补充
 
-1. 当 prepare 的 planner model 调用本身失败时
-2. orchestrator 会临时退回到该最小初始化逻辑
+当前优先级仍然是：
 
-这个 fallback 只用于工程可运行性保护，不是 prepare 的正式主语义。
+1. `runtime_state.active_node_id`
+2. `task_graph_state.active_node_id`
+3. 第一个 `ready / running` node
 
-## `advance_node_minimally(...)` 的作用
+但当前新增约束：
 
-`advance_node_minimally(...)` 用于在不接 LLM、不接 tool 的前提下，给当前被选中的 node 产出最小状态推进结果。
-当前正式返回 `StepResult | None`，而不是直接返回 `TaskGraphPatch`。
+1. 只有目标 node 当前状态仍为 `ready / running` 时，active id 才继续有效
+2. 若 active id 指向 `completed / blocked / failed` 节点，则回退到重新选择
 
-当前最小规则如下：
+## graph 终态收口
 
-1. `pending -> ready`
-   - 前提：所有依赖节点都已经 `completed`
-2. `ready -> running`
-3. `running -> completed`
-   - 当前通过 `StepResult(status_signal=ready_for_completion)` 表达最小完成准备信号
-4. 其他状态当前返回 `None`
+当前 `_finalize_execute_graph_status(...)` 的规则如下：
 
-当前这一步明确：
+1. 若 graph 非空且全部 node 都是 `completed`
+   - graph 收为 `completed`
+   - active node 置空
+2. 否则
+   - graph 收为 `blocked`
+   - active node 置空
 
-1. 缺失依赖节点时显式抛错
-2. 当前不写 `runtime_state`
-3. `runtime_state.active_node_id` 由 `run_execute_phase(...)` 在选中 node 后负责同步
-4. 当前不写 notes / artifacts / evidence 占位内容
+## prepare fallback 的当前工程语义
 
-## 当前 execute 补充规则
+当前当 prepare planner model 调用失败时：
 
-当前 `run_execute_phase(...)` 在选中 node 后，会先同步：
+1. orchestrator 直接构造单节点最小 `TaskGraphPatch`
+2. `goal` 收敛为旧 `goal` 或当前 `user_input`
 
-1. `runtime_state.active_node_id = selected_node.node_id`
-
-当前 execute 结果回写 graph 的最小链路如下：
-
-1. 空图时：
-   - 调用 `initialize_minimal_graph(...)`
-   - 直接拿到最小 `StepResult`
-   - 从 `step_result.patch` 提取 graph patch
-   - 通过 `graph_store.apply_patch(...)` 写回 graph
-2. 已有选中 node 时：
-   - 调用 `advance_node_minimally(...)`
-   - 拿到最小推进 `StepResult`
-   - 从 `step_result.patch` 提取 graph patch
-   - 通过 `graph_store.apply_patch(...)` 写回 graph
-3. patch 写回完成后：
-   - `context.domain_state.task_graph_state` 被替换为最新 graph
-   - 若 patch 指定 `active_node_id`，则同步到 `runtime_state.active_node_id`
-
-当前这一步明确：
-
-1. orchestrator 现在正式依赖 `TaskGraphStore`
-2. 当前只打通最小 write-back 闭环
-3. 当前已引入最小 `StepResult`
-4. 当前不引入更完整的 patch 合并/强校验策略
-5. 当前 orchestrator 对 `StepResult` 的消费仍处于过渡态
-6. 当前实际只消费 `StepResult.patch`
-7. `result_refs / status_signal / reason` 的更完整消费语义留待后续模块继续补齐
+这只是工程 fallback，不改变 prepare 的正式 planner 主语义。
 
 ## 下一步
 

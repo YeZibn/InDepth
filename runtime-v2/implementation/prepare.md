@@ -170,7 +170,7 @@
 当前实现保留了一个很轻的工程 fallback：
 
 1. 当 planner model 调用本身失败时
-2. orchestrator 会退回到原有 `initialize_minimal_graph(...)`
+2. orchestrator 会直接构造一个单节点最小 `TaskGraphPatch`
 3. 同时将 `goal` 收敛为当前 `goal` 旧值或 `user_input`
 
 这只是工程可运行性保护，不是正式主语义。

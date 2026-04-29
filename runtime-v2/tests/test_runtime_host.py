@@ -11,7 +11,10 @@ if str(SRC) not in sys.path:
 
 from rtv2.memory import SQLiteRuntimeMemoryStore
 from rtv2.host.runtime_host import RuntimeHost
+from rtv2.model.base import ModelOutput
 from rtv2.orchestrator.runtime_orchestrator import RuntimeOrchestrator
+from rtv2.solver.models import StepResult, StepStatusSignal
+from rtv2.solver.react_step import ReActStepOutput
 from rtv2.task_graph.store import InMemoryTaskGraphStore
 
 
@@ -36,6 +39,33 @@ class StubHostIdGenerator:
         return f"run-{self.run_counter}"
 
 
+class SequenceModelProvider:
+    def __init__(self, outputs) -> None:
+        self.outputs = list(outputs)
+
+    def generate(self, messages, tools, config=None):
+        if not self.outputs:
+            raise AssertionError("No fake model outputs left")
+        return self.outputs.pop(0)
+
+
+class FakeReActStepRunner:
+    def __init__(self) -> None:
+        self.inputs = []
+
+    def run_step(self, step_input):
+        self.inputs.append(step_input)
+        return ReActStepOutput(
+            thought="complete node",
+            action="finish",
+            observation="done",
+            step_result=StepResult(
+                status_signal=StepStatusSignal.READY_FOR_COMPLETION,
+                reason="default host test completion",
+            ),
+        )
+
+
 def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> RuntimeHost:
     graph_store = InMemoryTaskGraphStore()
     db_dir = tempfile.mkdtemp()
@@ -43,6 +73,20 @@ def create_runtime_host(id_generator: StubHostIdGenerator | None = None) -> Runt
         graph_store=graph_store,
         orchestrator=RuntimeOrchestrator(
             graph_store=graph_store,
+            planner_model_provider=SequenceModelProvider(
+                [
+                    ModelOutput(
+                        content=(
+                            '{"goal":"Handle current request.","active_node_ref":"plan_node_1","nodes":'
+                            '[{"ref":"plan_node_1","name":"Handle request","kind":"execution",'
+                            '"description":"Handle current request.","node_status":"ready",'
+                            '"owner":"main","dependencies":[],"order":1}]}'
+                        )
+                    )
+                ]
+                * 8
+            ),
+            react_step_runner=FakeReActStepRunner(),
             memory_store=SQLiteRuntimeMemoryStore(db_file=str(Path(db_dir) / "runtime_memory.db")),
         ),
         id_generator=id_generator or StubHostIdGenerator(),
