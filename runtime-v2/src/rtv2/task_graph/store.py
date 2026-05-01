@@ -110,6 +110,10 @@ class InMemoryTaskGraphStore:
 
     @staticmethod
     def _apply_node_patch(node: TaskGraphNode, patch: NodePatch) -> None:
+        if patch.name is not None:
+            node.name = patch.name
+        if patch.description is not None:
+            node.description = patch.description
         if patch.node_status is not None:
             node.node_status = patch.node_status
         if patch.owner is not None:
@@ -150,7 +154,18 @@ class InMemoryTaskGraphStore:
         if patch.node_status is NodeStatus.FAILED and not patch.failure_reason:
             raise ValueError("Failed node patch requires failure_reason")
 
-        InMemoryTaskGraphStore._validate_status_transition(node.node_status, patch.node_status)
+        if patch.node_status is not None and (
+            patch.name is not None
+            or patch.description is not None
+            or patch.owner is not None
+            or patch.dependencies is not None
+        ):
+            if patch.node_status not in {NodeStatus.PENDING, NodeStatus.READY}:
+                raise ValueError(
+                    "Planning node patch only allows pending/ready node_status"
+                )
+        else:
+            InMemoryTaskGraphStore._validate_status_transition(node.node_status, patch.node_status)
         InMemoryTaskGraphStore._validate_result_refs(patch.artifacts)
         InMemoryTaskGraphStore._validate_result_refs(patch.evidence)
 

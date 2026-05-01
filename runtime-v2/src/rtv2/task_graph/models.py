@@ -59,6 +59,8 @@ class NodePatch:
     """Minimal field-level node patch for runtime-updatable node fields."""
 
     node_id: str
+    name: str | None = None
+    description: str | None = None
     node_status: NodeStatus | None = None
     owner: str | None = None
     dependencies: list[str] | None = None

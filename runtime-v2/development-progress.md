@@ -68,6 +68,10 @@
 - 任务 01：已完成
 - 任务 02：已完成
 - 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 04：已完成
+- 任务 04：已完成
 
 ### 模块 04：Task Graph Patch 与最小 Store 骨架
 
@@ -475,6 +479,178 @@
 - 任务 04：已完成
 - 任务 05：已完成
 - 任务 06：已完成
+
+### 模块 23：PreparePhase / Replan 正式策略补强
+
+- 模块目标：
+  - 补强 `PreparePhase` 在初始 planning 与 `replan` 场景下的正式策略
+  - 明确非空 graph 上二次 planning 的修改规则，而不是继续停留在“直接打 patch 即可”的轻量工程态
+  - 收口 `request_replan` 被消费后的输入视角、输出约束、patch 校验与错误分类
+  - 为后续更稳定的长链路运行打基础，但暂时不引入更复杂的 graph 重建器或外部判定器
+- 已定子任务：
+  - 任务 01：对齐当前设计稿、现有 `PreparePhase` 实现与 `replan` 现状，收口模块 23 第一版目标、边界与旧表述修订
+  - 任务 02：确定 `PreparePhase` 在初始 planning / replan 两种场景下的统一输入输出 contract
+  - 任务 03：确定非空 graph 上 `prepare_result.patch` 的正式修改语义
+  - 任务 04：确定 `request_replan` 消费后的状态变化、旧 `prepare_result` 覆盖规则与 graph 收口规则
+  - 任务 05：确定 prepare payload 到正式 patch 的校验、错误分类与 fallback 边界
+  - 任务 06：实现模块 23 的主链接线与测试
+  - 任务 07：补实现文档、设计稿修订与开发进度收尾
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+- 任务 07：已完成
+
+### 2026-05-01
+
+#### 记录 096：完成模块 23 的任务 06 / 07 PreparePhase / replan 策略补强实现、回归与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 23 的任务 06、任务 07，正式落地 `PreparePhase / replan` 的增量 planning、结构化 prepare 失败收口、相关回归测试与实现文档收尾
+- 结果：
+  - 已新增：
+    - `PrepareFailure`
+    - `PrepareFailureType`
+    - `PreparePhaseError`
+  - 已补强 `PreparePhase` 主链：
+    - 初始 planning 模型失败时允许 fallback
+    - replan 场景禁止 fallback
+    - 成功时覆盖旧 `prepare_result / goal`
+    - 失败时保留旧 `prepare_result / graph / request_replan`
+  - 已补强 planner normalize / patch 语义：
+    - 支持 `create`
+    - 支持 `update`
+    - `update` 支持：
+      - `name`
+      - `description`
+      - `owner`
+      - `dependencies`
+      - `node_status`
+    - 支持新 node 依赖旧 node
+    - 支持非终态旧 node 依赖本次新增 node
+    - 终态 node update 会在 normalize / 校验阶段直接拒绝
+  - 已补 `planner_noop_patch` 检查
+  - 已将 prepare 失败写入 `runtime_state.prepare_failure`
+  - 已更新：
+    - `runtime-v2/src/rtv2/state/models.py`
+    - `runtime-v2/src/rtv2/task_graph/models.py`
+    - `runtime-v2/src/rtv2/task_graph/store.py`
+    - `runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py`
+    - `runtime-v2/tests/test_runtime_orchestrator.py`
+    - `runtime-v2/implementation/prepare.md`
+    - `runtime-v2/implementation/orchestrator.md`
+    - `runtime-v2/README.md`
+    - `runtime-v2/development-progress.md`
+- 验证结果：
+  - 已执行：
+    - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py -q`
+    - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_run_identity.py -q`
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/orchestrator/runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/state/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/models.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/task_graph/store.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py`
+  - 结果：
+    - `43 passed`
+    - `22 passed`
+    - `py_compile passed`
+- 遗留问题：
+  - 目前 `PrepareFailure` 还只挂在 `runtime_state`，尚未正式写入独立 memory entry
+  - 更复杂的 graph 替换式 planning、删除 node 与 deeper replan 策略仍未进入实现
+- 下一步：
+  - 模块 23 当前阶段可视为结项，可进入下一个模块讨论
+
+#### 记录 095：完成模块 23 的任务 01 / 02 / 03 / 04 / 05 PreparePhase / replan 策略、contract、patch 语义、状态覆盖与错误边界定稿
+
+- 状态：已完成
+- 范围：完成模块 23 的任务 01、任务 02、任务 03、任务 04、任务 05，正式收口 `PreparePhase` 在初始 planning / replan 场景下的第一版范围、统一输入输出 contract、非空 graph 上 `prepare_result.patch` 的正式修改语义、`request_replan` 消费后的状态变化与覆盖规则，以及 prepare payload 的错误分类与 fallback 边界，不进入代码实现
+- 结果：
+  - 已确认 `PreparePhase` 第一版正式支持非空 graph 上的 `replan`
+  - 已确认第一版 `replan` 采用增量 planning，不做整图重写
+  - 已确认第一版当前只允许：
+    - 新增 node
+    - 修改现有 node 的 planning 属性
+  - 已确认第一版明确禁止删除旧 node
+  - 已确认 planner payload 非法时继续按正式失败收口，不自动伪造 planning 结果
+  - 已确认仅在 planner 模型调用失败时保留单节点 fallback 作为工程兜底
+  - 已确认 `PreparePhase` 在初始 planning 与 replan 下读取统一正式输入源：
+    - `user_input`
+    - `current_goal`
+    - `task_graph_state`
+    - `runtime_memory`
+    - `tool / skill capability summary`
+    - `finalize_return_input`
+    - `request_replan`
+  - 已确认初始 planning 与 replan 不拆成两套独立 contract，而通过输入状态差异表达
+  - 已确认 `request_replan` 只作为 `PreparePhase` 的正式输入和 prompt 注入来源存在，不进入 planner 输出 contract
+  - 已确认 `finalize_return_input` 继续保留为 `PreparePhase` 的正式输入之一
+  - 已确认 `PrepareResult` 第一版继续保持极简正式结构：
+    - `goal`
+    - `patch`
+  - 已确认 `active node` 继续通过 `patch.active_node_id` 承载，不在 `PrepareResult` 中重复挂载
+  - 已确认 `replan` 场景下 planner 允许同时产出：
+    - 新增 node 草稿
+    - 现有 node 更新草稿
+  - 已确认两类草稿的引用方式固定为：
+    - 新增 node 使用临时 `ref`
+    - 更新现有 node 必须引用正式 `node_id`
+  - 已确认 `prepare_result.patch` 第一版正式动作只保留：
+    - `create`
+    - `update`
+  - 已确认第一版不支持：
+    - `delete`
+    - `replace_node`
+    - `replace_graph`
+  - 已确认 `update` 第一版只允许修改：
+    - `name`
+    - `description`
+    - `owner`
+    - `dependencies`
+    - `node_status`
+  - 已确认 `update.node_status` 进一步收紧为只允许：
+    - `pending`
+    - `ready`
+  - 已确认新 node 可以依赖旧 node，也可以依赖本次新增 node
+  - 已确认非终态旧 node 可以更新 `dependencies` 并指向本次新增 node
+  - 已确认终态旧 node 第一版不允许被修改，且该规则在 normalize / 校验阶段直接拦截
+  - 已确认 replan 成功后，新 `prepare_result` 直接整体覆盖旧的 `runtime_state.prepare_result`
+  - 已确认 replan 成功后，`run_identity.goal` 由新的 `prepare_result.goal` 正式覆盖旧 goal
+  - 已确认 `request_replan` 不在进入 `PreparePhase` 前提前清空，而只在 prepare 成功完成后清空
+  - 已确认 replan 成功前旧 graph 不做预清理，只有新 patch 成功 apply 后 graph 才正式进入新状态
+  - 已确认 replan 成功后：
+    - `runtime_state.active_node_id` 以新 patch 的 `active_node_id` 为准重新同步
+    - graph `active_node_id` 也以新 patch 的 `active_node_id` 为准重新同步
+  - 已确认以下情况都视为这次 replan 未成功消费：
+    - planner 模型调用失败
+    - planner payload 非法
+    - patch 校验失败
+    - patch 合法但没有任何实质修改
+  - 已确认 replan 失败时：
+    - 旧 `prepare_result` 保留
+    - 旧 graph 保留
+    - `request_replan` 保留
+  - 已确认 `PreparePhase` 第一版错误按 5 类收口：
+    - `planner_model_error`
+    - `planner_payload_parse_error`
+    - `planner_contract_error`
+    - `planner_graph_semantic_error`
+    - `planner_noop_patch`
+  - 已确认只有 `planner_model_error` 在初始 planning 场景允许单节点 fallback
+  - 已确认 `replan` 场景第一版完全禁止 fallback
+  - 已确认以下情况全部按硬失败收口，不做 fallback：
+    - payload 解析失败
+    - contract 校验失败
+    - graph 语义校验失败
+    - no-op patch
+  - 已确认 prepare 失败第一版应保留轻量结构化错误类型，而不只抛裸异常
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s14/prepare-replan-strategy-t1-to-t3-design-v1.md`
+- 遗留问题：
+  - 模块 23 任务 06 的正式代码模型、异常承载结构与测试范围仍待实现时最终落定
+- 下一步：
+  - 进入模块 23 的任务 06，开始正式实现 `PreparePhase / replan` 的策略补强与测试
 
 ---
 

@@ -435,19 +435,8 @@ class RuntimeOrchestratorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             orchestrator.run_prepare_phase(context)
 
-    def test_prepare_phase_rejects_non_empty_graph_for_first_version(self):
-        planner = SequenceModelProvider(
-            [
-                ModelOutput(
-                    content=(
-                        '{"goal":"Plan runtime implementation.","active_node_ref":"plan_node_1","nodes":'
-                        '[{"ref":"plan_node_1","name":"Implement prepare phase","kind":"execution",'
-                        '"description":"Implement the initial prepare planner.","node_status":"ready",'
-                        '"owner":"main","dependencies":[],"order":1}]}'
-                    )
-                )
-            ]
-        )
+    def test_prepare_phase_non_empty_graph_without_request_replan_uses_initial_fallback(self):
+        planner = SequenceModelProvider([])
         orchestrator = create_orchestrator(planner_model_provider=planner)
         context = orchestrator.build_initial_context(
             StartRunIdentity(
@@ -468,8 +457,231 @@ class RuntimeOrchestratorTests(unittest.TestCase):
             )
         )
 
+        prepared = orchestrator.run_prepare_phase(context)
+
+        self.assertEqual(prepared.run_identity.goal, "Implement prepare phase.")
+        self.assertEqual(len(prepared.domain_state.task_graph_state.nodes), 2)
+        self.assertTrue(any(node.name == "Handle current request" for node in prepared.domain_state.task_graph_state.nodes))
+
+    def test_prepare_phase_model_error_falls_back_for_initial_planning(self):
+        planner = SequenceModelProvider([])
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Fallback for initial plan.",
+            )
+        )
+
+        prepared = orchestrator.run_prepare_phase(context)
+
+        self.assertEqual(prepared.run_identity.goal, "Fallback for initial plan.")
+        self.assertEqual(len(prepared.domain_state.task_graph_state.nodes), 1)
+        self.assertIsNone(prepared.runtime_state.prepare_failure)
+
+    def test_prepare_phase_replan_can_create_and_update_nodes(self):
+        planner = SequenceModelProvider(
+            [
+                ModelOutput(
+                    content=(
+                        '{"goal":"Replanned goal.","active_node_ref":"plan_node_2","nodes":'
+                        '[{"action":"update","node_id":"node-1","name":"Refined existing",'
+                        '"description":"Refined description.","owner":"main",'
+                        '"dependencies":["plan_node_2"],"node_status":"pending"},'
+                        '{"action":"create","ref":"plan_node_2","name":"New retry node","kind":"execution",'
+                        '"description":"Continue with new path.","node_status":"ready",'
+                        '"owner":"main","dependencies":[],"order":2}]}'
+                    )
+                )
+            ]
+        )
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Replan current graph.",
+            )
+        )
+        context.run_identity.goal = "Old goal"
+        context.run_lifecycle.current_phase = RunPhase.PREPARE
+        context.runtime_state.request_replan = type(context.runtime_state.request_replan)(
+            source=None, node_id="", reason="", created_at=""
+        ) if False else None
+        from rtv2.state.models import RequestReplan, RequestReplanSource
+        context.runtime_state.request_replan = RequestReplan(
+            source=RequestReplanSource.NODE_REFLEXION,
+            node_id="node-1",
+            reason="Need a replan",
+            created_at="2026-05-01T00:00:00+00:00",
+        )
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Existing node",
+                kind="execution",
+                description="Old description.",
+                node_status=NodeStatus.READY,
+                owner="main",
+            )
+        ]
+        orchestrator.graph_store.save_graph(context.domain_state.task_graph_state)
+
+        prepared = orchestrator.run_prepare_phase(context)
+
+        self.assertEqual(prepared.run_identity.goal, "Replanned goal.")
+        self.assertIsNone(prepared.runtime_state.request_replan)
+        self.assertIsNone(prepared.runtime_state.prepare_failure)
+        self.assertEqual(prepared.domain_state.task_graph_state.active_node_id, "node-2")
+        updated_node = next(node for node in prepared.domain_state.task_graph_state.nodes if node.node_id == "node-1")
+        new_node = next(node for node in prepared.domain_state.task_graph_state.nodes if node.node_id == "node-2")
+        self.assertEqual(updated_node.name, "Refined existing")
+        self.assertEqual(updated_node.description, "Refined description.")
+        self.assertEqual(updated_node.node_status, NodeStatus.PENDING)
+        self.assertEqual(updated_node.dependencies, ["node-2"])
+        self.assertEqual(new_node.name, "New retry node")
+        self.assertEqual(new_node.node_status, NodeStatus.READY)
+
+    def test_prepare_phase_replan_rejects_terminal_node_update(self):
+        planner = SequenceModelProvider(
+            [
+                ModelOutput(
+                    content=(
+                        '{"goal":"Replanned goal.","active_node_ref":"node-1","nodes":'
+                        '[{"action":"update","node_id":"node-1","name":"Illegal update","node_status":"ready"}]}'
+                    )
+                )
+            ]
+        )
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Reject terminal update.",
+            )
+        )
+        from rtv2.state.models import PrepareFailureType, RequestReplan, RequestReplanSource
+        context.runtime_state.request_replan = RequestReplan(
+            source=RequestReplanSource.NODE_REFLEXION,
+            node_id="node-1",
+            reason="Need a replan",
+            created_at="2026-05-01T00:00:00+00:00",
+        )
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Completed node",
+                kind="execution",
+                description="Done.",
+                node_status=NodeStatus.COMPLETED,
+            )
+        ]
+        orchestrator.graph_store.save_graph(context.domain_state.task_graph_state)
+
         with self.assertRaises(ValueError):
             orchestrator.run_prepare_phase(context)
+
+        self.assertIsNotNone(context.runtime_state.prepare_failure)
+        self.assertEqual(
+            context.runtime_state.prepare_failure.failure_type,
+            PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+        )
+        self.assertIsNotNone(context.runtime_state.request_replan)
+
+    def test_prepare_phase_replan_model_error_does_not_fallback(self):
+        planner = SequenceModelProvider([])
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="Replan failure.",
+            )
+        )
+        from rtv2.state.models import PrepareFailureType, RequestReplan, RequestReplanSource
+        context.runtime_state.request_replan = RequestReplan(
+            source=RequestReplanSource.NODE_REFLEXION,
+            node_id="node-1",
+            reason="Need a replan",
+            created_at="2026-05-01T00:00:00+00:00",
+        )
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Existing node",
+                kind="execution",
+                description="Old description.",
+                node_status=NodeStatus.READY,
+            )
+        ]
+        orchestrator.graph_store.save_graph(context.domain_state.task_graph_state)
+
+        with self.assertRaises(RuntimeError):
+            orchestrator.run_prepare_phase(context)
+
+        self.assertIsNotNone(context.runtime_state.prepare_failure)
+        self.assertEqual(
+            context.runtime_state.prepare_failure.failure_type,
+            PrepareFailureType.PLANNER_MODEL_ERROR,
+        )
+        self.assertIsNotNone(context.runtime_state.request_replan)
+
+    def test_prepare_phase_replan_rejects_noop_patch(self):
+        planner = SequenceModelProvider(
+            [
+                ModelOutput(
+                    content='{"goal":"Old goal","active_node_ref":"node-1","nodes":[{"action":"update","node_id":"node-1","node_status":"ready"}]}'
+                )
+            ]
+        )
+        orchestrator = create_orchestrator(planner_model_provider=planner)
+        context = orchestrator.build_initial_context(
+            StartRunIdentity(
+                session_id="sess-1",
+                task_id="task-1",
+                run_id="run-1",
+                user_input="No-op replan.",
+            )
+        )
+        from rtv2.state.models import PrepareFailureType, RequestReplan, RequestReplanSource
+        context.run_identity.goal = "Old goal"
+        context.runtime_state.request_replan = RequestReplan(
+            source=RequestReplanSource.NODE_REFLEXION,
+            node_id="node-1",
+            reason="Need a replan",
+            created_at="2026-05-01T00:00:00+00:00",
+        )
+        context.domain_state.task_graph_state.nodes = [
+            TaskGraphNode(
+                node_id="node-1",
+                graph_id=context.domain_state.task_graph_state.graph_id,
+                name="Existing node",
+                kind="execution",
+                description="Old description.",
+                node_status=NodeStatus.READY,
+                owner="main",
+            )
+        ]
+        context.domain_state.task_graph_state.active_node_id = "node-1"
+        orchestrator.graph_store.save_graph(context.domain_state.task_graph_state)
+
+        with self.assertRaises(ValueError):
+            orchestrator.run_prepare_phase(context)
+
+        self.assertIsNotNone(context.runtime_state.prepare_failure)
+        self.assertEqual(
+            context.runtime_state.prepare_failure.failure_type,
+            PrepareFailureType.PLANNER_NOOP_PATCH,
+        )
 
     def test_phase_methods_raise_when_called_out_of_order(self):
         orchestrator = create_orchestrator()

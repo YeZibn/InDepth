@@ -231,16 +231,39 @@
 3. replan 场景下允许在非空图上再次运行 `prepare`
 4. 当前不先清空 graph
 5. graph 继续通过新的 `prepare_result.patch` 在当前 graph 基础上修改
-6. `prepare` 成功消费后会清空 `runtime_state.request_replan`
+6. replan 成功后新的 `prepare_result` 直接覆盖旧结果
+7. `prepare` 成功消费后才会清空 `runtime_state.request_replan`
+8. replan 失败时保留旧 graph、旧 `prepare_result` 和 `request_replan`
+9. replan 成功后 `runtime_state.active_node_id` 与 graph `active_node_id` 都以新 patch 为准重同步
 
 ## prepare fallback 的当前工程语义
 
 当前当 prepare planner model 调用失败时：
 
-1. orchestrator 直接构造单节点最小 `TaskGraphPatch`
+1. 只有在初始 planning 场景，orchestrator 才会直接构造单节点最小 `TaskGraphPatch`
 2. `goal` 收敛为旧 `goal` 或当前 `user_input`
+3. replan 场景第一版完全禁止 fallback
 
 这只是工程 fallback，不改变 prepare 的正式 planner 主语义。
+
+## 当前 prepare 错误收口
+
+当前已新增轻量结构化 `prepare` 失败承载：
+
+1. `runtime_state.prepare_failure`
+
+当前第一版错误类型固定为：
+
+1. `planner_model_error`
+2. `planner_payload_parse_error`
+3. `planner_contract_error`
+4. `planner_graph_semantic_error`
+5. `planner_noop_patch`
+
+当前规则如下：
+
+1. 只有 `planner_model_error` 在初始 planning 场景允许 fallback
+2. payload 解析失败、contract 失败、graph 语义失败、no-op patch 全部按硬失败收口
 
 ## 下一步
 

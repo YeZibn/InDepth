@@ -695,6 +695,86 @@
 33. 当前 `PreparePhase / ExecutePhase / Finalize` 都读取全量 `runtime memory`
 34. 当前阶段不引入按阶段裁剪的 `memory view`
 
+## 4.14 S14 PreparePhase / Replan 正式策略补充
+
+当前补充结论如下：
+
+1. `PreparePhase` 第一版正式支持非空 graph 上的 `replan`
+2. 第一版 `replan` 采用增量 planning，不做整图重写
+3. 第一版增量 planning 只允许：
+   - 新增 node
+   - 修改现有 node 的 planning 属性
+4. 第一版明确禁止删除旧 node
+5. `PreparePhase` 在初始 planning 与 replan 下采用统一正式输入源：
+   - `user_input`
+   - `current_goal`
+   - `task_graph_state`
+   - `runtime_memory`
+   - `tool / skill capability summary`
+   - `finalize_return_input`
+   - `request_replan`
+6. 初始 planning 与 replan 的差异，通过输入状态差异表达，而不拆成两套独立 contract
+7. `request_replan` 只作为 `PreparePhase` 的正式输入和 prompt 注入来源存在，不进入 planner 输出 contract
+8. `finalize_return_input` 继续保留为 `PreparePhase` 的正式输入之一
+9. `PrepareResult` 第一版继续保持极简正式结构：
+   - `goal`
+   - `patch`
+10. `active node` 继续通过 `patch.active_node_id` 承载，不在 `PrepareResult` 中重复挂载
+11. `replan` 场景下，planner 可同时产出：
+   - 新增 node 草稿
+   - 现有 node 更新草稿
+12. 新增 node 使用临时 `ref`
+13. 更新现有 node 必须引用正式 `node_id`
+14. `prepare_result.patch` 第一版正式动作只保留：
+   - `create`
+   - `update`
+15. 第一版不支持：
+   - `delete`
+   - `replace_node`
+   - `replace_graph`
+16. `update` 第一版只允许修改：
+   - `name`
+   - `description`
+   - `owner`
+   - `dependencies`
+   - `node_status`
+17. `update.node_status` 进一步收紧为只允许：
+   - `pending`
+   - `ready`
+18. 新 node 可以依赖旧 node，也可以依赖本次新增 node
+19. 非终态旧 node 可以更新 `dependencies` 并指向本次新增 node
+20. 终态旧 node 第一版不允许被修改，且该规则在 prepare payload 的 normalize / 校验阶段直接拦截
+21. replan 成功后，新 `prepare_result` 直接整体覆盖旧的 `runtime_state.prepare_result`
+22. replan 成功后，`run_identity.goal` 由新的 `prepare_result.goal` 正式覆盖旧 goal
+23. `request_replan` 不在进入 `PreparePhase` 前提前清空，而只在 prepare 成功完成后清空
+24. replan 成功前旧 graph 不做预清理，只有新 patch 成功 apply 后 graph 才正式进入新状态
+25. `PreparePhase` 第一版错误按 5 类收口：
+   - `planner_model_error`
+   - `planner_payload_parse_error`
+   - `planner_contract_error`
+   - `planner_graph_semantic_error`
+   - `planner_noop_patch`
+26. 只有 `planner_model_error` 在初始 planning 场景允许单节点 fallback
+27. `replan` 场景第一版完全禁止 fallback
+28. 以下情况全部按硬失败收口，不做 fallback：
+   - payload 解析失败
+   - contract 校验失败
+   - graph 语义校验失败
+   - no-op patch
+29. prepare 失败第一版应保留轻量结构化错误类型，而不只抛裸异常
+25. replan 成功后：
+   - `runtime_state.active_node_id` 以新 patch 的 `active_node_id` 为准重新同步
+   - graph `active_node_id` 也以新 patch 的 `active_node_id` 为准重新同步
+26. 以下情况都视为这次 replan 未成功消费：
+   - planner 模型调用失败
+   - planner payload 非法
+   - patch 校验失败
+   - patch 合法但没有任何实质修改
+27. replan 失败时：
+   - 旧 `prepare_result` 保留
+   - 旧 graph 保留
+   - `request_replan` 保留
+
 ## 5. 总实现顺序表
 
 下表给出建议的总体实现顺序。这里的“顺序”采用批次波次而不是严格串行，表示同一批中的任务可以并行推进。

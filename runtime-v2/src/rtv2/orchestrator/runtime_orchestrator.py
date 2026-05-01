@@ -42,6 +42,8 @@ from rtv2.solver import CompletionCheckInput, CompletionEvaluator, ReActStepRunn
 from rtv2.solver.models import SolverControlSignal, SolverResult, StepResult, StepStatusSignal
 from rtv2.state.models import (
     DomainState,
+    PrepareFailure,
+    PrepareFailureType,
     PrepareResult,
     RunContext,
     RunIdentity,
@@ -209,20 +211,36 @@ class RuntimeOrchestrator:
         if context.run_lifecycle.current_phase is not RunPhase.PREPARE:
             raise ValueError("Prepare phase requires current_phase=PREPARE")
 
-        if context.domain_state.task_graph_state.nodes and context.runtime_state.request_replan is None:
-            raise ValueError("Prepare phase currently only supports empty-graph initialization")
-
         self._append_run_user_input_entry(context)
+        is_replan = context.runtime_state.request_replan is not None
         try:
             planner_output = self._run_prepare_planner(context)
             prepare_result = self._normalize_prepare_payload(context, planner_output)
             if prepare_result.patch is None:
-                raise ValueError("Prepare planner did not produce a graph patch")
-        except RuntimeError:
+                raise self._build_prepare_error(
+                    PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                    "Prepare planner did not produce a graph patch",
+                )
+            if self._is_noop_prepare_patch(context, prepare_result.patch):
+                raise self._build_prepare_error(
+                    PrepareFailureType.PLANNER_NOOP_PATCH,
+                    "Prepare planner patch did not introduce any effective graph change",
+                )
+        except (RuntimeError, AssertionError) as exc:
+            if is_replan:
+                context.runtime_state.prepare_failure = self._to_prepare_failure(
+                    PrepareFailureType.PLANNER_MODEL_ERROR,
+                    str(exc) or "Prepare planner model call failed",
+                )
+                raise
             prepare_result = self._build_prepare_fallback_result(context)
+        except PreparePhaseError as exc:
+            context.runtime_state.prepare_failure = self._to_prepare_failure(exc.failure_type, str(exc))
+            raise
 
         context.run_identity.goal = prepare_result.goal
         context.runtime_state.prepare_result = prepare_result
+        context.runtime_state.prepare_failure = None
         self._apply_graph_patch(context, prepare_result.patch)
         self._append_prepare_result_entry(context, prepare_result)
         context.runtime_state.request_replan = None
@@ -821,23 +839,26 @@ class RuntimeOrchestrator:
     def _run_prepare_planner(self, context: RunContext) -> ModelOutput:
         prepare_prompt = self.build_prepare_prompt(context)
         rendered_prompt = self.render_execution_prompt(prepare_prompt)
-        return self.planner_model_provider.generate(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the runtime-v2 prepare planner. "
-                        "Return valid JSON only and do not call tools."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": rendered_prompt,
-                },
-            ],
-            tools=[],
-            config=self.planner_generation_config,
-        )
+        try:
+            return self.planner_model_provider.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the runtime-v2 prepare planner. "
+                            "Return valid JSON only and do not call tools."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": rendered_prompt,
+                    },
+                ],
+                tools=[],
+                config=self.planner_generation_config,
+            )
+        except AssertionError as exc:
+            raise RuntimeError(str(exc) or "Prepare planner model call failed") from exc
 
     def _run_finalize_generator(self, context: RunContext) -> FinalizeGenerationResult:
         finalize_prompt = self.build_finalize_prompt(context)
@@ -900,116 +921,263 @@ class RuntimeOrchestrator:
 
     def _normalize_prepare_payload(self, context: RunContext, planner_output: ModelOutput) -> PrepareResult:
         payload = self._load_prepare_payload(planner_output.content)
+        graph_state = context.domain_state.task_graph_state
+        is_replan = context.runtime_state.request_replan is not None
 
         goal = str(payload.get("goal", "") or "").strip()
         if not goal:
-            raise ValueError("Prepare payload must contain a non-empty goal")
+            raise self._build_prepare_error(
+                PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                "Prepare payload must contain a non-empty goal",
+            )
 
         raw_nodes = payload.get("nodes")
         if not isinstance(raw_nodes, list) or not raw_nodes:
-            raise ValueError("Prepare payload must contain a non-empty nodes list")
+            raise self._build_prepare_error(
+                PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                "Prepare payload must contain a non-empty nodes list",
+            )
 
         active_node_ref = str(payload.get("active_node_ref", "") or "").strip()
         if not active_node_ref:
-            raise ValueError("Prepare payload must contain active_node_ref")
+            raise self._build_prepare_error(
+                PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                "Prepare payload must contain active_node_ref",
+            )
 
+        existing_node_map = {node.node_id: node for node in graph_state.nodes}
         normalized_nodes: list[tuple[str, TaskGraphNode]] = []
+        node_updates: list[NodePatch] = []
         ref_to_node_id: dict[str, str] = {}
         seen_refs: set[str] = set()
+        seen_update_ids: set[str] = set()
 
         for raw_node in raw_nodes:
             if not isinstance(raw_node, dict):
-                raise ValueError("Each prepare node must be an object")
-
-            ref = str(raw_node.get("ref", "") or "").strip()
-            if not ref:
-                raise ValueError("Prepare node ref is required")
-            if ref in seen_refs:
-                raise ValueError(f"Duplicate prepare node ref: {ref}")
-            seen_refs.add(ref)
-
-            name = str(raw_node.get("name", "") or "").strip()
-            kind = str(raw_node.get("kind", "") or "").strip()
-            description = str(raw_node.get("description", "") or "").strip()
-            if not name:
-                raise ValueError(f"Prepare node name is required for ref: {ref}")
-            if not kind:
-                raise ValueError(f"Prepare node kind is required for ref: {ref}")
-            if not description:
-                raise ValueError(f"Prepare node description is required for ref: {ref}")
-
-            raw_status = str(raw_node.get("node_status", "") or "").strip().lower()
-            if raw_status not in {NodeStatus.PENDING.value, NodeStatus.READY.value}:
-                raise ValueError(
-                    f"Prepare node_status must be pending or ready for ref: {ref}"
+                raise self._build_prepare_error(
+                    PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                    "Each prepare node must be an object",
                 )
-            node_status = NodeStatus(raw_status)
 
-            owner = str(raw_node.get("owner", "") or "").strip() or "main"
-            raw_order = raw_node.get("order", 0)
-            if not isinstance(raw_order, int) or raw_order <= 0:
-                raise ValueError(f"Prepare node order must be a positive integer for ref: {ref}")
+            action = str(raw_node.get("action", "") or "").strip().lower()
+            if not action:
+                action = "update" if is_replan and str(raw_node.get("node_id", "") or "").strip() else "create"
 
-            raw_dependencies = raw_node.get("dependencies", [])
-            if not isinstance(raw_dependencies, list):
-                raise ValueError(f"Prepare node dependencies must be a list for ref: {ref}")
-            dependencies = []
-            for dependency in raw_dependencies:
-                dependency_ref = str(dependency or "").strip()
-                if not dependency_ref:
-                    raise ValueError(f"Prepare node dependency ref is required for ref: {ref}")
-                dependencies.append(dependency_ref)
+            if action == "create":
+                ref = str(raw_node.get("ref", "") or "").strip()
+                if not ref:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        "Prepare node ref is required",
+                    )
+                if ref in seen_refs:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Duplicate prepare node ref: {ref}",
+                    )
+                seen_refs.add(ref)
 
-            node_id = self._create_node_id_for_graph(context.domain_state.task_graph_state, ref_to_node_id.values())
-            ref_to_node_id[ref] = node_id
-            normalized_nodes.append(
-                (
-                    ref,
-                    TaskGraphNode(
+                name = str(raw_node.get("name", "") or "").strip()
+                kind = str(raw_node.get("kind", "") or "").strip()
+                description = str(raw_node.get("description", "") or "").strip()
+                if not name:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Prepare node name is required for ref: {ref}",
+                    )
+                if not kind:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Prepare node kind is required for ref: {ref}",
+                    )
+                if not description:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Prepare node description is required for ref: {ref}",
+                    )
+
+                raw_status = str(raw_node.get("node_status", "") or "").strip().lower()
+                if raw_status not in {NodeStatus.PENDING.value, NodeStatus.READY.value}:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Prepare node_status must be pending or ready for ref: {ref}",
+                    )
+                node_status = NodeStatus(raw_status)
+
+                owner = str(raw_node.get("owner", "") or "").strip() or "main"
+                raw_order = raw_node.get("order", 0)
+                if not isinstance(raw_order, int) or raw_order <= 0:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Prepare node order must be a positive integer for ref: {ref}",
+                    )
+
+                raw_dependencies = raw_node.get("dependencies", [])
+                if not isinstance(raw_dependencies, list):
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Prepare node dependencies must be a list for ref: {ref}",
+                    )
+                dependencies = []
+                for dependency in raw_dependencies:
+                    dependency_ref = str(dependency or "").strip()
+                    if not dependency_ref:
+                        raise self._build_prepare_error(
+                            PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                            f"Prepare node dependency ref is required for ref: {ref}",
+                        )
+                    dependencies.append(dependency_ref)
+
+                node_id = self._create_node_id_for_graph(graph_state, ref_to_node_id.values())
+                ref_to_node_id[ref] = node_id
+                normalized_nodes.append(
+                    (
+                        ref,
+                        TaskGraphNode(
+                            node_id=node_id,
+                            graph_id=graph_state.graph_id,
+                            name=name,
+                            kind=kind,
+                            description=description,
+                            node_status=node_status,
+                            owner=owner,
+                            dependencies=dependencies,
+                            order=raw_order,
+                        ),
+                    )
+                )
+                continue
+
+            if action == "update":
+                node_id = str(raw_node.get("node_id", "") or "").strip()
+                if not is_replan:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+                        "Prepare update action is only allowed during replan",
+                    )
+                if not node_id:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        "Prepare update node_id is required",
+                    )
+                if node_id in seen_update_ids:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                        f"Duplicate prepare update node_id: {node_id}",
+                    )
+                seen_update_ids.add(node_id)
+                existing_node = existing_node_map.get(node_id)
+                if existing_node is None:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+                        f"Prepare update node_id not found: {node_id}",
+                    )
+                if existing_node.node_status in {
+                    NodeStatus.COMPLETED,
+                    NodeStatus.FAILED,
+                    NodeStatus.BLOCKED,
+                    NodeStatus.ABANDONED,
+                }:
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+                        f"Prepare update cannot modify terminal node: {node_id}",
+                    )
+
+                raw_status = raw_node.get("node_status")
+                node_status = None
+                if raw_status is not None:
+                    status_text = str(raw_status or "").strip().lower()
+                    if status_text not in {NodeStatus.PENDING.value, NodeStatus.READY.value}:
+                        raise self._build_prepare_error(
+                            PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                            f"Prepare update node_status must be pending or ready for node_id: {node_id}",
+                        )
+                    node_status = NodeStatus(status_text)
+
+                raw_dependencies = raw_node.get("dependencies")
+                dependencies = None
+                if raw_dependencies is not None:
+                    if not isinstance(raw_dependencies, list):
+                        raise self._build_prepare_error(
+                            PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                            f"Prepare update dependencies must be a list for node_id: {node_id}",
+                        )
+                    dependencies = []
+                    for dependency in raw_dependencies:
+                        dependency_ref = str(dependency or "").strip()
+                        if not dependency_ref:
+                            raise self._build_prepare_error(
+                                PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                                f"Prepare update dependency ref is required for node_id: {node_id}",
+                            )
+                        dependencies.append(dependency_ref)
+
+                node_updates.append(
+                    NodePatch(
                         node_id=node_id,
-                        graph_id=context.domain_state.task_graph_state.graph_id,
-                        name=name,
-                        kind=kind,
-                        description=description,
+                        name=self._optional_prepare_string(raw_node.get("name")),
+                        description=self._optional_prepare_string(raw_node.get("description")),
                         node_status=node_status,
-                        owner=owner,
+                        owner=self._optional_prepare_string(raw_node.get("owner")),
                         dependencies=dependencies,
-                        order=raw_order,
-                    ),
+                    )
                 )
+                continue
+
+            raise self._build_prepare_error(
+                PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                f"Unsupported prepare node action: {action}",
             )
 
-        if active_node_ref not in ref_to_node_id:
-            raise ValueError("active_node_ref must point to one of the planned nodes")
+        if active_node_ref not in ref_to_node_id and active_node_ref not in existing_node_map:
+            raise self._build_prepare_error(
+                PrepareFailureType.PLANNER_CONTRACT_ERROR,
+                "active_node_ref must point to a planned create ref or existing node_id",
+            )
 
         final_nodes: list[TaskGraphNode] = []
         for ref, node in normalized_nodes:
             mapped_dependencies: list[str] = []
             for dependency_ref in node.dependencies:
-                dependency_node_id = ref_to_node_id.get(dependency_ref)
+                dependency_node_id = ref_to_node_id.get(dependency_ref) or (
+                    dependency_ref if dependency_ref in existing_node_map else None
+                )
                 if dependency_node_id is None:
-                    raise ValueError(
-                        f"Prepare node dependency ref not found: {dependency_ref} for ref: {ref}"
+                    raise self._build_prepare_error(
+                        PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+                        f"Prepare node dependency ref not found: {dependency_ref} for ref: {ref}",
                     )
                 mapped_dependencies.append(dependency_node_id)
             node.dependencies = mapped_dependencies
             final_nodes.append(node)
 
-        active_node_id = ref_to_node_id[active_node_ref]
-        active_node = self._find_node(
-            TaskGraphState(
-                graph_id=context.domain_state.task_graph_state.graph_id,
-                nodes=final_nodes,
-                active_node_id=active_node_id,
-            ),
-            active_node_id,
-        )
+        for node_update in node_updates:
+            if node_update.dependencies is not None:
+                mapped_dependencies: list[str] = []
+                for dependency_ref in node_update.dependencies:
+                    dependency_node_id = ref_to_node_id.get(dependency_ref) or (
+                        dependency_ref if dependency_ref in existing_node_map else None
+                    )
+                    if dependency_node_id is None:
+                        raise self._build_prepare_error(
+                            PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+                            f"Prepare update dependency ref not found: {dependency_ref} for node_id: {node_update.node_id}",
+                        )
+                    mapped_dependencies.append(dependency_node_id)
+                node_update.dependencies = mapped_dependencies
+
+        active_node_id = ref_to_node_id.get(active_node_ref, active_node_ref)
+        active_node = self._resolve_prepare_active_node(graph_state, final_nodes, node_updates, active_node_id)
         if active_node is None or active_node.node_status is not NodeStatus.READY:
-            raise ValueError("active_node_ref must point to a ready node")
+            raise self._build_prepare_error(
+                PrepareFailureType.PLANNER_GRAPH_SEMANTIC_ERROR,
+                "active_node_ref must point to a ready node after prepare normalization",
+            )
 
         return PrepareResult(
             goal=goal,
             patch=TaskGraphPatch(
+                node_updates=node_updates,
                 new_nodes=final_nodes,
                 active_node_id=active_node_id,
                 graph_status=TaskGraphStatus.ACTIVE,
@@ -1046,25 +1214,91 @@ class RuntimeOrchestrator:
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ValueError("Prepare planner output was not valid JSON") from exc
+            raise PreparePhaseError(
+                PrepareFailureType.PLANNER_PAYLOAD_PARSE_ERROR,
+                "Prepare planner output was not valid JSON",
+            ) from exc
         if not isinstance(payload, dict):
-            raise ValueError("Prepare planner output must be a JSON object")
-        return payload
-        if existing_entries:
-            return
-        self.memory_store.append_entry(
-            RuntimeMemoryEntry(
-                entry_id=f"entry-{uuid4()}",
-                task_id=context.run_identity.task_id,
-                run_id=context.run_identity.run_id,
-                step_id="run-start",
-                node_id="",
-                entry_type=RuntimeMemoryEntryType.CONTEXT,
-                role=RuntimeMemoryRole.USER,
-                content=context.run_identity.user_input,
-                created_at=datetime.now(timezone.utc).isoformat(),
+            raise PreparePhaseError(
+                PrepareFailureType.PLANNER_PAYLOAD_PARSE_ERROR,
+                "Prepare planner output must be a JSON object",
             )
+        return payload
+
+    @staticmethod
+    def _optional_prepare_string(value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value or "").strip()
+        return text or ""
+
+    @staticmethod
+    def _build_prepare_error(failure_type: PrepareFailureType, message: str) -> "PreparePhaseError":
+        return PreparePhaseError(failure_type, message)
+
+    @staticmethod
+    def _to_prepare_failure(failure_type: PrepareFailureType, message: str) -> PrepareFailure:
+        return PrepareFailure(
+            failure_type=failure_type,
+            message=message,
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    @staticmethod
+    def _is_noop_prepare_patch(context: RunContext, patch: TaskGraphPatch) -> bool:
+        graph_state = context.domain_state.task_graph_state
+        if patch.new_nodes:
+            return False
+        for node_update in patch.node_updates:
+            existing_node = next((node for node in graph_state.nodes if node.node_id == node_update.node_id), None)
+            if existing_node is None:
+                return False
+            if node_update.name is not None and node_update.name != existing_node.name:
+                return False
+            if node_update.description is not None and node_update.description != existing_node.description:
+                return False
+            if node_update.node_status is not None and node_update.node_status != existing_node.node_status:
+                return False
+            if node_update.owner is not None and node_update.owner != existing_node.owner:
+                return False
+            if node_update.dependencies is not None and list(node_update.dependencies) != list(existing_node.dependencies):
+                return False
+        if patch.active_node_id is not None and patch.active_node_id != graph_state.active_node_id:
+            return False
+        if patch.graph_status is not None and patch.graph_status != graph_state.graph_status:
+            return False
+        return True
+
+    @staticmethod
+    def _resolve_prepare_active_node(
+        graph_state: TaskGraphState,
+        new_nodes: list[TaskGraphNode],
+        node_updates: list[NodePatch],
+        active_node_id: str,
+    ) -> TaskGraphNode | None:
+        for node in new_nodes:
+            if node.node_id == active_node_id:
+                return node
+
+        existing_node = next((node for node in graph_state.nodes if node.node_id == active_node_id), None)
+        if existing_node is None:
+            return None
+
+        for patch in node_updates:
+            if patch.node_id == active_node_id:
+                status = patch.node_status or existing_node.node_status
+                return TaskGraphNode(
+                    node_id=existing_node.node_id,
+                    graph_id=existing_node.graph_id,
+                    name=patch.name if patch.name is not None else existing_node.name,
+                    kind=existing_node.kind,
+                    description=patch.description if patch.description is not None else existing_node.description,
+                    node_status=status,
+                    owner=patch.owner if patch.owner is not None else existing_node.owner,
+                    dependencies=patch.dependencies if patch.dependencies is not None else list(existing_node.dependencies),
+                    order=existing_node.order,
+                )
+        return existing_node
 
     @staticmethod
     def _find_node(graph_state: TaskGraphState, node_id: str) -> TaskGraphNode | None:
@@ -1072,3 +1306,11 @@ class RuntimeOrchestrator:
             if node.node_id == node_id:
                 return node
         return None
+
+
+class PreparePhaseError(ValueError):
+    """Structured error raised during prepare normalization and validation."""
+
+    def __init__(self, failure_type: PrepareFailureType, message: str) -> None:
+        super().__init__(message)
+        self.failure_type = failure_type

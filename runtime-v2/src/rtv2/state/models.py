@@ -40,6 +40,14 @@ class RequestReplanSource(StrEnum):
     RUN_REFLEXION = "run_reflexion"
 
 
+class PrepareFailureType(StrEnum):
+    PLANNER_MODEL_ERROR = "planner_model_error"
+    PLANNER_PAYLOAD_PARSE_ERROR = "planner_payload_parse_error"
+    PLANNER_CONTRACT_ERROR = "planner_contract_error"
+    PLANNER_GRAPH_SEMANTIC_ERROR = "planner_graph_semantic_error"
+    PLANNER_NOOP_PATCH = "planner_noop_patch"
+
+
 @dataclass(slots=True)
 class RunIdentity:
     """Stable host/runtime identity for a single run instance."""
@@ -118,11 +126,21 @@ class RequestReplan:
 
 
 @dataclass(slots=True)
+class PrepareFailure:
+    """Minimal structured prepare failure retained for diagnostics and follow-up."""
+
+    failure_type: PrepareFailureType
+    message: str
+    created_at: str
+
+
+@dataclass(slots=True)
 class RuntimeState:
     """Runtime control state shared across the main execution chain."""
 
     active_node_id: str = ""
     prepare_result: PrepareResult | None = None
+    prepare_failure: PrepareFailure | None = None
     compression_state: CompressionState | None = None
     external_signal_state: ExternalSignalState | None = None
     finalize_return_input: FinalizeReturnInput | None = None
