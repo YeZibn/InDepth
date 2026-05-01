@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from rtv2.prompting.models import (
+    CompletionEvaluatorPromptInput,
     ExecutionPrompt,
     ExecutionPromptInput,
     FinalizePromptInput,
     NodeReflexionPromptInput,
     PreparePromptInput,
     RunReflexionPromptInput,
+    VerifierPromptInput,
 )
 from rtv2.state.models import RunPhase
 
@@ -57,6 +59,20 @@ class ExecutionPromptAssembler:
             dynamic_injection=self._build_run_reflexion_dynamic_injection(prompt_input),
         )
 
+    def build_completion_evaluator_prompt(self, prompt_input: CompletionEvaluatorPromptInput) -> ExecutionPrompt:
+        return ExecutionPrompt(
+            base_prompt=self._build_judge_base_prompt(),
+            phase_prompt=self._build_completion_evaluator_phase_prompt(),
+            dynamic_injection=self._build_completion_evaluator_dynamic_injection(prompt_input),
+        )
+
+    def build_verifier_prompt(self, prompt_input: VerifierPromptInput) -> ExecutionPrompt:
+        return ExecutionPrompt(
+            base_prompt=self._build_judge_base_prompt(),
+            phase_prompt=self._build_verifier_phase_prompt(),
+            dynamic_injection=self._build_verifier_dynamic_injection(prompt_input),
+        )
+
     @staticmethod
     def _build_base_prompt() -> str:
         return "\n".join(
@@ -65,6 +81,18 @@ class ExecutionPromptAssembler:
                 "Follow the formal runtime contract and stay truthful.",
                 "Use tools only when they are necessary to advance the current node.",
                 "Ground your progress in the active node and the provided dynamic context.",
+            ]
+        )
+
+    @staticmethod
+    def _build_judge_base_prompt() -> str:
+        return "\n".join(
+            [
+                "You are an independent runtime-v2 judge.",
+                "Judge only the provided structured package and stay truthful.",
+                "Do not invent missing evidence, missing work, or missing state.",
+                "Do not suggest actions or execution decisions.",
+                "Return JSON only.",
             ]
         )
 
@@ -141,6 +169,32 @@ class ExecutionPromptAssembler:
                 "Return JSON only.",
                 "Required top-level keys: summary, action.",
                 "Allowed actions: request_replan, finish_failed.",
+            ]
+        )
+
+    @staticmethod
+    def _build_completion_evaluator_phase_prompt() -> str:
+        return "\n".join(
+            [
+                "Current chain: completion evaluator.",
+                "Input is a CompletionClaim for the current node.",
+                "Judge only whether the claim is sufficient to prove the node is complete.",
+                "Return JSON only.",
+                "Required top-level keys: result_status, summary, issues.",
+                "Allowed result_status values: pass, fail.",
+            ]
+        )
+
+    @staticmethod
+    def _build_verifier_phase_prompt() -> str:
+        return "\n".join(
+            [
+                "Current chain: runtime verifier.",
+                "Input is a final Handoff package.",
+                "Judge only whether the handoff sufficiently satisfies the user's goal.",
+                "Return JSON only.",
+                "Required top-level keys: result_status, summary, issues.",
+                "Allowed result_status values: pass, fail.",
             ]
         )
 
@@ -247,6 +301,39 @@ class ExecutionPromptAssembler:
                 self._render_list(prompt_input.issues),
                 "## Runtime Memory",
                 prompt_input.runtime_memory_text or "(empty)",
+            ]
+        )
+
+    def _build_completion_evaluator_dynamic_injection(self, prompt_input: CompletionEvaluatorPromptInput) -> str:
+        return "\n".join(
+            [
+                "## Completion Claim",
+                f"Node id: {prompt_input.node_id or '(empty)'}",
+                f"Node name: {prompt_input.node_name or '(empty)'}",
+                f"Node kind: {prompt_input.node_kind or '(empty)'}",
+                "Node description:",
+                prompt_input.node_description or "(empty)",
+                "Completion summary:",
+                prompt_input.completion_summary or "(empty)",
+                "Completion evidence:",
+                self._render_list(prompt_input.completion_evidence),
+                "Completion notes:",
+                self._render_list(prompt_input.completion_notes),
+                "Completion reason:",
+                prompt_input.completion_reason or "(empty)",
+            ]
+        )
+
+    def _build_verifier_dynamic_injection(self, prompt_input: VerifierPromptInput) -> str:
+        return "\n".join(
+            [
+                "## Final Handoff",
+                f"User input: {prompt_input.user_input or '(empty)'}",
+                f"Goal: {prompt_input.goal or '(empty)'}",
+                "Graph summary:",
+                prompt_input.graph_summary or "(empty)",
+                "Final output:",
+                prompt_input.final_output or "(empty)",
             ]
         )
 

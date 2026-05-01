@@ -762,6 +762,47 @@
    - graph 语义校验失败
    - no-op patch
 29. prepare 失败第一版应保留轻量结构化错误类型，而不只抛裸异常
+
+## 4.15 S15 Judge 型 Prompt 与结构化主张包补充
+
+当前补充结论如下：
+
+1. `Actor` 负责生成 `CompletionClaim`
+2. `CompletionEvaluator` 只审 `CompletionClaim`
+3. `Finalize generator` 负责生成 `Handoff`
+4. `RuntimeVerifier` 只审 `Handoff`
+5. judge 型组件不再直接读取：
+   - `runtime_memory_text`
+   - `capability_text`
+6. judge 型组件只返回判断结果，不直接产出动作
+7. `CompletionClaim` 第一版正式字段结构为：
+   - `node_id`
+   - `node_name`
+   - `node_kind`
+   - `node_description`
+   - `completion_summary`
+   - `completion_evidence`
+   - `completion_notes`
+   - `completion_reason`
+8. `CompletionEvaluator` prompt 输出字段第一版固定为：
+   - `result_status`
+   - `summary`
+   - `issues`
+9. `CompletionEvaluator.result_status` 第一版只保留：
+   - `pass`
+   - `fail`
+10. `Handoff` 第一版继续保持 4 个字段：
+   - `user_input`
+   - `goal`
+   - `graph_summary`
+   - `final_output`
+11. `RuntimeVerifier` 输出字段第一版固定为：
+   - `result_status`
+   - `summary`
+   - `issues`
+12. `RuntimeVerifier.result_status` 第一版只保留：
+   - `pass`
+   - `fail`
 25. replan 成功后：
    - `runtime_state.active_node_id` 以新 patch 的 `active_node_id` 为准重新同步
    - graph `active_node_id` 也以新 patch 的 `active_node_id` 为准重新同步

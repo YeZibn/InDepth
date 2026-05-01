@@ -87,3 +87,27 @@ class RunReflexionPromptInput:
     latest_summary: str
     issues: list[str] = field(default_factory=list)
     runtime_memory_text: str = ""
+
+
+@dataclass(slots=True)
+class CompletionEvaluatorPromptInput:
+    """Formal input consumed by completion-evaluator prompt assembly."""
+
+    node_id: str
+    node_name: str
+    node_kind: str
+    node_description: str
+    completion_summary: str
+    completion_evidence: list[str] = field(default_factory=list)
+    completion_notes: list[str] = field(default_factory=list)
+    completion_reason: str = ""
+
+
+@dataclass(slots=True)
+class VerifierPromptInput:
+    """Formal input consumed by runtime-verifier prompt assembly."""
+
+    user_input: str
+    goal: str
+    graph_summary: str
+    final_output: str

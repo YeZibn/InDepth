@@ -2,6 +2,7 @@
 
 from rtv2.prompting.assembler import ExecutionPromptAssembler
 from rtv2.prompting.models import (
+    CompletionEvaluatorPromptInput,
     ExecutionNodePromptContext,
     ExecutionPrompt,
     ExecutionPromptInput,
@@ -9,9 +10,11 @@ from rtv2.prompting.models import (
     NodeReflexionPromptInput,
     PreparePromptInput,
     RunReflexionPromptInput,
+    VerifierPromptInput,
 )
 
 __all__ = [
+    "CompletionEvaluatorPromptInput",
     "ExecutionNodePromptContext",
     "ExecutionPrompt",
     "ExecutionPromptAssembler",
@@ -20,4 +23,5 @@ __all__ = [
     "NodeReflexionPromptInput",
     "PreparePromptInput",
     "RunReflexionPromptInput",
+    "VerifierPromptInput",
 ]

@@ -38,7 +38,7 @@ from rtv2.prompting import (
     RunReflexionPromptInput,
 )
 from rtv2.skills import LocalSkillLoader, SkillRegistry, SkillStatus, build_skill_tools
-from rtv2.solver import CompletionCheckInput, CompletionEvaluator, ReActStepRunner, RuntimeReflexion, RuntimeSolver
+from rtv2.solver import CompletionClaim, CompletionCheckResult, CompletionEvaluator, ReActStepRunner, RuntimeReflexion, RuntimeSolver
 from rtv2.solver.models import SolverControlSignal, SolverResult, StepResult, StepStatusSignal
 from rtv2.state.models import (
     DomainState,
@@ -590,9 +590,9 @@ class RuntimeOrchestrator:
         context: RunContext,
         node: TaskGraphNode,
         step_result: StepResult,
-    ) -> CompletionCheckInput:
+    ) -> CompletionClaim:
         if not hasattr(self.react_step_runner, "model_provider") or not hasattr(self.react_step_runner, "generation_config"):
-            return CompletionCheckInput(
+            return CompletionClaim(
                 node_id=node.node_id,
                 node_name=node.name,
                 node_kind=node.kind,
@@ -628,7 +628,7 @@ class RuntimeOrchestrator:
                 config=self.react_step_runner.generation_config,
             )
         except AssertionError:
-            return CompletionCheckInput(
+            return CompletionClaim(
                 node_id=node.node_id,
                 node_name=node.name,
                 node_kind=node.kind,
@@ -653,7 +653,7 @@ class RuntimeOrchestrator:
             raise ValueError("Completion summary builder completion_notes must be a list")
         completion_evidence = [str(item or "").strip() for item in raw_evidence if str(item or "").strip()]
         completion_notes = [str(item or "").strip() for item in raw_notes if str(item or "").strip()]
-        return CompletionCheckInput(
+        return CompletionClaim(
             node_id=node.node_id,
             node_name=node.name,
             node_kind=node.kind,

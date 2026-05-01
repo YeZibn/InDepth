@@ -41,6 +41,8 @@
 4. `FinalizePromptInput`
 5. `NodeReflexionPromptInput`
 6. `RunReflexionPromptInput`
+7. `CompletionEvaluatorPromptInput`
+8. `VerifierPromptInput`
 
 ## 当前责任链
 
@@ -90,6 +92,8 @@
 3. `FINALIZE` 已有正式最小 closeout contract
 4. `node_reflexion` 已有正式最小动作 contract
 5. `run_reflexion` 已有正式最小动作 contract
+6. `completion_evaluator` 已有正式最小 judge contract
+7. `runtime_verifier` 已有正式最小 judge contract
 
 ### `dynamic_injection`
 
@@ -135,6 +139,19 @@
    - 注入 issues
    - 注入 task 级 `runtime_memory_text`
 
+当前 judge 型 prompt 单独采用 judge base prompt，不复用执行器 base prompt：
+
+1. `CompletionEvaluator`
+   - 输入 `CompletionEvaluatorPromptInput`
+   - 只注入 `CompletionClaim`
+   - 不注入 `runtime_memory_text`
+   - 不注入 `capability_text`
+2. `RuntimeVerifier`
+   - 输入 `VerifierPromptInput`
+   - 只注入 `Handoff`
+   - 不注入 `runtime_memory_text`
+   - 不注入 `capability_text`
+
 ## 当前实现边界
 
 当前 prompt 模块已经正式落地，但仍保持轻量。
@@ -149,13 +166,14 @@
 6. `PreparePhase` 的正式 prompt 装配入口
 7. `FinalizePhase` 的正式 prompt 装配入口
 8. node/run 两层 `Reflexion` 的正式 prompt 装配入口
+9. `CompletionEvaluator` 的正式 judge prompt 装配入口
+10. `RuntimeVerifier` 的正式 judge prompt 装配入口
 
 尚未完成：
 
-1. evaluator 的正式 prompt 模块
-2. 更细粒度的 `replan` prompt 专用视角
-3. message 级 prompt 输入
-4. context budget / compression 感知下的 prompt 裁剪
+1. 更细粒度的 `replan` prompt 专用视角
+2. message 级 prompt 输入
+3. context budget / compression 感知下的 prompt 裁剪
 
 ## 当前测试
 
@@ -170,5 +188,6 @@
 1. 三段 prompt block 生成
 2. 空字段渲染
 3. `PREPARE / FINALIZE / Reflexion` prompt contract 行为
-4. orchestrator 主链接入
-5. runner 消费渲染后 `step_prompt`
+4. `CompletionEvaluator / RuntimeVerifier` judge prompt contract 行为
+5. orchestrator 主链接入
+6. runner 消费渲染后 `step_prompt`

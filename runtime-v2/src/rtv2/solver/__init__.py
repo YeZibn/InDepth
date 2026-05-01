@@ -3,7 +3,7 @@
 from rtv2.solver.completion_evaluator import CompletionEvaluator
 from rtv2.solver.react_step import ReActStepInput, ReActStepOutput, ReActStepRunner
 from rtv2.solver.models import (
-    CompletionCheckInput,
+    CompletionClaim,
     CompletionCheckResult,
     ReflexionAction,
     ReflexionInput,
@@ -17,7 +17,7 @@ from rtv2.solver.reflexion import RuntimeReflexion
 from rtv2.solver.runtime_solver import RuntimeSolver
 
 __all__ = [
-    "CompletionCheckInput",
+    "CompletionClaim",
     "CompletionCheckResult",
     "CompletionEvaluator",
     "ReflexionAction",

@@ -96,6 +96,20 @@
    - `thought`
 3. verifier 再进入下一轮受控继续验证
 
+当前 verifier prompt 已正式接入统一 prompt 模块，但使用独立 judge base prompt。
+
+它只读取：
+
+1. `user_input`
+2. `goal`
+3. `graph_summary`
+4. `final_output`
+
+它不读取：
+
+1. `runtime_memory_text`
+2. `capability_text`
+
 ## FinalizeReflexion
 
 当前 `FinalizeReflexion` 是 run 级 reflexion helper。

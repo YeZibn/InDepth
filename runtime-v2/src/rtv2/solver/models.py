@@ -50,8 +50,8 @@ class StepResult:
 
 
 @dataclass(slots=True)
-class CompletionCheckInput:
-    """Completion package produced before node completion evaluation."""
+class CompletionClaim:
+    """Structured completion claim produced before node completion evaluation."""
 
     node_id: str
     node_name: str

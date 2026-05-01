@@ -22,7 +22,7 @@
 
 1. `S1 ~ S12` 第一版子任务设计稿已全部落文档
 2. `S13` 及后续增量设计模块已在 `design/` 下持续补充
-3. 开发已完成模块 01 ~ 模块 23 的当前阶段实现
+3. 开发已完成模块 01 ~ 模块 24 的当前阶段实现
 4. 当前代码已经具备最小可运行主链：
    - `prepare`
    - `execute / solver / react step`
@@ -31,6 +31,9 @@
 5. `PreparePhase` 当前已经支持：
    - 初始 planning
    - 非空 graph 上的 replan 增量 planning
+6. judge 型链路当前已经正式接入统一 prompt 模块：
+   - `CompletionClaim -> CompletionEvaluator`
+   - `Handoff -> RuntimeVerifier`
 
 相关入口：
 

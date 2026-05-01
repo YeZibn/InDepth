@@ -5,6 +5,7 @@ from __future__ import annotations
 from rtv2.finalize.models import Handoff, VerificationResult
 from rtv2.judge import BaseJudge, JudgeResultStatus
 from rtv2.model import GenerationConfig, ModelProvider
+from rtv2.prompting import ExecutionPromptAssembler, VerifierPromptInput
 
 
 VerificationResultStatus = JudgeResultStatus
@@ -19,6 +20,7 @@ class RuntimeVerifier(BaseJudge):
         model_provider: ModelProvider | None = None,
         generation_config: GenerationConfig | None = None,
         max_rounds: int = 20,
+        prompt_assembler: ExecutionPromptAssembler | None = None,
     ) -> None:
         super().__init__(
             model_provider=model_provider,
@@ -26,39 +28,33 @@ class RuntimeVerifier(BaseJudge):
             max_rounds=max_rounds,
             default_max_tokens=600,
         )
+        self.prompt_assembler = prompt_assembler or ExecutionPromptAssembler()
 
     def verify(self, handoff: Handoff) -> VerificationResult:
         """Verify the final handoff through a bounded multi-round loop."""
 
         return self._run_loop(handoff)
 
-    @staticmethod
-    def _build_initial_messages(handoff: Handoff) -> list[dict[str, str]]:
+    def _build_initial_messages(self, handoff: Handoff) -> list[dict[str, str]]:
+        prompt = self.prompt_assembler.build_verifier_prompt(
+            VerifierPromptInput(
+                user_input=handoff.user_input,
+                goal=handoff.goal,
+                graph_summary=handoff.graph_summary,
+                final_output=handoff.final_output,
+            )
+        )
+        rendered_prompt = "\n\n".join(
+            [
+                prompt.base_prompt,
+                prompt.phase_prompt,
+                prompt.dynamic_injection,
+            ]
+        )
         return [
             {
                 "role": "system",
-                "content": (
-                    "You are an independent final verifier agent. "
-                    "Your job is to evaluate the provided handoff only. "
-                    "Do not call tools. Return JSON only. "
-                    "If you need another internal review round, return {\"thought\": \"...\"}. "
-                    "If you are ready to decide, return "
-                    "{\"result_status\": \"pass|fail\", \"summary\": \"...\", \"issues\": [\"...\"]}."
-                ),
-            },
-            {
-                "role": "user",
-                "content": "\n".join(
-                    [
-                        "Final handoff:",
-                        f"Goal: {handoff.goal or '(empty)'}",
-                        f"User input: {handoff.user_input or '(empty)'}",
-                        "Graph summary:",
-                        handoff.graph_summary or "(empty)",
-                        "Final output:",
-                        handoff.final_output or "(empty)",
-                    ]
-                ),
+                "content": rendered_prompt,
             },
         ]
 

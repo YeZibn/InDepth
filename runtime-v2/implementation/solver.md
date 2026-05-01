@@ -106,7 +106,7 @@
 1. `progressed`
    - 继续下一轮
 2. `ready_for_completion`
-   - 先构造 `CompletionCheckInput`
+   - 先构造 `CompletionClaim`
    - 再调用 `CompletionEvaluator`
    - evaluator `pass` 才正式收为 `completed`
    - evaluator `fail` 时转入 `RuntimeReflexion`
@@ -121,7 +121,7 @@
 
 1. actor 正常执行 step
 2. 若 `status_signal = ready_for_completion`
-   - orchestrator 额外生成 `CompletionCheckInput`
+   - orchestrator 额外生成 `CompletionClaim`
    - `CompletionEvaluator` 做独立判定
 3. evaluator `pass`
    - 当前 node 收为 `completed`
@@ -223,3 +223,20 @@
 9. evaluator `pass / fail`
 10. reflexion memory 写入
 11. `request_replan` 控制信号上抛
+
+## CompletionClaim
+
+当前 `CompletionEvaluator` 不再直接读取大段运行时上下文，而是只消费结构化 `CompletionClaim`。
+
+当前字段为：
+
+1. `node_id`
+2. `node_name`
+3. `node_kind`
+4. `node_description`
+5. `completion_summary`
+6. `completion_evidence`
+7. `completion_notes`
+8. `completion_reason`
+
+当前 `CompletionClaim` 由 orchestrator 在 actor step 结果基础上组装，再交给 `CompletionEvaluator`。

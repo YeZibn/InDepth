@@ -16,7 +16,7 @@ from rtv2.memory import (
 )
 from rtv2.solver.completion_evaluator import CompletionEvaluator
 from rtv2.solver.models import (
-    CompletionCheckInput,
+    CompletionClaim,
     ReflexionAction,
     ReflexionInput,
     ReflexionResult,
@@ -57,11 +57,16 @@ class RuntimeSolver:
         context: RunContext,
         node: TaskGraphNode,
         build_step_prompt,
-        build_completion_check_input,
+        build_completion_claim=None,
+        build_completion_check_input=None,
         build_reflexion_prompt=None,
         create_step_id,
     ) -> SolverResult:
         """Run the minimal node-scoped solve loop for the selected node."""
+
+        completion_claim_builder = build_completion_claim or build_completion_check_input
+        if completion_claim_builder is None:
+            raise ValueError("solve_current_node requires a completion claim builder")
 
         if node.node_status is NodeStatus.PENDING:
             return SolverResult(
@@ -124,12 +129,12 @@ class RuntimeSolver:
             if signal is StepStatusSignal.PROGRESSED:
                 continue
             if signal is StepStatusSignal.READY_FOR_COMPLETION:
-                completion_check_input = build_completion_check_input(
+                completion_claim = completion_claim_builder(
                     context,
                     current_node,
                     final_step_result,
                 )
-                completion_check_result = self.completion_evaluator.evaluate(completion_check_input)
+                completion_check_result = self.completion_evaluator.evaluate(completion_claim)
                 if completion_check_result.result_status is JudgeResultStatus.PASS:
                     final_step_result.patch = TaskGraphPatch(
                         node_updates=[NodePatch(

@@ -19,7 +19,7 @@
 - 项目阶段：设计阶段已闭环，已进入增量实现
 - 设计文档状态：`S1 ~ S12` 第一版设计稿已完成，后续增量设计模块正在持续补充
 - 开发状态：已完成模块 01 ~ 模块 22
-- 当前重点：模块 22 已结项，待进入下一模块讨论
+- 当前重点：模块 24 已结项，待进入下一模块讨论
 
 ---
 
@@ -69,6 +69,60 @@
 - 任务 02：已完成
 - 任务 03：已完成
 - 任务 04：已完成
+- 任务 05：已完成
+- 任务 06：已完成
+- 任务 07：已完成
+
+#### 记录 098：完成模块 24 的任务 05 / 06 / 07 Judge 型 Prompt 接线、测试与文档收尾
+
+- 状态：已完成
+- 范围：完成模块 24 的任务 05、任务 06、任务 07，正式落地 judge 型 prompt 接线、`CompletionClaim` 命名收口、测试补强与实现文档同步
+- 结果：
+  - 已在统一 prompt 模块中新增：
+    - `CompletionEvaluatorPromptInput`
+    - `VerifierPromptInput`
+  - 已在 `ExecutionPromptAssembler` 中新增：
+    - judge base prompt
+    - `build_completion_evaluator_prompt(...)`
+    - `build_verifier_prompt(...)`
+  - 已正式收口 judge prompt 规则：
+    - `CompletionEvaluator` 只读取 `CompletionClaim`
+    - `RuntimeVerifier` 只读取 `Handoff`
+    - 两者都不读取 `runtime_memory_text`
+    - 两者都不读取 `capability_text`
+  - 已将 solver 侧结构化主张命名正式收口为：
+    - `CompletionClaim`
+  - 已完成 `CompletionEvaluator` 到 prompt 模块的正式接线
+  - 已完成 `RuntimeVerifier` 到 prompt 模块的正式接线
+  - 已补充 judge prompt 的单测覆盖：
+    - `CompletionEvaluator` prompt contract
+    - `RuntimeVerifier` prompt contract
+  - 已更新：
+    - `runtime-v2/src/rtv2/prompting/models.py`
+    - `runtime-v2/src/rtv2/prompting/assembler.py`
+    - `runtime-v2/src/rtv2/prompting/__init__.py`
+    - `runtime-v2/src/rtv2/solver/models.py`
+    - `runtime-v2/src/rtv2/solver/runtime_solver.py`
+    - `runtime-v2/src/rtv2/solver/completion_evaluator.py`
+    - `runtime-v2/src/rtv2/finalize/verifier.py`
+    - `runtime-v2/tests/test_prompting.py`
+    - `runtime-v2/implementation/prompting.md`
+    - `runtime-v2/implementation/solver.md`
+    - `runtime-v2/implementation/finalize.md`
+    - `runtime-v2/README.md`
+    - `runtime-v2/development-progress.md`
+- 验证结果：
+  - 已执行：
+    - `python3 -m pytest /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_orchestrator.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_runtime_host.py -q`
+    - `python3 -m py_compile /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/prompting/__init__.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/runtime_solver.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/solver/completion_evaluator.py /Users/yezibin/Project/InDepth/runtime-v2/src/rtv2/finalize/verifier.py /Users/yezibin/Project/InDepth/runtime-v2/tests/test_prompting.py`
+  - 结果：
+    - `58 passed`
+    - `py_compile passed`
+- 遗留问题：
+  - 当前 `CompletionClaim` 仍由 orchestrator 组装，actor 侧独立主张生成协议还未单独抽离
+  - judge 型 prompt 当前已统一接线，但更细粒度的 judge message 级上下文控制仍未进入实现
+- 下一步：
+  - 模块 24 当前阶段可视为结项，可进入下一个模块讨论
 - 任务 05：已完成
 - 任务 04：已完成
 - 任务 04：已完成
@@ -505,6 +559,92 @@
 - 任务 05：已完成
 - 任务 06：已完成
 - 任务 07：已完成
+
+### 模块 24：Judge 型 Prompt 与结构化主张包
+
+- 模块目标：
+  - 收口 `CompletionEvaluator` 和 `RuntimeVerifier` 的 prompt 结构
+  - 明确 judge 型组件不再直接读取大段运行时上下文
+  - 正式定义两个主张包：
+    - `CompletionClaim`
+    - `Handoff`
+  - 为后续把 evaluator / verifier 纳入统一 prompt 模块做准备
+- 已定子任务：
+  - 任务 01：对齐当前 `CompletionEvaluator / RuntimeVerifier` 现状，收口 judge 型 prompt 的总体边界
+  - 任务 02：确定 `CompletionClaim` 的正式字段结构
+  - 任务 03：确定 `CompletionEvaluator` 的 prompt contract
+  - 任务 04：确定 `Handoff` 与 `RuntimeVerifier` 的 prompt contract
+  - 任务 05：同步设计稿与开发进度
+  - 任务 06：实现 judge 型 prompt 接线
+  - 任务 07：补测试与实现文档收尾
+
+当前进度：
+
+- 任务 01：已完成
+- 任务 02：已完成
+- 任务 03：已完成
+- 任务 04：已完成
+
+### 2026-05-02
+
+#### 记录 097：完成模块 24 的任务 01 / 02 / 03 / 04 Judge 型 Prompt 与结构化主张包定稿
+
+- 状态：已完成
+- 范围：完成模块 24 的任务 01、任务 02、任务 03、任务 04，正式收口 judge 型 prompt 的总体边界、`CompletionClaim` 的字段结构、`CompletionEvaluator` 的 prompt contract，以及 `Handoff / RuntimeVerifier` 的 prompt contract，不进入代码实现
+- 结果：
+  - 已确认 `Actor` 负责生成 `CompletionClaim`
+  - 已确认 `CompletionEvaluator` 只审 `CompletionClaim`
+  - 已确认 `Finalize generator` 负责生成 `Handoff`
+  - 已确认 `RuntimeVerifier` 只审 `Handoff`
+  - 已确认 judge 型组件不再直接读取：
+    - `runtime_memory_text`
+    - `capability_text`
+  - 已确认 judge 型组件只返回判断结果，不直接产出动作
+  - 已确认 `CompletionClaim` 第一版正式字段结构为：
+    - `node_id`
+    - `node_name`
+    - `node_kind`
+    - `node_description`
+    - `completion_summary`
+    - `completion_evidence`
+    - `completion_notes`
+    - `completion_reason`
+  - 已确认 `completion_evidence` 第一版固定为 `list[str]`
+  - 已确认 `CompletionEvaluator` prompt 输出字段第一版固定为：
+    - `result_status`
+    - `summary`
+    - `issues`
+  - 已确认 `CompletionEvaluator.result_status` 第一版只保留：
+    - `pass`
+    - `fail`
+  - 已确认 `CompletionEvaluator` 不输出：
+    - `action`
+    - `next_attempt_hint`
+    - `replan_hint`
+    - `confidence`
+    - `thought`
+  - 已确认 `Handoff` 第一版继续保持 4 个字段：
+    - `user_input`
+    - `goal`
+    - `graph_summary`
+    - `final_output`
+  - 已确认 `RuntimeVerifier` 只审 `Handoff`
+  - 已确认 `RuntimeVerifier` 输出字段第一版固定为：
+    - `result_status`
+    - `summary`
+    - `issues`
+  - 已确认 `RuntimeVerifier.result_status` 第一版只保留：
+    - `pass`
+    - `fail`
+  - 已确认 `RuntimeVerifier` 不直接输出动作
+- 已更新：
+  - `runtime-v2/development-progress.md`
+  - `runtime-v2/design/s15/judge-prompt-and-claim-packages-t1-to-t4-design-v1.md`
+- 遗留问题：
+  - `CompletionClaim` 的最终代码模型与 actor 侧产出位置仍待模块 24 任务 06 落实时确定
+  - judge 型 prompt 在统一 prompt 模块中的最终代码落点仍待模块 24 任务 06 落实时确定
+- 下一步：
+  - 进入模块 24 的任务 05，继续同步设计稿与开发进度，随后进入实现讨论
 
 ### 2026-05-01
 

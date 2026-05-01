@@ -9,6 +9,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from rtv2.prompting import (
+    CompletionEvaluatorPromptInput,
     ExecutionNodePromptContext,
     ExecutionPromptAssembler,
     ExecutionPromptInput,
@@ -16,6 +17,7 @@ from rtv2.prompting import (
     NodeReflexionPromptInput,
     PreparePromptInput,
     RunReflexionPromptInput,
+    VerifierPromptInput,
 )
 from rtv2.state.models import RunPhase
 
@@ -165,6 +167,57 @@ class ExecutionPromptAssemblerTests(unittest.TestCase):
         self.assertIn("Current chain: run reflexion after final verification fail.", prompt.phase_prompt)
         self.assertIn("Trigger type: final_verification_fail", prompt.dynamic_injection)
         self.assertIn("## Runtime Memory", prompt.dynamic_injection)
+
+    def test_build_completion_evaluator_prompt_uses_judge_base_and_claim_only(self):
+        assembler = ExecutionPromptAssembler()
+
+        prompt = assembler.build_completion_evaluator_prompt(
+            CompletionEvaluatorPromptInput(
+                node_id="node-1",
+                node_name="Implement prompt builder",
+                node_kind="implementation",
+                node_description="Wire the judge prompt builder for completion checks.",
+                completion_summary="Judge prompt builder was wired for the current node.",
+                completion_evidence=[
+                    "Added CompletionEvaluatorPromptInput model.",
+                    "CompletionEvaluator now renders prompt blocks through the assembler.",
+                ],
+                completion_notes=["No runtime memory is attached here."],
+                completion_reason="Current node appears complete from the returned claim package.",
+            )
+        )
+
+        self.assertIn("independent runtime-v2 judge", prompt.base_prompt)
+        self.assertNotIn("main runtime-v2 agent executor", prompt.base_prompt)
+        self.assertIn("Current chain: completion evaluator.", prompt.phase_prompt)
+        self.assertIn("Allowed result_status values: pass, fail.", prompt.phase_prompt)
+        self.assertIn("## Completion Claim", prompt.dynamic_injection)
+        self.assertIn("Node id: node-1", prompt.dynamic_injection)
+        self.assertIn("Completion summary:", prompt.dynamic_injection)
+        self.assertIn("Added CompletionEvaluatorPromptInput model.", prompt.dynamic_injection)
+        self.assertNotIn("## Runtime Memory", prompt.dynamic_injection)
+        self.assertNotIn("## Capability Summary", prompt.dynamic_injection)
+
+    def test_build_verifier_prompt_uses_judge_base_and_handoff_only(self):
+        assembler = ExecutionPromptAssembler()
+
+        prompt = assembler.build_verifier_prompt(
+            VerifierPromptInput(
+                user_input="Finish runtime-v2 module 24.",
+                goal="Complete judge prompt integration.",
+                graph_summary="Graph completed with final judge prompt and verifier prompt nodes.",
+                final_output="Judge prompt integration is complete and ready for verification.",
+            )
+        )
+
+        self.assertIn("independent runtime-v2 judge", prompt.base_prompt)
+        self.assertIn("Current chain: runtime verifier.", prompt.phase_prompt)
+        self.assertIn("Allowed result_status values: pass, fail.", prompt.phase_prompt)
+        self.assertIn("## Final Handoff", prompt.dynamic_injection)
+        self.assertIn("User input: Finish runtime-v2 module 24.", prompt.dynamic_injection)
+        self.assertIn("Goal: Complete judge prompt integration.", prompt.dynamic_injection)
+        self.assertNotIn("## Runtime Memory", prompt.dynamic_injection)
+        self.assertNotIn("## Capability Summary", prompt.dynamic_injection)
 
 
 if __name__ == "__main__":

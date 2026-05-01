@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from rtv2.prompting import CompletionEvaluatorPromptInput, ExecutionPromptAssembler
 from rtv2.judge import BaseJudge, JudgeResultStatus
 from rtv2.model import GenerationConfig, ModelProvider
-from rtv2.solver.models import CompletionCheckInput, CompletionCheckResult
+from rtv2.solver.models import CompletionClaim, CompletionCheckResult
 
 
 class CompletionEvaluator(BaseJudge):
@@ -16,6 +17,7 @@ class CompletionEvaluator(BaseJudge):
         model_provider: ModelProvider | None = None,
         generation_config: GenerationConfig | None = None,
         max_rounds: int = 10,
+        prompt_assembler: ExecutionPromptAssembler | None = None,
     ) -> None:
         super().__init__(
             model_provider=model_provider,
@@ -23,43 +25,35 @@ class CompletionEvaluator(BaseJudge):
             max_rounds=max_rounds,
             default_max_tokens=600,
         )
+        self.prompt_assembler = prompt_assembler or ExecutionPromptAssembler()
 
-    def evaluate(self, input: CompletionCheckInput) -> CompletionCheckResult:
+    def evaluate(self, input: CompletionClaim) -> CompletionCheckResult:
         return self._run_loop(input)
 
-    @staticmethod
-    def _build_initial_messages(input: CompletionCheckInput) -> list[dict[str, str]]:
+    def _build_initial_messages(self, input: CompletionClaim) -> list[dict[str, str]]:
+        prompt = self.prompt_assembler.build_completion_evaluator_prompt(
+            CompletionEvaluatorPromptInput(
+                node_id=input.node_id,
+                node_name=input.node_name,
+                node_kind=input.node_kind,
+                node_description=input.node_description,
+                completion_summary=input.completion_summary,
+                completion_evidence=list(input.completion_evidence),
+                completion_notes=list(input.completion_notes),
+                completion_reason=input.completion_reason,
+            )
+        )
+        rendered_prompt = "\n\n".join(
+            [
+                prompt.base_prompt,
+                prompt.phase_prompt,
+                prompt.dynamic_injection,
+            ]
+        )
         return [
             {
                 "role": "system",
-                "content": (
-                    "You are an independent node-level completion evaluator. "
-                    "Judge only whether the current node is sufficiently complete. "
-                    "Do not call tools. Return JSON only. "
-                    "If you need another internal review round, return {\"thought\": \"...\"}. "
-                    "If you are ready to decide, return "
-                    "{\"result_status\": \"pass|fail\", \"summary\": \"...\", \"issues\": [\"...\"]}."
-                ),
-            },
-            {
-                "role": "user",
-                "content": "\n".join(
-                    [
-                        f"Node id: {input.node_id or '(empty)'}",
-                        f"Node name: {input.node_name or '(empty)'}",
-                        f"Node kind: {input.node_kind or '(empty)'}",
-                        "Node description:",
-                        input.node_description or "(empty)",
-                        "Completion summary:",
-                        input.completion_summary or "(empty)",
-                        "Completion evidence:",
-                        "\n".join(f"- {item}" for item in input.completion_evidence) or "(empty)",
-                        "Completion notes:",
-                        "\n".join(f"- {item}" for item in input.completion_notes) or "(empty)",
-                        "Completion reason:",
-                        input.completion_reason or "(empty)",
-                    ]
-                ),
+                "content": rendered_prompt,
             },
         ]
 
